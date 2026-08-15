@@ -5,7 +5,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracer_proto::Breadcrumb;
+use tracer_proto::{Breadcrumb, Device};
 
 use crate::config::Config;
 use crate::sink::Sink;
@@ -67,6 +67,12 @@ impl Signals {
 /// Called by the pipeline at startup when it finds that the previous run ended uncleanly.
 pub(crate) fn take_saved_breadcrumbs(_dir: &Path) -> Vec<Breadcrumb> {
     Vec::new()
+}
+
+/// Static details of this machine for the envelope header. Called once by the pipeline at startup.
+/// Only the operating system name and architecture are available without the `sysinfo` feature.
+pub(crate) fn device_info(config: &Config) -> Device {
+    Device { os_name: std::env::consts::OS.to_owned(), arch: std::env::consts::ARCH.to_owned(), gpu: config.gpu.clone(), ..Device::default() }
 }
 
 struct NullLogger(Option<Box<dyn log::Log>>);
