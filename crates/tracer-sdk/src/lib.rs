@@ -6,9 +6,8 @@
 //!
 //! See `docs/integration.md` for a walkthrough and `docs/privacy.md` for every field that is collected.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-// Skeleton only: remove once the pipeline and signal modules are filled in.
-#![allow(dead_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)] // On the web target the SDK is never started, so most of it is unused there.
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 pub mod catalog;
 mod client;

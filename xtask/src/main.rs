@@ -98,7 +98,7 @@ fn scan(dir: &Path, hits: &mut Vec<(PathBuf, usize, String)>) {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
-            if !matches!(name.as_str(), "target" | ".git" | "graft" | "node_modules" | "data" | "plan") {
+            if !matches!(name.as_str(), "target" | ".git" | ".claude" | "graft" | "node_modules" | "data" | "plan") {
                 scan(&path, hits);
             }
             continue;
