@@ -1,0 +1,229 @@
+# Architecture
+
+This is the spec. Code follows it; when they disagree, fix one of them in the same change.
+
+```
+host app ──► tracer-sdk ──► bounded queue ──► worker thread ──► disk spool ──► HTTPS batch (gzip)
+                                                                                    │
+                                              tracer-server: ingest ► SQLite ► rollups ► dashboard + reports
+```
+
+## 1. What the SDK must fit
+
+The host apps set these constraints:
+
+- Rust edition 2024, minimum Rust 1.90, `unsafe` forbidden, no `unwrap`/`expect`/`panic` outside tests.
+- Immediate-mode GUI with a per-frame callback. Some hosts repaint only on input, so frame *cost* matters more than frame *rate*.
+- The `log` facade only. A host may have no logger, or its own. Only one global logger can exist, so the SDK must be able to wrap one.
+- No async runtime in the GUI process. Background work is a plain thread; HTTP is blocking.
+- Each host also ships a short-lived command-line binary, a stdio protocol server (stdout must stay clean), a web build, and sometimes child processes that can abort.
+- One host has a realtime audio thread, where the SDK must never lock, allocate or make a system call.
+- Each host chooses its own data directory, so the SDK takes it as a parameter.
+
+## 2. Crates
+
+| Crate | Role | May depend on |
+|---|---|---|
+| `tracer-proto` | Wire types, constants, name validation. No I/O. | `serde` |
+| `tracer-sdk` | The client. | `tracer-proto`, `serde_json`, `log`, `thiserror`, `flate2`, `getrandom`, optional `ureq`, optional `sysinfo` |
+| `tracer-server` | The backend binary. | `tracer-proto`, `axum`, `tokio`, `rusqlite`, `maud`, `argon2`, and small helpers |
+
+## 3. SDK
+
+### 3.1 Shape
+
+`client.rs` holds the public `Tracer` handle and `Builder`. Behind it are two halves that meet only at the `Sink` trait (`sink.rs`):
+
+- **`pipeline`** implements `Sink`. It owns consent, identity, the session, the queue, the spool, the worker thread and sending.
+- **`signals`** produces data: crash, hang, perf, sys, logs, realtime counters, scrubbing, the local report. It calls `Sink` and nothing else.
+
+The public API in `client.rs` and the `Sink` trait are frozen. Changing either needs a note in `PROGRESS.md`.
+
+`Builder::init` never fails. On the web target, with no data directory, or when the SDK's folder cannot be created, it returns a disabled tracer whose methods do nothing.
+
+### 3.2 Files on disk
+
+Everything lives in `<host data dir>/tracer/`:
+
+| Path | Owner | Content |
+|---|---|---|
+| `install.json` | pipeline | `{"install_id": "…", "created": ms}` |
+| `consent.json` | pipeline | `{"crash": bool, "performance": bool, "usage": bool, "notice_shown": bool}` |
+| `selection.json` | pipeline | Catalog hash, listened categories and events, enabled signals for the last run. Also the catalog hashes the server has acknowledged, per app version. |
+| `session.json` | pipeline | Marker for the running session: envelope header, start time, last heartbeat totals, `panicked` flag. Removed on clean shutdown. |
+| `spool/<session_id>/header.json` | pipeline | The envelope header for that session (app, install id, device). |
+| `spool/<session_id>/<seq>.jsonl` | pipeline | Items, one JSON object per line, in segments. |
+| `breadcrumbs.jsonl` | signals | Recent log lines, rewritten periodically. |
+| `outbox.jsonl` | pipeline | Inspect mode only: a capped mirror of every item that was accepted for sending. |
+
+Files are written to a temporary name and renamed. A file that fails to parse is treated as absent, never as an error.
+
+### 3.3 Consent and kill switches
+
+- Default is on for all three categories. `Signal::consent()` maps each signal to its category.
+- `DO_NOT_TRACK` (any value other than empty, `0` or `false`) or `TRACER_DISABLED` set the same way disables everything for the process: `allows` is false for every signal, nothing is written to the spool, and no request is made. The consent file is not changed.
+- `Sink::allows(signal)` is true only when the host enabled the signal, the kill switches are off, and the category is allowed.
+- `set_consent(category, false)` takes effect at once and also deletes that category's unsent items from the spool.
+- `notice_pending()` is true until `notice_shown()`; the SDK records normally in the meantime (opt-out model).
+- `forget()` deletes the spool, breadcrumbs and outbox, sends a `ForgetRequest` for the old install id (best effort, retried on next launch if it fails), and creates a new install id.
+
+### 3.4 Identity and ids
+
+Install, session and item ids are 16 random bytes from `getrandom`, as 32 lower-case hex characters. If the random source fails, the SDK falls back to a mix of time, process id and a counter rather than failing.
+
+### 3.5 Session
+
+- One session per process run. `session_start` is submitted during `init`.
+- The worker emits `session_heartbeat` every `heartbeat_interval` with running totals, and rewrites `session.json`.
+- Time accounting uses a monotonic clock, sampled once a second by the worker: a second counts as *focused* if the host last said `set_focused(true)` (hosts that never call it count as focused), as *active* if focused and `note_input()` was called within `idle_after`, otherwise *idle*. `note_input` and `set_focused` are single atomic stores.
+- Clean shutdown (last `Tracer` clone dropped) submits `session_end` and removes `session.json`. Status is `crashed` if a panic was seen and the thread dropping the tracer is panicking, otherwise `exited`. `errors` counts handled errors and survived panics.
+- On startup, a leftover `session.json` means the previous run ended uncleanly. The pipeline submits, under the **previous** session's header: a `session_end` with status `crashed` if its `panicked` flag was set, else `abnormal`, with the last saved totals; and, when not panicked, a `crash` of kind `unclean_exit` carrying `signals::take_saved_breadcrumbs`.
+- Short-lived processes (`ProcessKind::Cli`, `Child`) behave the same; they should call `flush_blocking` before exit.
+
+### 3.6 Event catalog
+
+The host declares events once:
+
+```rust
+tracer_sdk::events! {
+    pub enum Category { File = "file", Edit = "edit" }
+    pub enum AppEvent {
+        FileOpen = "file.open" in File,
+        Undo = "edit.undo" in Edit,
+    }
+}
+```
+
+- A declarative macro; no procedural macro crate.
+- It generates both enums (`Copy`, `Clone`, `Debug`, `PartialEq`, `Eq`, `Hash`), and implements `EventCategory` and `Event` with `ALL` lists.
+- At build time, through `const` assertions using `tracer_proto::validate_name` and `const_str_eq`, it rejects an invalid name and a duplicate name within either enum. `trybuild` compile-fail tests cover both.
+- `Builder::catalog::<AppEvent>()` records the catalog. `listen(category)`, `listen_events(&[..])` and `listen_all::<AppEvent>()` choose what is recorded.
+- `track` drops an event that is not listened to before it reaches the queue. The check must be cheap: a lookup in a small set built at startup.
+- `track_id(category, id)` records an id that is not in the catalog, marked `dynamic`, when its category is listened to. The id is validated with `validate_name` at run time; an invalid one is dropped and counted.
+- Properties: at most `MAX_PROPS`, keys validated like names, string values `&'static str` of at most `MAX_PROP_STR_LEN` bytes. Anything over a limit is dropped and counted.
+- `session_start` always carries `catalog_hash` (a stable hash of the sorted catalog), `listening` and `signals`. It carries the full `catalog` until the server has acknowledged that hash for this app version; an ingest reply with `need_catalog: true` clears the acknowledgement so the next session resends it.
+
+### 3.7 Queue, spool and sending
+
+- `submit` does `try_send` on a bounded channel of `queue_capacity`. When full it drops the item and counts `queue_full`. It never blocks.
+- One worker thread drains the queue, appends items to the current session's spool segment, and ticks once a second (session accounting, `Signals::tick`).
+- `submit_now` serialises the item and appends it to the spool on the calling thread, without going through the queue. It is used from the panic hook, so it must not panic and must tolerate a poisoned lock.
+- The spool is capped by `spool_max_bytes` and `spool_max_age`; the oldest segments go first and are counted as `spool_evicted`.
+- The worker sends when `batch_items` are waiting or `flush_interval` has passed, and once at startup for anything left from earlier runs. One request per session directory, at most `MAX_ENVELOPE_BYTES` after serialisation; larger backlogs are split.
+- Bodies are gzip-compressed JSON.
+- Reply handling follows the table in `docs/wire-format.md`. Retries use exponential backoff with jitter, from 5 s up to 15 min, and honour `Retry-After`.
+- Drop counts are sent as a `drops` item with the next batch.
+- With no endpoint configured the SDK still spools (within the caps) and inspect mode still works, but nothing is sent.
+- `flush_blocking(timeout)` asks the worker to drain and send now and waits for it. `shutdown` does the same with `shutdown_timeout`, then stops the worker.
+- The built-in transport is `ureq` 3 with rustls, behind the `http` feature, with connect and overall timeouts. Hosts and tests can supply their own `Transport`.
+
+### 3.8 Signals
+
+| Module | Behaviour |
+|---|---|
+| `crash` | A panic hook that chains to the previous hook. It captures message, location, thread name and `Backtrace::force_capture`, scrubs them, attaches breadcrumbs and the last perf window, calls `submit_now` with a `crash` of kind `panic`, then `mark_panicked`. It must never panic itself and must guard against re-entry. `report_handled` submits kind `handled` and calls `count_error`. `report_child_exit` submits kind `child_exit` with exit code or signal, only for an unsuccessful status. |
+| `hang` | A watchdog thread. `heartbeat()` is one atomic store. When the last beat is older than `hang_threshold`, submit one `crash` of kind `hang` (`blocked_ms` updated when the loop recovers is not required; report once per hang with the time observed so far), and do not report again until the loop has beaten. Starts watching only after the first heartbeat, so hosts that never call it get no false reports. `pause`/`resume` nest. |
+| `perf` | `frame(duration)` records into a `FrameStats` histogram behind a lock that is held only for the update. `first_frame()` records startup time since `init` once. Every `perf_window` the tick submits one `perf` item if it has anything to report, and keeps a copy as "last perf" for crash reports. |
+| `sys` | With the `sysinfo` feature: this process's CPU and memory every `sys_interval`, folded into the perf window (mean CPU, last and peak memory), and static device details once for the envelope header. Without the feature, those fields are absent. |
+| `logs` | A `log::Log` that keeps the last `breadcrumb_capacity` lines at or above `breadcrumb_level` in a ring, scrubbed, and forwards every record to the wrapped logger if there is one. `LoggerMode::Install` installs it globally; otherwise the host wraps its own logger with `Tracer::logger`. The ring is saved to `breadcrumbs.jsonl` on the tick when it changed. Log lines leave the device only inside a crash. |
+| `rt` | `Counter` and `Gauge` are `Arc<AtomicU64>`. Registration allocates and locks; recording is one atomic operation. The tick reads them into the perf window (counters as the increase since the last window). |
+| `scrub` | Replaces the home directory with `~`, removes the account name from paths, truncates long values (messages 2 KiB, backtraces 32 KiB, log lines 512 bytes). |
+| `report` | `write_report(path)` writes a plain-text report: app, version, device, session ids and totals, last perf window, recent breadcrumbs. |
+
+Known limit for 0.1: a backtrace from a release build stripped of symbols contains unresolved frames. Symbolication arrives with native crash support.
+
+### 3.9 Threads
+
+| Thread | Does |
+|---|---|
+| Host threads | Call `Tracer` methods; each is an atomic store, a short lock, or a `try_send`. |
+| `tracer-worker` | Drains the queue, writes the spool, ticks, sends. The only thread that touches the network. |
+| `tracer-watchdog` | Hang detection only. Started when the `Hang` signal is enabled. |
+
+## 4. Server
+
+### 4.1 Shape
+
+One binary, `tracer-server`, with subcommands:
+
+| Command | Does |
+|---|---|
+| `serve` | Runs the HTTP server, the rollup timer and the retention timer. |
+| `app create <slug> <name>` | Creates an app and prints its first write key. |
+| `app list` | Lists apps. |
+| `key create <slug>` / `key revoke <key>` | Manages write keys. |
+| `admin create <username>` | Creates a dashboard login; reads the password from `TRACER_ADMIN_PASSWORD` or stdin. |
+| `prune` | Runs retention once. |
+| `rollup [--days N]` | Recomputes rollups once. |
+
+Settings come from the environment (all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRACER_BIND` | `127.0.0.1:8090` | Listen address |
+| `TRACER_DATA_DIR` | `./data` | Folder for the database |
+| `TRACER_RETENTION_DAYS` | `90` | Age at which raw rows are pruned |
+| `TRACER_RATE_PER_MIN` | `120` | Ingest requests per minute per key and per address |
+| `TRACER_TRUST_PROXY` | unset | When `1`, take the client address from `X-Forwarded-For` |
+| `TRACER_ADMIN_PASSWORD` | unset | Password for `admin create` |
+| `TRACER_SECURE_COOKIES` | unset | When `1`, mark the login cookie `Secure` |
+
+### 4.2 Storage
+
+- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`.
+- All access goes through a `Store` trait so a second backend can be added. The SQLite implementation runs on a dedicated writer thread plus read connections; async handlers reach it through `spawn_blocking` or a channel.
+- Conventions are in the header of `0001_init.sql`.
+
+### 4.3 Ingest
+
+`POST /v1/ingest`, in order:
+
+1. Look up `x-tracer-key`; unknown or revoked is 401.
+2. Rate limit per key and per client address (token bucket, in memory); over the limit is 429 with `Retry-After`. The address is used here and nowhere else.
+3. Read at most `MAX_ENVELOPE_BYTES` after gunzip; larger is 413. Parse; failure is 400. A `schema` above the server's is 422.
+4. In one transaction:
+   - Upsert the install (first/last seen, versions, device).
+   - Upsert the session from the envelope header.
+   - For each item, skip it if `(app_id, id)` is in `items_seen` (a duplicate), else record the id and store the item by type:
+     - `session_start`: store a carried catalog. If the server holds no catalog with this hash for this version, set `need_catalog` in the reply.
+     - `session_heartbeat`: raise the session totals (never lower them) and `last_seen`.
+     - `session_end`: set totals and status, unless the stored status is already terminal.
+     - `event`: validate the name. A non-dynamic name must be in the catalog for that app version when the server holds one; if it holds none, accept and set `need_catalog`. Otherwise reject and count it.
+     - `perf`: store.
+     - `crash`: compute the fingerprint, upsert the issue, store. A fatal panic also marks the session `crashed` if it is still `ok`.
+     - `drops`: add to `daily_drops`.
+     - unknown types: skip, count as rejected.
+5. Item times are corrected for clock drift by `received_at - sent_at` when the difference is over five minutes, and clamped to at most one day in the future.
+
+**Fingerprint:** kind, plus the first frames of the backtrace that belong to the app (skipping `std`, `core`, `alloc`, panic and backtrace machinery, and with hex addresses and hash suffixes removed); when there is no usable backtrace, the location; when there is neither, the message with digits removed. The issue title is the message's first line, or the kind.
+
+`POST /v1/forget` deletes the install's rows from `installs`, `sessions`, `events`, `perf`, `crashes` and `daily_installs`, and removes issues left with no crashes.
+
+### 4.4 Rollups and retention
+
+- A timer (every five minutes, and on demand) recomputes the `daily_*` tables for the last three days from the raw tables, by delete and insert inside a transaction.
+- Retention deletes raw rows older than `TRACER_RETENTION_DAYS` and `items_seen` older than 35 days, then lets SQLite reclaim space. Rollups are kept.
+- Sessions still `ok` whose `last_seen` is over a day old are closed as `abnormal`.
+
+### 4.5 Dashboard
+
+Server-rendered HTML with `maud`, charts as inline SVG generated on the server, one small embedded stylesheet, no script build. Login is a username and password (argon2), with a random session token in an `HttpOnly`, `SameSite=Lax` cookie; only its hash is stored. Every state-changing form carries a CSRF token.
+
+| Page | Shows |
+|---|---|
+| Overview | Per app: crash-free sessions and installs, daily opens, daily / weekly / monthly active installs, newest issues. |
+| Crashes | Issue list with counts, affected installs and versions; filter by kind, version, status. Issue page with backtrace, breadcrumbs, device, last perf window, and resolve / ignore. |
+| Performance | Frame-time percentiles (from merged histograms), slow and frozen frame rates, startup time, CPU and memory, by version and by operating system. |
+| Usage | Active installs, sessions per day, session length, focused / active / idle time, events ranked by use, and declared events that were never fired. |
+| Reports | A stability and usage report for one release: summary, top issues, performance, feature use. Download as HTML, Markdown or JSON. |
+| Settings | Apps and write keys. |
+
+Definitions:
+
+- **Crash-free sessions** = 1 − (crashed + abnormal) ÷ sessions that have ended.
+- **Crash-free installs** = 1 − installs with a crashed or abnormal session ÷ active installs.
+- **Daily opens** = sessions started that day with process kind `gui`.
+
+## 5. Later phases
+
+See `ROADMAP.md`. The designs above leave room for them: the `Store` trait for Postgres, the `Transport` trait for the web target, and an attachment route for minidumps.

@@ -1,0 +1,23 @@
+[package]
+name = "tracer-server"
+description = "Self-hosted backend and dashboard for the Tracer telemetry SDK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords = ["telemetry", "crash-reporting", "analytics", "self-hosted"]
+categories = ["development-tools::debugging", "web-programming::http-server"]
+readme = "../../README.md"
+
+[dependencies]
+tracer-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+thiserror.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+[lints]
+workspace = true

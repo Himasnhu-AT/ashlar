@@ -1,0 +1,10 @@
+/target
+/graft
+.env
+.env.*
+!.env.example
+.DS_Store
+/data
+*.sqlite
+*.sqlite-*
+/plan
