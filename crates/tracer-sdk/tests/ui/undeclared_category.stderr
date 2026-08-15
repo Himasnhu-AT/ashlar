@@ -1,0 +1,12 @@
+error[E0599]: no variant, associated function, or constant named `Edit` found for enum `Category` in the current scope
+ --> tests/ui/undeclared_category.rs:5:31
+  |
+1 | / tracer_sdk::events! {
+2 | |     pub enum Category { File = "file" }
+3 | |     pub enum AppEvent {
+4 | |         FileOpen = "file.open" in File,
+5 | |         Undo = "edit.undo" in Edit,
+  | |                               ^^^^ variant, associated function, or constant not found in `Category`
+6 | |     }
+7 | | }
+  | |_- variant, associated function, or constant `Edit` not found for this enum

@@ -1,0 +1,12 @@
+error[E0080]: evaluation panicked: tracer: an event name is used twice in AppEvent
+ --> tests/ui/duplicate_event_name.rs:1:1
+  |
+1 | / tracer_sdk::events! {
+2 | |     pub enum Category { File = "file", Edit = "edit" }
+3 | |     pub enum AppEvent {
+4 | |         FileOpen = "file.open" in File,
+... |
+8 | | }
+  | |_^ evaluation of `_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tracer_sdk::events` (in Nightly builds, run with -Z macro-backtrace for more info)
