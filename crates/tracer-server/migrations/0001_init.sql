@@ -212,6 +212,8 @@ CREATE TABLE daily_sessions (
     version    TEXT NOT NULL,
     os_name    TEXT NOT NULL,
     sessions   INTEGER NOT NULL,
+    -- Sessions with process kind `gui`: the daily opens.
+    opens      INTEGER NOT NULL,
     installs   INTEGER NOT NULL,
     exited     INTEGER NOT NULL,
     crashed    INTEGER NOT NULL,
