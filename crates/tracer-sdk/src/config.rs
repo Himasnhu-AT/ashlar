@@ -48,6 +48,13 @@ pub struct Config {
     pub flush_interval: Duration,
     /// How long shutdown waits for a final send.
     pub shutdown_timeout: Duration,
+    /// How often the worker wakes to account session time, tick the signal modules and check whether a
+    /// send is due. Every other interval is rounded up to a multiple of this.
+    pub tick_interval: Duration,
+    /// Shortest wait before retrying a failed send. Doubles on each failure, with jitter.
+    pub retry_min: Duration,
+    /// Longest wait between retries of a failed send.
+    pub retry_max: Duration,
     /// Largest size of the on-disk spool; the oldest data is dropped first.
     pub spool_max_bytes: u64,
     /// Spooled data older than this is dropped.
@@ -89,6 +96,9 @@ impl Config {
             batch_items: 50,
             flush_interval: Duration::from_secs(60),
             shutdown_timeout: Duration::from_secs(3),
+            tick_interval: Duration::from_secs(1),
+            retry_min: Duration::from_secs(5),
+            retry_max: Duration::from_secs(15 * 60),
             spool_max_bytes: 8 * 1024 * 1024,
             spool_max_age: Duration::from_secs(30 * 24 * 60 * 60),
             heartbeat_interval: Duration::from_secs(60),
