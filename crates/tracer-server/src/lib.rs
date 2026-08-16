@@ -6,6 +6,7 @@
 //! - [`store`]: the [`store::Store`] trait and its SQLite implementation.
 //! - [`ingest`]: pure validation, drift correction and fingerprinting.
 //! - [`http`]: the axum router ([`http::router`], [`http::api_router`]), shared [`http::AppState`], rate limiter.
+//! - [`dashboard`]: login, pages, SVG charts and release reports.
 //! - [`jobs`]: rollups, retention, stale-session closing.
 //! - [`cli`](crate::cli): subcommands.
 
@@ -13,6 +14,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod dashboard;
 pub mod http;
 pub mod ingest;
 pub mod jobs;

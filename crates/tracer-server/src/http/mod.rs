@@ -1,4 +1,4 @@
-//! HTTP API: `POST /v1/ingest`, `POST /v1/forget`, `GET /v1/health`.
+//! HTTP API: `POST /v1/ingest`, `POST /v1/forget`, `GET /v1/health`, plus the dashboard routes.
 //!
 //! [`api_router`] returns the routes without state so the dashboard can merge its own routes into the same
 //! router; [`router`] attaches the state. [`serve`] runs a router on a listener until a future completes.
@@ -52,7 +52,11 @@ impl AppState {
 
 /// The API routes, still waiting for their state.
 pub fn api_router() -> Router<AppState> {
-    Router::new().route(routes::INGEST, post(ingest_handler)).route(routes::FORGET, post(forget_handler)).route(routes::HEALTH, get(health_handler))
+    Router::new()
+        .route(routes::INGEST, post(ingest_handler))
+        .route(routes::FORGET, post(forget_handler))
+        .route(routes::HEALTH, get(health_handler))
+        .merge(crate::dashboard::routes())
 }
 
 /// The API routes with state attached.
@@ -154,7 +158,7 @@ async fn authenticate(state: &AppState, headers: &HeaderMap, peer: Option<Socket
 
 /// The address used for rate limiting only. With a trusted proxy it is the last `X-Forwarded-For` entry,
 /// the one the proxy itself appended; earlier entries are client-supplied and can be forged.
-fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: bool) -> IpAddr {
+pub(crate) fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: bool) -> IpAddr {
     if trust_proxy
         && let Some(addr) = headers
             .get("x-forwarded-for")
