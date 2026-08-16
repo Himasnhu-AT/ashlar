@@ -163,7 +163,7 @@ Settings come from the environment (all optional):
 | `TRACER_BIND` | `127.0.0.1:8090` | Listen address |
 | `TRACER_DATA_DIR` | `./data` | Folder for the database |
 | `TRACER_RETENTION_DAYS` | `90` | Age at which raw rows are pruned |
-| `TRACER_RATE_PER_MIN` | `120` | Ingest requests per minute per key and per address |
+| `TRACER_RATE_PER_MIN` | `120` | Ingest requests per minute per key and per address; `0` switches the limit off |
 | `TRACER_TRUST_PROXY` | unset | When `1`, take the client address from `X-Forwarded-For` |
 | `TRACER_ADMIN_PASSWORD` | unset | Password for `admin create` |
 | `TRACER_SECURE_COOKIES` | unset | When `1`, mark the login cookie `Secure` |
@@ -222,7 +222,7 @@ Definitions:
 
 - **Crash-free sessions** = 1 − (crashed + abnormal) ÷ sessions that have ended.
 - **Crash-free installs** = 1 − installs with a crashed or abnormal session ÷ active installs.
-- **Daily opens** = sessions started that day with process kind `gui`.
+- **Daily opens** = sessions started that day with process kind `gui`. Kept in the rollup as `daily_sessions.opens`, since raw sessions are pruned.
 
 ## 5. Later phases
 
