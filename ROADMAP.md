@@ -1,19 +1,19 @@
 # Roadmap
 
-**Status, 2026-08-15:** foundation in place (workspace, wire format, SDK and server skeletons, gate). Nothing is usable yet.
+**Status, 2026-08-15:** SDK, server and dashboard are built and tested separately. End-to-end tests, demo hosts, guides and a review pass are in progress. Not yet released.
 
 ## Version 0.1
 
 | Id | Milestone | State |
 |---|---|---|
 | M0 | Foundation: workspace, gate, wire format with fixtures, SDK and server skeletons, schema, docs | Done |
-| M1 | SDK pipeline: consent, identity, session, queue, spool, transport, event catalog, usage | Not started |
-| M2 | SDK signals: panic hook, handled errors, unclean exit, child exit, hang watchdog, frame and system metrics, breadcrumbs, local report | Not started |
-| M3 | Server core: ingest, write keys, rate limits, dedup, SQLite store, rollups, retention, admin commands | Not started |
-| M4 | Dashboard and reports: overview, crashes, performance, usage, per-release report export | Not started |
-| M5 | Demo hosts and end-to-end tests | Not started |
-| M6 | Guides and packaging: integration guide, self-hosting guide, container image, CI | Not started |
-| M7 | Hardening and 0.1.0 release | Not started |
+| M1 | SDK pipeline: consent, identity, session, queue, spool, transport, event catalog, usage | Done |
+| M2 | SDK signals: panic hook, handled errors, unclean exit, child exit, hang watchdog, frame and system metrics, breadcrumbs, local report | Done |
+| M3 | Server core: ingest, write keys, rate limits, dedup, SQLite store, rollups, retention, admin commands | Done |
+| M4 | Dashboard and reports: overview, crashes, performance, usage, per-release report export | Done |
+| M5 | Demo hosts and end-to-end tests | In progress |
+| M6 | Guides and packaging: integration guide, self-hosting guide, container image, CI | In progress |
+| M7 | Hardening and 0.1.0 release | In progress |
 
 ## Later
 

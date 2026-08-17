@@ -10,15 +10,20 @@ Updated 2026-08-15.
 - [x] `tracer-server` skeleton: schema migration `0001_init`, applied in a test.
 - [x] Architecture, wire-format and privacy docs.
 
+- [x] M1 SDK pipeline: consent, identity, sessions, queue, per-process spool, sending, event catalog macro. Checked by 32 integration tests with real child processes.
+- [x] M2 SDK signals: panic hook, handled errors, child exits, hang watchdog, frame and system metrics, breadcrumbs, scrubbing, local report.
+- [x] M3 Server core: ingest, write keys, rate limits, dedup, SQLite store, rollups, retention, admin commands. Checked against a real server on an ephemeral port.
+- [x] M4 Dashboard and reports: login, overview, crashes, performance, usage, release reports, settings.
+- [x] Container image, compose file, CI workflow and `.env.example` written.
+
 ## To do next
 
-- [ ] M1 SDK pipeline.
-- [ ] M2 SDK signals.
-- [ ] M3 Server core.
-- [ ] M4 Dashboard and reports.
-- [ ] M5 Demo hosts and end-to-end tests.
-- [ ] M6 Guides and packaging.
-- [ ] M7 Hardening; tag 0.1.0.
+- [ ] M5 Demo hosts and end-to-end tests (SDK against the real server).
+- [ ] M6 Integration and self-hosting guides.
+- [ ] M7 Fix findings from the bug review of the SDK and the security review of the server.
+- [ ] M7 Check the dashboard in a real browser, including a 360 px wide screen.
+- [ ] M7 Build and run the container image once.
+- [ ] M7 Tag 0.1.0.
 
 ## Needs a person
 

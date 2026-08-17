@@ -183,7 +183,7 @@ Settings come from the environment (all optional):
 
 ### 4.2 Storage
 
-- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`.
+- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`. `0001_init` is the schema; `0002_dashboard` adds indexes for the dashboard queries.
 - All access goes through a `Store` trait so a second backend can be added. The SQLite implementation runs on a dedicated writer thread plus read connections; async handlers reach it through `spawn_blocking` or a channel.
 - Conventions are in the header of `0001_init.sql`.
 
@@ -220,7 +220,7 @@ Settings come from the environment (all optional):
 
 ### 4.5 Dashboard
 
-Server-rendered HTML with `maud`, charts as inline SVG generated on the server, one small embedded stylesheet, no script build. Login is a username and password (argon2), with a random session token in an `HttpOnly`, `SameSite=Lax` cookie; only its hash is stored. Every state-changing form carries a CSRF token.
+Server-rendered HTML with `maud`, charts as inline SVG generated on the server, one small embedded stylesheet, no script build. Login is a username and password (argon2), with a random session token in an `HttpOnly`, `SameSite=Lax` cookie; only its hash is stored. Every state-changing form carries a CSRF token. The login cookie lasts 14 days. The login form itself is protected by a short-lived `SameSite=Strict` cookie paired with a hidden field, and by a limit of 10 attempts a minute per address. Dashboard responses carry `Content-Security-Policy: default-src 'self'` (no inline script or style), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 
 | Page | Shows |
 |---|---|
@@ -234,7 +234,7 @@ Server-rendered HTML with `maud`, charts as inline SVG generated on the server, 
 Definitions:
 
 - **Crash-free sessions** = 1 − (crashed + abnormal) ÷ sessions that have ended.
-- **Crash-free installs** = 1 − installs with a crashed or abnormal session ÷ active installs.
+- **Crash-free installs** = 1 − installs with a crashed or abnormal session ÷ active installs. Counted per day and summed over the selected range (install-days), because rollups cannot give distinct installs across a range.
 - **Daily opens** = sessions started that day with process kind `gui`. Kept in the rollup as `daily_sessions.opens`, since raw sessions are pruned.
 
 ## 5. Later phases
