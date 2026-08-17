@@ -23,6 +23,8 @@ http-body-util = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 flate2 = "1"
 argon2 = "0.5"
+maud = "0.27"
+sha2 = "0.10"
 getrandom = "0.4"
 
 [dev-dependencies]

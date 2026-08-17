@@ -12,11 +12,16 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use tracer_proto::{FRAME_BUCKETS, FrameStats, IngestResponse};
 
-use super::{AppRecord, KeyRecord, PruneStats, Store, StoreError, StoreResult};
+use super::types::{
+    AdminSession, AppGlance, Breakdown, CatalogEntry, CrashBrief, CrashRow, CustomRow, DayTotals, DropRow, EventRow, IssueFilter, IssueRow, PerfRow,
+    VersionInfo,
+};
+use super::{AppRecord, KeyRecord, PruneStats, Store, StoreError, StoreResult, read};
 use crate::ingest::{DAY_MS, Prepared, PreparedBody, PreparedCrash, PreparedItem};
 
 /// Schema migrations, applied in order. Add a new file; never edit one that has shipped.
-pub const MIGRATIONS: &[(&str, &str)] = &[("0001_init", include_str!("../../migrations/0001_init.sql"))];
+pub const MIGRATIONS: &[(&str, &str)] =
+    &[("0001_init", include_str!("../../migrations/0001_init.sql")), ("0002_dashboard", include_str!("../../migrations/0002_dashboard.sql"))];
 
 /// `items_seen` rows older than this many days are dropped by retention.
 const ITEMS_SEEN_DAYS: i64 = 35;
@@ -242,6 +247,102 @@ impl Store for SqliteStore {
     fn close_stale_sessions(&self, older_than: i64) -> StoreResult<u64> {
         let changed = self.write().execute("UPDATE sessions SET status = 'abnormal' WHERE status = 'ok' AND last_seen < ?1", [older_than])?;
         Ok(changed as u64)
+    }
+
+    fn admin_session_create(&self, token_hash: &str, admin_id: i64, now: i64, expires_at: i64) -> StoreResult<()> {
+        self.write().execute(
+            "INSERT INTO admin_sessions (token_hash, admin_id, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            params![token_hash, admin_id, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    fn admin_session_lookup(&self, token_hash: &str, now: i64) -> StoreResult<Option<AdminSession>> {
+        self.read(|conn| {
+            conn.query_row(
+                "SELECT a.id, a.username FROM admin_sessions s JOIN admins a ON a.id = s.admin_id WHERE s.token_hash = ?1 AND s.expires_at > ?2",
+                params![token_hash, now],
+                |row| Ok(AdminSession { admin_id: row.get(0)?, username: row.get(1)? }),
+            )
+            .optional()
+        })
+    }
+
+    fn admin_session_delete(&self, token_hash: &str) -> StoreResult<()> {
+        self.write().execute("DELETE FROM admin_sessions WHERE token_hash = ?1", [token_hash])?;
+        Ok(())
+    }
+
+    fn admin_session_purge(&self, now: i64) -> StoreResult<u64> {
+        Ok(self.write().execute("DELETE FROM admin_sessions WHERE expires_at <= ?1", [now])? as u64)
+    }
+
+    fn admin_count(&self) -> StoreResult<i64> {
+        self.read(|conn| conn.query_row("SELECT count(*) FROM admins", [], |row| row.get(0)))
+    }
+
+    fn app_glance(&self, app_id: i64, from_day: i64, to_day: i64) -> StoreResult<AppGlance> {
+        self.read(|conn| read::app_glance(conn, app_id, from_day, to_day))
+    }
+
+    fn versions(&self, app_id: i64) -> StoreResult<Vec<VersionInfo>> {
+        self.read(|conn| read::versions(conn, app_id))
+    }
+
+    fn day_totals(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<DayTotals>> {
+        self.read(|conn| read::day_totals(conn, app_id, from_day, to_day, version))
+    }
+
+    fn active_installs_by_day(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<(i64, i64)>> {
+        self.read(|conn| read::active_installs_by_day(conn, app_id, from_day, to_day, version))
+    }
+
+    fn active_installs_between(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<i64> {
+        self.read(|conn| read::active_installs_between(conn, app_id, from_day, to_day, version))
+    }
+
+    fn list_issues(&self, app_id: i64, filter: &IssueFilter<'_>, limit: i64) -> StoreResult<Vec<IssueRow>> {
+        self.read(|conn| read::list_issues(conn, app_id, filter, limit))
+    }
+
+    fn get_issue(&self, app_id: i64, issue_id: i64) -> StoreResult<Option<IssueRow>> {
+        self.read(|conn| read::get_issue(conn, app_id, issue_id))
+    }
+
+    fn representative_crash(&self, app_id: i64, issue_id: i64) -> StoreResult<Option<CrashRow>> {
+        self.read(|conn| read::representative_crash(conn, app_id, issue_id))
+    }
+
+    fn recent_crashes(&self, app_id: i64, issue_id: i64, limit: i64) -> StoreResult<Vec<CrashBrief>> {
+        self.read(|conn| read::recent_crashes(conn, app_id, issue_id, limit))
+    }
+
+    fn issue_breakdown(&self, app_id: i64, issue_id: i64) -> StoreResult<Breakdown> {
+        self.read(|conn| read::issue_breakdown(conn, app_id, issue_id))
+    }
+
+    fn set_issue_status(&self, app_id: i64, issue_id: i64, status: &str) -> StoreResult<bool> {
+        Ok(read::set_issue_status(&self.write(), app_id, issue_id, status)?)
+    }
+
+    fn perf_rows(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<PerfRow>> {
+        self.read(|conn| read::perf_rows(conn, app_id, from_day, to_day, version))
+    }
+
+    fn recent_custom_metrics(&self, app_id: i64, since_day: i64, version: Option<&str>, limit: i64) -> StoreResult<Vec<CustomRow>> {
+        self.read(|conn| read::recent_custom_metrics(conn, app_id, since_day, version, limit))
+    }
+
+    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<EventRow>> {
+        self.read(|conn| read::events_ranked(conn, app_id, from_day, to_day, version))
+    }
+
+    fn never_fired(&self, app_id: i64, version: Option<&str>) -> StoreResult<Vec<CatalogEntry>> {
+        self.read(|conn| read::never_fired(conn, app_id, version))
+    }
+
+    fn drops(&self, app_id: i64, from_day: i64, to_day: i64) -> StoreResult<Vec<DropRow>> {
+        self.read(|conn| read::drops(conn, app_id, from_day, to_day))
     }
 }
 

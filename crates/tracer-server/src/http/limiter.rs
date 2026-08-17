@@ -72,11 +72,22 @@ impl<K: Hash + Eq + Clone> TokenBuckets<K> {
 pub struct Limiters {
     keys: TokenBuckets<String>,
     addrs: TokenBuckets<IpAddr>,
+    logins: TokenBuckets<IpAddr>,
 }
+
+/// Dashboard login attempts per minute per client address (burst and refill rate). Switched off together
+/// with the ingest limits when `TRACER_RATE_PER_MIN` is `0`.
+pub const LOGIN_PER_MIN: u32 = 10;
 
 impl Limiters {
     pub fn new(per_min: u32) -> Self {
-        Self { keys: TokenBuckets::new(per_min), addrs: TokenBuckets::new(per_min) }
+        let logins = if per_min == 0 { 0 } else { LOGIN_PER_MIN };
+        Self { keys: TokenBuckets::new(per_min), addrs: TokenBuckets::new(per_min), logins: TokenBuckets::new(logins) }
+    }
+
+    /// Takes one login attempt for `addr`. On refusal returns the whole seconds to wait, at least one.
+    pub fn check_login(&self, addr: IpAddr, now: Instant) -> Result<(), u64> {
+        self.logins.check(&mask(addr), now).map_err(|wait| wait.as_secs_f64().ceil().max(1.0) as u64)
     }
 
     /// Checks both limits. On refusal returns the whole seconds to wait, at least one.

@@ -2,13 +2,16 @@
 //!
 //! Methods are blocking; async callers use `spawn_blocking` (see [`crate::http::blocking`]).
 
+pub mod read;
 pub mod sqlite;
+pub mod types;
 
 use tracer_proto::IngestResponse;
 
 use crate::ingest::Prepared;
 
 pub use sqlite::SqliteStore;
+pub use types::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -85,4 +88,41 @@ pub trait Store: Send + Sync + 'static {
     fn prune(&self, now: i64, retention_days: u32) -> StoreResult<PruneStats>;
     /// Marks sessions still `ok` whose last item is older than `older_than` as `abnormal`.
     fn close_stale_sessions(&self, older_than: i64) -> StoreResult<u64>;
+
+    // ---- dashboard sessions ----
+
+    /// Stores a login session, identified by the hash of its cookie token.
+    fn admin_session_create(&self, token_hash: &str, admin_id: i64, now: i64, expires_at: i64) -> StoreResult<()>;
+    /// The user a live (unexpired) session belongs to.
+    fn admin_session_lookup(&self, token_hash: &str, now: i64) -> StoreResult<Option<AdminSession>>;
+    fn admin_session_delete(&self, token_hash: &str) -> StoreResult<()>;
+    /// Deletes expired sessions. Returns how many.
+    fn admin_session_purge(&self, now: i64) -> StoreResult<u64>;
+    fn admin_count(&self) -> StoreResult<i64>;
+
+    // ---- dashboard reads (days are whole days since the epoch, ranges inclusive) ----
+
+    fn app_glance(&self, app_id: i64, from_day: i64, to_day: i64) -> StoreResult<AppGlance>;
+    /// Versions seen in the session rollups, oldest first.
+    fn versions(&self, app_id: i64) -> StoreResult<Vec<VersionInfo>>;
+    /// Session rollups per day, summed over versions and operating systems (or one version).
+    fn day_totals(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<DayTotals>>;
+    /// Distinct active installs per day, as `(day, installs)`.
+    fn active_installs_by_day(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<(i64, i64)>>;
+    /// Distinct active installs over a whole range.
+    fn active_installs_between(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<i64>;
+    fn list_issues(&self, app_id: i64, filter: &IssueFilter<'_>, limit: i64) -> StoreResult<Vec<IssueRow>>;
+    fn get_issue(&self, app_id: i64, issue_id: i64) -> StoreResult<Option<IssueRow>>;
+    fn representative_crash(&self, app_id: i64, issue_id: i64) -> StoreResult<Option<CrashRow>>;
+    fn recent_crashes(&self, app_id: i64, issue_id: i64, limit: i64) -> StoreResult<Vec<CrashBrief>>;
+    fn issue_breakdown(&self, app_id: i64, issue_id: i64) -> StoreResult<Breakdown>;
+    /// Sets an issue to `open`, `resolved` or `ignored`. Returns false when the issue is not in this app.
+    fn set_issue_status(&self, app_id: i64, issue_id: i64, status: &str) -> StoreResult<bool>;
+    fn perf_rows(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<PerfRow>>;
+    /// Counters and gauges from recent raw perf rows.
+    fn recent_custom_metrics(&self, app_id: i64, since_day: i64, version: Option<&str>, limit: i64) -> StoreResult<Vec<CustomRow>>;
+    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<EventRow>>;
+    /// Declared events that have never been fired, from the catalog of `version` or of any version.
+    fn never_fired(&self, app_id: i64, version: Option<&str>) -> StoreResult<Vec<CatalogEntry>>;
+    fn drops(&self, app_id: i64, from_day: i64, to_day: i64) -> StoreResult<Vec<DropRow>>;
 }
