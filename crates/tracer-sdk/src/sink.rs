@@ -8,6 +8,10 @@ use std::path::Path;
 
 use tracer_proto::{ItemBody, Signal};
 
+/// The `log` target of the few lines the SDK itself logs, to tell a host why something is not happening.
+/// The SDK's own logger passes these on but never keeps them as breadcrumbs.
+pub(crate) const LOG_TARGET: &str = "tracer_sdk";
+
 pub(crate) trait Sink: Send + Sync + 'static {
     /// Queues an item for the current session. Never blocks; drops and counts when the queue is full.
     /// Does nothing when the item's signal is not allowed.

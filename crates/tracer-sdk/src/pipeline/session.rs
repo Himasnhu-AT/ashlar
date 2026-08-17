@@ -24,16 +24,19 @@ pub(super) struct SessionClock {
     active: Duration,
     heartbeats: u32,
     ended: bool,
+    /// Most that one sample may add. A gap longer than this is not time the session was running: the
+    /// machine was asleep, and on some systems the monotonic clock goes on counting through that.
+    max_step: Duration,
 }
 
 impl SessionClock {
-    pub(super) fn new(now: Instant) -> Self {
-        Self { last: now, total: Duration::ZERO, focused: Duration::ZERO, active: Duration::ZERO, heartbeats: 0, ended: false }
+    pub(super) fn new(now: Instant, max_step: Duration) -> Self {
+        Self { last: now, total: Duration::ZERO, focused: Duration::ZERO, active: Duration::ZERO, heartbeats: 0, ended: false, max_step }
     }
 
     /// Credits the time since the last sample. `active` only counts while `focused`.
     pub(super) fn sample(&mut self, now: Instant, focused: bool, active: bool) {
-        let elapsed = now.saturating_duration_since(self.last);
+        let elapsed = now.saturating_duration_since(self.last).min(self.max_step);
         self.last = self.last.max(now);
         self.total += elapsed;
         if focused {
@@ -163,7 +166,7 @@ mod tests {
     #[test]
     fn time_is_split_by_the_state_at_each_sample() {
         let start = Instant::now();
-        let mut clock = SessionClock::new(start);
+        let mut clock = SessionClock::new(start, Duration::from_secs(60));
         clock.sample(start + secs(10), true, true);
         clock.sample(start + secs(25), true, false);
         clock.sample(start + secs(30), false, true);
@@ -179,13 +182,25 @@ mod tests {
     #[test]
     fn sub_second_samples_add_up_and_time_never_runs_backwards() {
         let start = Instant::now();
-        let mut clock = SessionClock::new(start);
+        let mut clock = SessionClock::new(start, Duration::from_secs(60));
         for step in 1..=2500u64 {
             clock.sample(start + Duration::from_millis(step), true, step % 2 == 0);
         }
         clock.sample(start, true, true);
         let totals = clock.totals();
         assert_eq!((totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s), (2, 2, 1, 1));
+    }
+
+    #[test]
+    fn a_gap_longer_than_one_step_is_not_credited_in_full() {
+        let start = Instant::now();
+        let mut clock = SessionClock::new(start, Duration::from_secs(60));
+        clock.sample(start + secs(30), true, true);
+        // The machine slept for three hours between two ticks.
+        clock.sample(start + secs(30 + 3 * 3600), true, true);
+        clock.sample(start + secs(40 + 3 * 3600), true, false);
+        let totals = clock.totals();
+        assert_eq!((totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s), (100, 100, 90, 10));
     }
 
     #[test]

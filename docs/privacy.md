@@ -5,11 +5,12 @@ This page lists everything the SDK can send. If a field is not here, it is not c
 ## Principles
 
 - **The host app chooses.** It declares its events at build time and picks which to listen to at startup. Undeclared events cannot be recorded.
-- **The user can switch it off.** Telemetry is on by default with a first-run notice. Each category — crash reports, performance, usage — has its own switch. `DO_NOT_TRACK=1` or `TRACER_DISABLED=1` in the environment turns everything off and nothing is written or sent.
+- **Nothing is sent before the notice.** Telemetry is on by default with a first-run notice. Until the host app reports that the user has seen that notice, data is recorded on the device but nothing leaves it. A category the user switches off in the notice is deleted and never sent. (A host app that shows its notice elsewhere, such as in an installer, can lift this.)
+- **The user can switch it off.** Each category — crash reports, performance, usage — has its own switch. `DO_NOT_TRACK=1` or `TRACER_DISABLED=1` in the environment turns everything off and nothing is written or sent.
 - **No user content.** Event names and property text are fixed strings compiled into the app. There is no API that accepts a file name, project name, document text or typed input.
 - **No stable identity.** The install id is random, is not derived from hardware, and can be reset. The server never stores the IP address.
 - **Visible.** With inspect mode on, everything that would be sent is also written to `outbox.jsonl` in the SDK's folder.
-- **Forgettable.** "Forget me" deletes local data, asks the server to delete everything for the install, and issues a new id.
+- **Forgettable.** "Forget me" deletes local data, including recent log lines and the last crash held in memory, asks the server to delete everything for the install, and issues a new id.
 
 ## Fields
 

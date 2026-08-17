@@ -39,6 +39,9 @@ pub struct Config {
     pub logger: LoggerMode,
     /// Mirror everything that would be sent into `outbox.jsonl` for the user to read.
     pub inspect: bool,
+    /// Send before the host has called [`crate::Tracer::notice_shown`]. Off by default: data is recorded
+    /// and kept on disk, but nothing leaves the machine until the user has seen the notice.
+    pub send_before_notice: bool,
 
     /// Items the in-memory queue holds before dropping.
     pub queue_capacity: usize,
@@ -92,6 +95,7 @@ impl Config {
             gpu: None,
             logger: LoggerMode::None,
             inspect: false,
+            send_before_notice: false,
             queue_capacity: 1024,
             batch_items: 50,
             flush_interval: Duration::from_secs(60),

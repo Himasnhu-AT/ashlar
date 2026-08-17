@@ -5,7 +5,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracer_proto::{Catalog, CatalogEvent, ConsentCategory, Gpu, ProcessKind, Signal};
+use tracer_proto::{CatalogEvent, ConsentCategory, Gpu, ProcessKind, Signal};
 
 use crate::catalog::{Event, EventCategory, Prop};
 use crate::config::{Config, LoggerMode};
@@ -45,28 +45,54 @@ impl Builder {
         self
     }
 
-    /// Declares the host's events. Required before any `listen` call has an effect.
+    /// Declares the host's events without listening to any. The `listen` calls declare the events
+    /// themselves, in any order, so this is only needed to send the catalog for events the host does not
+    /// listen to in this build, or with a hand-written [`EventCategory`] that leaves `EVENTS` empty.
     pub fn catalog<E: Event>(mut self) -> Self {
-        let events = E::ALL.iter().map(|event| CatalogEvent { name: event.name().to_owned(), category: event.category().name().to_owned() });
-        self.config.catalog = Catalog { events: events.collect() };
+        self.declare_all::<E>();
         self
     }
 
     /// Listens to every event in a category.
     pub fn listen<C: EventCategory>(mut self, category: C) -> Self {
+        self.declare(C::EVENTS.iter().map(|(name, category)| (*name, category.name())));
         self.config.listen_categories.push(category.name().to_owned());
         self
     }
 
     /// Listens to individual events.
     pub fn listen_events<E: Event>(mut self, events: &[E]) -> Self {
+        self.declare_all::<E>();
         self.config.listen_events.extend(events.iter().map(|event| event.name().to_owned()));
         self
     }
 
     /// Listens to every declared event.
     pub fn listen_all<E: Event>(mut self) -> Self {
+        self.declare_all::<E>();
         self.config.listen_categories.extend(<E::Category as EventCategory>::ALL.iter().map(|category| category.name().to_owned()));
+        self
+    }
+
+    fn declare_all<E: Event>(&mut self) {
+        self.declare(E::ALL.iter().map(|event| (event.name(), event.category().name())));
+    }
+
+    /// Adds events to the catalog, once each.
+    fn declare(&mut self, events: impl Iterator<Item = (&'static str, &'static str)>) {
+        for (name, category) in events {
+            if !self.config.catalog.events.iter().any(|known| known.name == name) {
+                self.config.catalog.events.push(CatalogEvent { name: name.to_owned(), category: category.to_owned() });
+            }
+        }
+    }
+
+    /// Lets the SDK send before [`Tracer::notice_shown`] has ever been called. By default nothing
+    /// leaves the machine until the user has seen the host's first-run notice; data is recorded and
+    /// kept on disk meanwhile. Set this only when the notice is shown somewhere else, such as in an
+    /// installer.
+    pub fn send_before_notice(mut self, allowed: bool) -> Self {
+        self.config.send_before_notice = allowed;
         self
     }
 
@@ -234,7 +260,38 @@ impl Tracer {
 
     // ---- hangs ----
 
-    /// Tells the hang watchdog the main loop is alive. Call once per loop iteration.
+    /// Marks the start of one turn of the host's main loop: handling an event, running an update,
+    /// painting a frame. A turn left open for longer than `hang_threshold` is reported as a hang, once.
+    /// The time between turns, when the loop waits for something to do, is never a hang.
+    ///
+    /// This is the preferred way to drive hang detection, and the only one that works for a loop that
+    /// runs only on input or that a GUI framework owns. It is one atomic update. Calling it again while
+    /// a turn is open keeps the original start. Once a host has begun a turn, [`Tracer::heartbeat`] no
+    /// longer counts.
+    pub fn begin_turn(&self) {
+        if let Some(inner) = &self.inner {
+            inner.signals.begin_turn();
+        }
+    }
+
+    /// Marks the end of the turn [`Tracer::begin_turn`] opened. One atomic update. Without an open turn
+    /// it does nothing.
+    pub fn end_turn(&self) {
+        if let Some(inner) = &self.inner {
+            inner.signals.end_turn();
+        }
+    }
+
+    /// Begins a turn and ends it when the returned guard is dropped, including on an early return or a
+    /// panic that unwinds.
+    pub fn turn(&self) -> TurnGuard {
+        self.begin_turn();
+        TurnGuard { tracer: self.clone() }
+    }
+
+    /// Tells the hang watchdog the main loop is alive, for a loop that runs continuously: call once per
+    /// iteration. A loop that waits for input between iterations must use [`Tracer::begin_turn`] and
+    /// [`Tracer::end_turn`] instead, or every wait longer than `hang_threshold` would look like a hang.
     pub fn heartbeat(&self) {
         if let Some(inner) = &self.inner {
             inner.signals.heartbeat();
@@ -339,6 +396,18 @@ impl Tracer {
             Some(inner) => inner.signals.write_report(path),
             None => Ok(()),
         }
+    }
+}
+
+/// One turn of the host's main loop, from [`Tracer::turn`]. The turn ends when this is dropped.
+#[must_use = "the turn ends as soon as the guard is dropped"]
+pub struct TurnGuard {
+    tracer: Tracer,
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        self.tracer.end_turn();
     }
 }
 

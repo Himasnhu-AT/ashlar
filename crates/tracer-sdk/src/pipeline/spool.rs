@@ -52,6 +52,8 @@ const OWN_LOCK_ATTEMPTS: u32 = 500;
 pub(super) const DROP_EVICTED: &str = "spool_evicted";
 pub(super) const DROP_TOO_LARGE: &str = "item_too_large";
 pub(super) const DROP_IO: &str = "io_error";
+/// Lines of a segment that could not be used: cut short by a crash, or not valid text.
+pub(super) const DROP_DAMAGED: &str = "spool_damaged";
 
 /// The category byte stored in front of an item of this consent category.
 pub(super) fn category_code(category: ConsentCategory) -> u8 {
@@ -84,6 +86,8 @@ pub(super) struct Batch {
     pub segments: Vec<u64>,
     /// Items as JSON, in the order they were recorded.
     pub items: Vec<String>,
+    /// Lines in those segments that could not be used. Counted as dropped when the batch is completed.
+    pub damaged: u64,
 }
 
 /// An orphan that was just adopted and whose owner left a marker: it did not shut down cleanly.
@@ -109,6 +113,8 @@ struct SessionDir {
     overhead: u64,
     next_seq: u64,
     segments: Vec<Segment>,
+    /// An adopted folder whose marker has not been answered yet. It is kept even with no segments.
+    awaiting_report: bool,
 }
 
 impl SessionDir {
@@ -126,7 +132,7 @@ impl SessionDir {
         self.segments.remove(position);
         let path = self.segment_path(seq);
         if let Some(drops) = drops {
-            count_evicted(&std::fs::read_to_string(&path).unwrap_or_default(), drops);
+            count_evicted(&std::fs::read(&path).unwrap_or_default(), drops);
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -135,10 +141,12 @@ impl SessionDir {
     fn purge(&mut self, category: u8) {
         for seq in self.segments.iter().map(|segment| segment.seq).collect::<Vec<_>>() {
             let path = self.segment_path(seq);
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            // A segment that cannot be read right now is left as it is; what is sent from it later is
+            // filtered by consent again.
+            let Ok(text) = std::fs::read(&path) else { continue };
             let mut kept = Vec::with_capacity(text.len());
-            for line in text.split_inclusive('\n').filter(|line| line.ends_with('\n') && line.as_bytes().first() != Some(&category)) {
-                kept.extend_from_slice(line.as_bytes());
+            for line in text.split_inclusive(|byte| *byte == b'\n').filter(|line| line.ends_with(b"\n") && line.first() != Some(&category)) {
+                kept.extend_from_slice(line);
             }
             if kept.is_empty() {
                 self.delete_segment(seq, None);
@@ -166,14 +174,30 @@ impl SessionDir {
     }
 
     /// Deletes the folder and lets go of the lock.
-    fn remove(self) {
+    #[cfg_attr(unix, allow(unused_mut))]
+    fn remove(mut self) {
         // Where an open file can be deleted, the lock is kept until the folder is gone, so that no other
         // process can adopt a folder that is half deleted. Elsewhere the open lock file would keep the
         // folder from being deleted, so it is closed first; a folder another process catches in between
         // is cleaned up by the rule for folders without a header.
         #[cfg(not(unix))]
-        drop(self.lock);
+        self.unlock();
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+
+    fn unlock(&mut self) {
+        if let Some(lock) = self.lock.take() {
+            let _ = lock.unlock();
+        }
+    }
+}
+
+impl Drop for SessionDir {
+    /// Unlocks outright instead of leaving it to the file being closed. A lock belongs to the open file,
+    /// and a child process the host starts shares that open file for the moment before it runs its own
+    /// program; closing alone would leave the folder looking owned for that moment.
+    fn drop(&mut self) {
+        self.unlock();
     }
 }
 
@@ -249,7 +273,7 @@ impl Spool {
         if !written {
             return false;
         }
-        let mut own = SessionDir { dir, header, lock, overhead: 0, next_seq: 0, segments: Vec::new() };
+        let mut own = SessionDir { dir, header, lock, overhead: 0, next_seq: 0, segments: Vec::new(), awaiting_report: false };
         own.measure_overhead();
         self.own = Some(own);
         true
@@ -425,14 +449,17 @@ impl Spool {
                 continue;
             };
             let (segments, next_seq) = index_segments(&dir);
-            let mut orphan = SessionDir { dir: dir.clone(), header, lock, overhead: 0, next_seq, segments };
+            let mut orphan = SessionDir { dir: dir.clone(), header, lock, overhead: 0, next_seq, segments, awaiting_report: false };
             let reportable = orphan.lock.is_some();
             if orphan.header.install_id != install_id || (orphan.segments.is_empty() && !(marker.is_some() && reportable)) {
                 orphan.remove();
                 continue;
             }
             match marker {
-                Some(marker) if reportable => unclean.push(Unclean { session_id: name, dir, marker }),
+                Some(marker) if reportable => {
+                    orphan.awaiting_report = true;
+                    unclean.push(Unclean { session_id: name, dir, marker });
+                }
                 _ => {
                     let _ = std::fs::remove_file(orphan.dir.join(SESSION_FILE));
                 }
@@ -475,6 +502,7 @@ impl Spool {
             }
         }
         let _ = std::fs::remove_file(orphan.dir.join(SESSION_FILE));
+        orphan.awaiting_report = false;
         orphan.measure_overhead();
         self.remove_empty_orphans();
         stored
@@ -501,31 +529,18 @@ impl Spool {
     /// orphan first, then the own session. Lines whose category `allowed` refuses are left out. The
     /// segments stay on disk until [`Spool::complete`].
     pub(super) fn next_batch(&mut self, budget: u64, allowed: &dyn Fn(u8) -> bool) -> Option<Batch> {
-        let session = match self.orphans.iter().find(|orphan| !orphan.segments.is_empty()) {
-            Some(orphan) => orphan,
-            None => {
-                // Seal the segment being written, so that what is sent is exactly what is deleted afterwards.
-                self.open = None;
-                self.own.as_ref().filter(|own| !own.segments.is_empty())?
-            }
-        };
-        let mut batch = Batch { header: session.header.clone(), segments: Vec::new(), items: Vec::new() };
-        let mut used = 0;
-        for segment in &session.segments {
-            if !batch.segments.is_empty() && used + segment.bytes > budget {
-                break;
-            }
-            used += segment.bytes;
-            batch.segments.push(segment.seq);
-            let text = std::fs::read_to_string(session.segment_path(segment.seq)).unwrap_or_default();
-            batch.items.extend(complete_lines(&text).filter(|(category, _)| allowed(*category)).map(|(_, json)| json.to_owned()));
+        if let Some(batch) = self.orphans.iter().find_map(|orphan| read_batch(orphan, budget, allowed)) {
+            return Some(batch);
         }
-        Some(batch)
+        // Seal the segment being written, so that what is sent is exactly what is deleted afterwards.
+        self.open = None;
+        read_batch(self.own.as_ref()?, budget, allowed)
     }
 
-    /// Deletes a batch's segments once the server has answered for them. An orphan that is empty
-    /// afterwards is deleted altogether.
-    pub(super) fn complete(&mut self, batch: &Batch) {
+    /// Deletes a batch's segments once the server has answered for them, and counts the lines in them
+    /// that could not be used. An orphan that is empty afterwards is deleted altogether.
+    pub(super) fn complete(&mut self, batch: &Batch, drops: &DropCounts) {
+        drops.add(DROP_DAMAGED, batch.damaged);
         let id = &batch.header.session_id;
         if let Some(orphan) = self.orphans.iter_mut().find(|orphan| &orphan.header.session_id == id) {
             for seq in &batch.segments {
@@ -584,7 +599,8 @@ impl Spool {
     }
 
     fn remove_empty_orphans(&mut self) {
-        let (kept, empty): (Vec<_>, Vec<_>) = std::mem::take(&mut self.orphans).into_iter().partition(|orphan| !orphan.segments.is_empty());
+        let (kept, empty): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.orphans).into_iter().partition(|orphan| !orphan.segments.is_empty() || orphan.awaiting_report);
         self.orphans = kept;
         for orphan in empty {
             orphan.remove();
@@ -644,20 +660,58 @@ fn folder_stats(dir: &Path) -> (u64, Option<SystemTime>) {
     (bytes, newest)
 }
 
-/// The whole lines of a segment as (category byte, item JSON). A tail without a newline is a write that
-/// was cut short, and is skipped.
-fn complete_lines(text: &str) -> impl Iterator<Item = (u8, &str)> {
-    text.split_inclusive('\n').filter_map(|line| {
-        let line = line.strip_suffix('\n')?;
-        Some((*line.as_bytes().first()?, line.get(1..)?))
-    })
+/// Reads segments of one session into a batch: as many as fit in `budget` bytes, and at least one. A
+/// segment that cannot be read right now is left out, and so is not deleted with the batch. `None` when
+/// the session has nothing that can be read.
+fn read_batch(session: &SessionDir, budget: u64, allowed: &dyn Fn(u8) -> bool) -> Option<Batch> {
+    let mut batch = Batch { header: session.header.clone(), segments: Vec::new(), items: Vec::new(), damaged: 0 };
+    let mut used = 0;
+    for segment in &session.segments {
+        if !batch.segments.is_empty() && used + segment.bytes > budget {
+            break;
+        }
+        let bytes = match std::fs::read(session.segment_path(segment.seq)) {
+            Ok(bytes) => bytes,
+            // Gone from disk: taking it into the batch takes it out of the index.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(_) => continue,
+        };
+        used += segment.bytes;
+        batch.segments.push(segment.seq);
+        let (lines, damaged) = usable_lines(&bytes);
+        batch.damaged += damaged;
+        batch.items.extend(lines.into_iter().filter(|(category, _)| allowed(*category)).map(|(_, json)| json.to_owned()));
+    }
+    (!batch.segments.is_empty()).then_some(batch)
+}
+
+/// The usable lines of a segment as (category byte, item JSON), and how many lines are not usable. Each
+/// line is judged on its own: a tail without a newline is a write that was cut short, and a line that is
+/// not valid UTF-8 is damaged; neither takes its neighbours with it.
+fn usable_lines(bytes: &[u8]) -> (Vec<(u8, &str)>, u64) {
+    let mut lines = Vec::new();
+    let mut damaged = 0;
+    let mut pieces = bytes.split(|byte| *byte == b'\n').peekable();
+    while let Some(piece) = pieces.next() {
+        let whole = pieces.peek().is_some();
+        match piece.split_first() {
+            None => {}
+            Some((category, rest)) if whole => match std::str::from_utf8(rest) {
+                Ok(json) => lines.push((*category, json)),
+                Err(_) => damaged += 1,
+            },
+            Some(_) => damaged += 1,
+        }
+    }
+    (lines, damaged)
 }
 
 /// Counts the items of a segment that is being thrown away. A `drops` item in it is not itself counted:
 /// its counts go back into `drops` so they are reported with a later batch.
-fn count_evicted(text: &str, drops: &DropCounts) {
-    let mut evicted = 0;
-    for (category, json) in complete_lines(text) {
+fn count_evicted(bytes: &[u8], drops: &DropCounts) {
+    let (lines, damaged) = usable_lines(bytes);
+    let mut evicted = damaged;
+    for (category, json) in lines {
         if category == CAT_META
             && let Ok(Item { body: ItemBody::Drops(carried), .. }) = serde_json::from_str::<Item>(json)
         {
@@ -748,7 +802,7 @@ mod tests {
         let mut sent = Vec::new();
         while let Some(batch) = spool.next_batch(u64::MAX, &all) {
             sent.extend(batch.items.iter().map(|json| (batch.header.session_id.clone(), json.clone())));
-            spool.complete(&batch);
+            spool.complete(&batch, &DropCounts::default());
         }
         sent
     }
@@ -773,7 +827,7 @@ mod tests {
         let batch = spool.next_batch(u64::MAX, &all).unwrap();
         assert_eq!(batch.header, header("a", 1));
         assert_eq!(batch.items, (0..10).map(item).collect::<Vec<_>>());
-        spool.complete(&batch);
+        spool.complete(&batch, &drops);
         assert!(spool.is_empty());
         // The folder itself stays for as long as the session runs: lock and header.
         assert_eq!(spool.total_bytes(), disk_bytes(dir.path()));
@@ -789,7 +843,7 @@ mod tests {
         spool.append(b'u', &item(0), &drops);
         let batch = spool.next_batch(u64::MAX, &all).unwrap();
         spool.append(b'u', &item(1), &drops);
-        spool.complete(&batch);
+        spool.complete(&batch, &drops);
         assert_eq!(items_of(&drain(&mut spool)), vec![item(1)]);
     }
 
@@ -1018,7 +1072,7 @@ mod tests {
         while let Some(batch) = spool.next_batch(10_000, &all) {
             assert!(batch.items.iter().map(|json| json.len() as u64 + 2).sum::<u64>() <= 10_000);
             seen.extend(batch.items.clone());
-            spool.complete(&batch);
+            spool.complete(&batch, &drops);
             batches += 1;
         }
         assert!(batches > 1);
@@ -1070,6 +1124,93 @@ mod tests {
         let mut spool = running(dir.path(), "b", 2, 1 << 20);
         spool.adopt_orphans(INSTALL);
         assert_eq!(items_of(&drain(&mut spool)), vec![item(0)]);
+    }
+
+    #[test]
+    fn a_line_cut_inside_a_character_does_not_cost_the_segment() {
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        ended(dir.path(), "a", 1, 0..3);
+        let segment = dir.path().join(SPOOL_DIR).join("a").join(segment_name(0));
+        // The process died in the middle of an append, inside a two-byte character.
+        OpenOptions::new().append(true).open(&segment).unwrap().write_all(b"c{\"id\":\"x\",\"message\":\"caf\xC3").unwrap();
+        let mut spool = running(dir.path(), "b", 2, 1 << 20);
+        spool.adopt_orphans(INSTALL);
+        let batch = spool.next_batch(u64::MAX, &all).unwrap();
+        assert_eq!(batch.items, (0..3).map(item).collect::<Vec<_>>());
+        assert_eq!(batch.damaged, 1);
+        spool.complete(&batch, &drops);
+        assert_eq!(drops.take().get(DROP_DAMAGED), Some(&1));
+        assert!(!segment.exists());
+    }
+
+    #[test]
+    fn a_damaged_line_in_the_middle_is_skipped_alone_everywhere() {
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        let mut spool = running(dir.path(), "a", 1, 1 << 20);
+        spool.append(b'u', &item(0), &drops);
+        let segment = spool.session_dir("a").join(segment_name(0));
+        OpenOptions::new().append(true).open(&segment).unwrap().write_all(b"c{\"bad\":\"\xFF\xFE\"}\n").unwrap();
+        spool.open = None;
+        spool.append(b'c', &item(1), &drops);
+        spool.append(b'u', &item(2), &drops);
+        // Removing one category keeps the others, damaged or not, byte for byte.
+        spool.purge(b'u');
+        let batch = spool.next_batch(u64::MAX, &all).unwrap();
+        assert_eq!((batch.items.clone(), batch.damaged), (vec![item(1)], 1));
+        // Thrown away instead of sent, the damaged line counts as one lost item.
+        spool.own.as_mut().unwrap().delete_segment(batch.segments[0], Some(&drops));
+        let counts = drops.take();
+        assert_eq!(counts.get(DROP_EVICTED).copied().unwrap_or(0), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_segment_that_cannot_be_read_is_neither_sent_nor_deleted() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        ended(dir.path(), "a", 1, 0..3);
+        let segment = dir.path().join(SPOOL_DIR).join("a").join(segment_name(0));
+        let mut spool = running(dir.path(), "b", 2, 1 << 20);
+        spool.adopt_orphans(INSTALL);
+        spool.append(b'u', &item(9), &drops);
+        std::fs::set_permissions(&segment, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&segment).is_ok() {
+            // Running with rights that ignore file modes; the read error cannot be staged.
+            return;
+        }
+        // The unreadable session does not hold up the one after it, and loses nothing.
+        let batch = spool.next_batch(u64::MAX, &all).unwrap();
+        assert_eq!((batch.header.session_id.as_str(), batch.items.clone()), ("b", vec![item(9)]));
+        spool.complete(&batch, &drops);
+        spool.purge(b'u');
+        assert!(spool.next_batch(u64::MAX, &all).is_none());
+        assert!(segment.exists());
+        std::fs::set_permissions(&segment, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // purge skipped it while it was unreadable; once readable again its lines are still there.
+        assert_eq!(items_of(&drain(&mut spool)), (0..3).map(item).collect::<Vec<_>>());
+        assert!(drops.take().is_empty());
+    }
+
+    #[test]
+    fn two_unclean_sessions_found_in_one_scan_are_both_kept_until_answered() {
+        let dir = TempDir::new("spool");
+        killed(dir.path(), "first", 1, 0..0, false);
+        killed(dir.path(), "second", 2, 0..0, false);
+        let mut spool = running(dir.path(), "now", 3, 1 << 20);
+        let mut unclean = spool.adopt_orphans(INSTALL);
+        unclean.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        assert_eq!(unclean.len(), 2);
+        // Answering one must leave the other, marker and saved files and all, for its own answer.
+        assert!(spool.add_recovery("first", &[(b'c', item(1))]));
+        assert!(spool.session_dir("second").join(SESSION_FILE).exists());
+        assert!(spool.add_recovery("second", &[(b'c', item(2))]));
+        let mut sent = drain(&mut spool);
+        sent.sort();
+        assert_eq!(sent, vec![("first".to_owned(), item(1)), ("second".to_owned(), item(2))]);
     }
 
     #[test]

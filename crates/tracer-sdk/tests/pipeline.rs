@@ -92,6 +92,8 @@ struct ServerState {
     /// How long each request takes.
     delay: Duration,
     need_catalog: bool,
+    /// Answer 200 with a body that is not an ingest reply, as a proxy in between might.
+    foreign_replies: bool,
     /// Replies to give before falling back to 200.
     script: VecDeque<Reply>,
 }
@@ -115,6 +117,8 @@ impl Transport for Server {
             None
         } else if let Some(reply) = state.script.pop_front() {
             Some(reply)
+        } else if state.foreign_replies {
+            Some(Reply { status: 200, body: b"<html>ok</html>".to_vec(), retry_after: None })
         } else {
             let accepted = serde_json::from_slice::<Envelope>(&body).map(|envelope| envelope.items.len()).unwrap_or(0);
             let body = format!(r#"{{"accepted":{accepted},"duplicates":0,"rejected":0,"need_catalog":{}}}"#, state.need_catalog);
@@ -145,6 +149,10 @@ impl Server {
 
     fn set_delay(&self, delay: Duration) {
         self.0.lock().unwrap().delay = delay;
+    }
+
+    fn set_foreign_replies(&self, on: bool) {
+        self.0.lock().unwrap().foreign_replies = on;
     }
 
     fn set_need_catalog(&self, need: bool) {
@@ -209,6 +217,7 @@ fn builder(dir: &TempDir, server: &Server) -> Builder {
         .data_dir(dir.path())
         .endpoint("https://telemetry.example.com")
         .transport(server.clone())
+        .send_before_notice(true)
         .signals(&[Signal::Session, Signal::Usage])
         .catalog::<AppEvent>()
         .listen_all::<AppEvent>()
@@ -326,6 +335,7 @@ fn only_listened_events_are_recorded() {
         .data_dir(dir.path())
         .endpoint("https://telemetry.example.com")
         .transport(server.clone())
+        .send_before_notice(true)
         .signals(&[Signal::Session, Signal::Usage])
         .catalog::<AppEvent>()
         .listen(Category::File)
@@ -471,6 +481,7 @@ fn kill_switch_child() {
         .data_dir(&dir)
         .endpoint("https://telemetry.example.com")
         .transport(server.clone())
+        .send_before_notice(true)
         .catalog::<AppEvent>()
         .listen_all::<AppEvent>()
         .inspect(true)
@@ -829,6 +840,7 @@ fn without_an_endpoint_data_is_spooled_and_mirrored_but_never_sent() {
     let tracer = Tracer::builder(KEY, "host", "1.0.0")
         .data_dir(dir.path())
         .transport(server.clone())
+        .send_before_notice(true)
         .catalog::<AppEvent>()
         .listen_all::<AppEvent>()
         .inspect(true)
@@ -963,6 +975,7 @@ fn a_leftover_marker_is_reported_as_an_abnormal_end_and_an_unclean_exit() {
         .data_dir(dir.path())
         .endpoint("https://telemetry.example.com")
         .transport(server.clone())
+        .send_before_notice(true)
         .signals(&[Signal::Session, Signal::Usage, Signal::Crash])
         .configure(|config| config.tick_interval = Duration::from_millis(5))
         .init();
@@ -1003,13 +1016,18 @@ fn a_leftover_marker_with_the_panicked_flag_is_a_crashed_end_and_no_extra_crash(
     }
     let dir = TempDir::new();
     let server = Server::offline();
-    let previous = leave_marker_behind(&dir, &server, |marker| marker["panicked"] = serde_json::json!(true));
+    let previous = leave_marker_behind(&dir, &server, |marker| {
+        marker["panicked"] = serde_json::json!(true);
+        // Two panics the host caught earlier, and the one that ended it.
+        marker["errors"] = serde_json::json!(3);
+    });
     server.set_offline(false);
     let tracer = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
     assert!(tracer.flush_blocking(WAIT));
     let recovered: Vec<Item> = server.items().into_iter().filter(|(envelope, _)| envelope.session_id == previous).map(|(_, item)| item).collect();
     assert_eq!(recovered.len(), 1, "{recovered:?}");
-    assert!(matches!(&recovered[0].body, ItemBody::SessionEnd(end) if end.status == SessionStatus::Crashed));
+    // `crashed` already accounts for the last panic; `errors` holds the two that were survived.
+    assert!(matches!(&recovered[0].body, ItemBody::SessionEnd(end) if end.status == SessionStatus::Crashed && end.errors == 2), "{recovered:?}");
     assert!(!server.items().iter().any(|(_, item)| matches!(item.body, ItemBody::Crash(_))));
 }
 
@@ -1092,6 +1110,7 @@ fn the_catalog_is_sent_until_acknowledged_and_again_when_the_server_asks() {
         .data_dir(dir.path())
         .endpoint("https://telemetry.example.com")
         .transport(server.clone())
+        .send_before_notice(true)
         .catalog::<AppEvent>()
         .configure(|config| config.tick_interval = Duration::from_millis(5))
         .init();
@@ -1192,7 +1211,8 @@ fn a_tracer_without_a_data_dir_is_disabled_and_harmless() {
         return;
     }
     let server = Server::default();
-    let tracer = Tracer::builder(KEY, "host", "1.0.0").endpoint("https://telemetry.example.com").transport(server.clone()).init();
+    let tracer =
+        Tracer::builder(KEY, "host", "1.0.0").endpoint("https://telemetry.example.com").transport(server.clone()).send_before_notice(true).init();
     assert!(!tracer.is_enabled());
     tracer.track(AppEvent::FileOpen);
     tracer.track_id(Category::File, "file.x");
@@ -1533,4 +1553,254 @@ fn consent_switched_off_here_stops_another_process() {
     assert_eq!(recorded, "file.open,file.open");
     // And this process never touched the other's session.
     assert!(server.envelopes().iter().all(|envelope| envelope.session_id == tracer.session_id()));
+}
+
+// ---- review fixes ----
+
+#[test]
+fn retry_after_zero_does_not_mean_retry_on_every_tick() {
+    if reran_without_kill_switches("retry_after_zero_does_not_mean_retry_on_every_tick") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    for _ in 0..3 {
+        server.script(429, Some(Duration::ZERO));
+    }
+    // A long shortest-wait, so that the floor is unmistakable next to the 5 ms tick.
+    let tracer = builder(&dir, &server).configure(|config| config.retry_min = Duration::from_millis(150)).init();
+    tracer.track(AppEvent::FileOpen);
+    wait_for("delivery after the rate limit", || server.events().len() == 1);
+    let seen = server.seen();
+    assert_eq!(seen.iter().map(|seen| seen.status).collect::<Vec<_>>()[..4], [429, 429, 429, 200]);
+    for pair in seen[..4].windows(2) {
+        let gap = pair[1].at.duration_since(pair[0].at);
+        assert!(gap >= Duration::from_millis(150), "asked again after only {gap:?}");
+    }
+}
+
+#[test]
+fn a_reply_that_is_not_an_ingest_reply_does_not_acknowledge_the_catalog() {
+    if reran_without_kill_switches("a_reply_that_is_not_an_ingest_reply_does_not_acknowledge_the_catalog") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    server.set_foreign_replies(true);
+    let tracer = builder(&dir, &server).init();
+    assert!(tracer.flush_blocking(WAIT));
+    drop(tracer);
+    // The 200 was taken as delivery, but it said nothing about the catalog: the next run sends it again.
+    server.set_foreign_replies(false);
+    let tracer = builder(&dir, &server).init();
+    assert!(tracer.flush_blocking(WAIT));
+    drop(tracer);
+    assert!(session_starts(&server).pop().unwrap().catalog.is_some());
+    // A real reply acknowledges it.
+    let tracer = builder(&dir, &server).init();
+    assert!(tracer.flush_blocking(WAIT));
+    assert!(session_starts(&server).pop().unwrap().catalog.is_none());
+}
+
+// ---- the first-run notice ----
+
+/// A builder as a host would write it: nothing about the notice, so sending waits for it.
+fn first_run_builder(dir: &TempDir, server: &Server) -> Builder {
+    Tracer::builder(KEY, "host", "1.0.0")
+        .data_dir(dir.path())
+        .endpoint("https://telemetry.example.com")
+        .transport(server.clone())
+        .signals(&[Signal::Session, Signal::Usage])
+        .listen_all::<AppEvent>()
+        .configure(|config| {
+            config.tick_interval = Duration::from_millis(5);
+            config.flush_interval = Duration::from_millis(20);
+        })
+}
+
+#[test]
+fn nothing_leaves_the_machine_before_the_notice_has_been_shown() {
+    if reran_without_kill_switches("nothing_leaves_the_machine_before_the_notice_has_been_shown") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    // First run: the host has not shown its notice yet.
+    let tracer = first_run_builder(&dir, &server).init();
+    assert!(tracer.notice_pending());
+    for _ in 0..5 {
+        tracer.track(AppEvent::FileOpen);
+    }
+    assert!(!tracer.flush_blocking(WAIT), "data is waiting, so the flush is not clean");
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(server.seen().is_empty(), "something was sent before the notice");
+    assert!(pending_bytes(&dir) > 0, "what was recorded is kept");
+    // The process ends without the notice ever being shown; still nothing is sent, and nothing is lost.
+    drop(tracer);
+    assert!(server.seen().is_empty());
+
+    // Second run: the same until the host says the user has seen the notice. Then everything goes.
+    let tracer = first_run_builder(&dir, &server).init();
+    tracer.track(AppEvent::FileSave);
+    assert!(!tracer.flush_blocking(WAIT));
+    assert!(server.seen().is_empty());
+    tracer.notice_shown();
+    assert!(tracer.flush_blocking(WAIT));
+    let mut names: Vec<String> = server.events().into_iter().map(|(name, _)| name).collect();
+    names.sort();
+    assert_eq!(names, ["file.open", "file.open", "file.open", "file.open", "file.open", "file.save"]);
+    assert_eq!(session_starts(&server).len(), 2);
+    drop(tracer);
+
+    // Later runs send from the start: the notice was shown once, and that is remembered.
+    let before = server.seen().len();
+    let tracer = first_run_builder(&dir, &server).init();
+    assert!(!tracer.notice_pending());
+    assert!(tracer.flush_blocking(WAIT));
+    assert!(server.seen().len() > before);
+}
+
+#[test]
+fn an_opt_out_made_before_the_notice_is_never_sent() {
+    if reran_without_kill_switches("an_opt_out_made_before_the_notice_is_never_sent") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    let tracer = first_run_builder(&dir, &server).init();
+    for _ in 0..5 {
+        tracer.track(AppEvent::FileOpen);
+    }
+    assert!(!tracer.flush_blocking(WAIT));
+    // The user reads the notice and switches usage data off before closing it.
+    tracer.set_consent(ConsentCategory::Usage, false);
+    tracer.notice_shown();
+    assert!(tracer.flush_blocking(WAIT));
+    tracer.track(AppEvent::FileOpen);
+    assert!(tracer.flush_blocking(WAIT));
+    drop(tracer);
+    assert!(server.items().is_empty(), "{:?}", server.items());
+    assert_eq!(pending_bytes(&dir), 0);
+}
+
+#[test]
+fn send_before_notice_lets_a_host_that_shows_its_notice_elsewhere_send_at_once() {
+    if reran_without_kill_switches("send_before_notice_lets_a_host_that_shows_its_notice_elsewhere_send_at_once") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    let tracer = first_run_builder(&dir, &server).send_before_notice(true).init();
+    tracer.track(AppEvent::FileOpen);
+    assert!(tracer.flush_blocking(WAIT));
+    assert_eq!(server.events().len(), 1);
+    assert!(tracer.notice_pending(), "the option does not pretend the notice was shown");
+}
+
+/// Collects the SDK's own log lines, for the child process below.
+struct OwnLines(Mutex<Vec<String>>);
+
+impl log::Log for OwnLines {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if record.target() == "tracer_sdk" {
+            self.0.lock().unwrap().push(format!("{} {}", record.level(), record.args()));
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Not a test of its own: run in a child process by the test below, because it installs the process's
+/// one global logger.
+#[test]
+fn held_sending_child() {
+    let Some(path) = std::env::var_os("TRACER_TEST_HELD_DIR") else { return };
+    static LINES: OwnLines = OwnLines(Mutex::new(Vec::new()));
+    log::set_logger(&LINES).unwrap();
+    log::set_max_level(log::LevelFilter::Trace);
+    let dir = TempDir::existing(PathBuf::from(path));
+    let server = Server::default();
+    // Its own logger wraps the global one, as a host with `Signal::Logs` would have it.
+    let tracer = first_run_builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Logs, Signal::Crash]).init();
+    for _ in 0..4 {
+        tracer.track(AppEvent::FileOpen);
+        assert!(!tracer.flush_blocking(WAIT));
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    tracer.notice_shown();
+    assert!(tracer.flush_blocking(WAIT));
+    drop(tracer);
+    let lines = LINES.0.lock().unwrap().clone();
+    let sent = String::from_utf8_lossy(&server.seen().iter().flat_map(|seen| seen.body.clone()).collect::<Vec<u8>>()).into_owned();
+    std::fs::write(dir.path().join("held.txt"), format!("lines={}\nleaked={}\n{}", lines.len(), sent.contains("notice_shown"), lines.join("\n")))
+        .unwrap();
+}
+
+#[test]
+fn a_host_that_forgot_the_notice_is_told_once_why_nothing_arrives() {
+    if reran_without_kill_switches("a_host_that_forgot_the_notice_is_told_once_why_nothing_arrives") {
+        return;
+    }
+    let dir = TempDir::new();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", "held_sending_child", "--test-threads=1"]).env("TRACER_TEST_HELD_DIR", dir.path());
+    let output = child.output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    let report = std::fs::read_to_string(dir.path().join("held.txt")).unwrap();
+    // One warning for four held flushes and several held intervals, and it is not sent anywhere.
+    assert!(report.starts_with("lines=1\nleaked=false\nWARN "), "{report}");
+    assert!(report.contains("notice_shown"), "{report}");
+}
+
+// ---- listening without declaring ----
+
+#[test]
+fn listening_declares_the_events_itself_in_any_order() {
+    if reran_without_kill_switches("listening_declares_the_events_itself_in_any_order") {
+        return;
+    }
+    let base = |dir: &TempDir, server: &Server| {
+        Tracer::builder(KEY, "host", "1.0.0")
+            .data_dir(dir.path())
+            .endpoint("https://telemetry.example.com")
+            .transport(server.clone())
+            .send_before_notice(true)
+            .signals(&[Signal::Session, Signal::Usage])
+            .configure(|config| config.tick_interval = Duration::from_millis(5))
+    };
+    let catalog_names = |server: &Server| -> Vec<String> {
+        let start = session_starts(server).pop().unwrap();
+        start.catalog.unwrap().events.into_iter().map(|event| event.name).collect()
+    };
+    let all = ["edit.undo", "file.open", "file.save", "view.zoom"];
+
+    // A category alone, with no `catalog` call: its events are recorded, and the whole catalog is sent.
+    let (dir, server) = (TempDir::new(), Server::default());
+    let tracer = base(&dir, &server).listen(Category::File).init();
+    tracer.track(AppEvent::FileOpen);
+    tracer.track(AppEvent::Undo);
+    assert!(tracer.flush_blocking(WAIT));
+    assert_eq!(server.events(), vec![("file.open".to_owned(), false)]);
+    assert_eq!(catalog_names(&server), all);
+
+    // Single events alone.
+    let (dir, server) = (TempDir::new(), Server::default());
+    let tracer = base(&dir, &server).listen_events(&[AppEvent::Undo]).init();
+    tracer.track(AppEvent::FileOpen);
+    tracer.track(AppEvent::Undo);
+    assert!(tracer.flush_blocking(WAIT));
+    assert_eq!(server.events(), vec![("edit.undo".to_owned(), false)]);
+    assert_eq!(catalog_names(&server), all);
+
+    // Listening first and declaring afterwards, or several times over, declares each event once.
+    let (dir, server) = (TempDir::new(), Server::default());
+    let tracer = base(&dir, &server).listen_all::<AppEvent>().catalog::<AppEvent>().listen(Category::View).init();
+    tracer.track(AppEvent::Zoom);
+    assert!(tracer.flush_blocking(WAIT));
+    assert_eq!(server.events(), vec![("view.zoom".to_owned(), false)]);
+    assert_eq!(catalog_names(&server), all);
 }

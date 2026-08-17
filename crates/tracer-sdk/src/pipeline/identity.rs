@@ -70,15 +70,18 @@ impl Identity {
         identity
     }
 
-    /// Changes the record on disk: reads it, applies `change`, saves it, and returns the result. A lock
-    /// file keeps two processes from doing this at the same moment. `current` is the starting point when
-    /// the file cannot be read.
-    pub(super) fn update(dir: &Path, current: &Self, change: impl FnOnce(&mut Self)) -> Self {
+    /// Changes the record: applies `change` and saves, under a lock file that keeps two processes from
+    /// doing this at the same moment. Returns the result and whether it reached the disk.
+    ///
+    /// The change starts from the file when `trust_file` accepts what it holds, so that what other
+    /// processes added is kept; otherwise, and when the file cannot be read, it starts from `current`.
+    /// The caller refuses a file that is behind its own memory, as after a save that failed.
+    pub(super) fn update(dir: &Path, current: &Self, trust_file: impl FnOnce(&Self) -> bool, change: impl FnOnce(&mut Self)) -> (Self, bool) {
         let _lock = lock_install(dir);
-        let mut identity = Self::load(dir).unwrap_or_else(|| current.clone());
+        let mut identity = Self::load(dir).filter(trust_file).unwrap_or_else(|| current.clone());
         change(&mut identity);
-        identity.save(dir);
-        identity
+        let saved = identity.save(dir);
+        (identity, saved)
     }
 
     pub(super) fn save(&self, dir: &Path) -> bool {
@@ -246,15 +249,24 @@ mod tests {
     fn updates_start_from_the_file_not_from_a_stale_copy() {
         let dir = TempDir::new("identity");
         let stale = Identity::load_or_create(dir.path());
-        let rotated = Identity::update(dir.path(), &stale, |identity| {
-            identity.rotate(true);
-        });
+        let (rotated, saved) = Identity::update(
+            dir.path(),
+            &stale,
+            |_| true,
+            |identity| {
+                identity.rotate(true);
+            },
+        );
+        assert!(saved);
         assert_ne!(rotated.install_id, stale.install_id);
         // Another process, still holding the old copy, removes a pending id: the rotation survives.
-        let updated = Identity::update(dir.path(), &stale, |identity| identity.pending_forget.clear());
+        let (updated, _) = Identity::update(dir.path(), &stale, |_| true, |identity| identity.pending_forget.clear());
         assert_eq!(updated.install_id, rotated.install_id);
         assert!(updated.pending_forget.is_empty());
-        assert_eq!(Identity::load(dir.path()), Some(updated));
+        assert_eq!(Identity::load(dir.path()), Some(updated.clone()));
+        // A file the caller knows to be behind it is not the starting point.
+        let (kept, _) = Identity::update(dir.path(), &stale, |_| false, |_| {});
+        assert_eq!(kept.install_id, stale.install_id);
     }
 
     #[test]

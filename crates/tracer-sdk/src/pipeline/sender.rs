@@ -14,13 +14,16 @@ use tracer_proto::{
 
 use super::Shared;
 use super::files::{lock, now_ms, write_json};
-use super::identity::{Identity, random_u64};
+use super::identity::random_u64;
 use super::session::SELECTION_FILE;
 use super::spool::{Batch, CAT_META, Header, category_code};
+use crate::sink::LOG_TARGET;
 use crate::transport::{Request, Transport};
 
 const DROP_REJECTED: &str = "server_rejected";
 const DROP_TICK: &str = "tick_panicked";
+/// A forget request the server refused in a way that trying again cannot change.
+const DROP_FORGET: &str = "forget_rejected";
 
 /// Room left in an envelope for its header, on top of the items.
 const HEADER_ALLOWANCE: u64 = 16 * 1024;
@@ -67,11 +70,17 @@ pub(super) struct Worker {
     backoff_until: Option<Instant>,
     /// Earliest time the server allows the next attempt. Nothing goes earlier.
     retry_after_until: Option<Instant>,
+    /// Forget requests are best effort and keep their own count and clock, so that one that keeps failing
+    /// neither holds up ingest nor is hurried along by it.
+    forget_failures: u32,
+    forget_retry_at: Option<Instant>,
     last_cycle: Instant,
     last_upkeep: Instant,
     last_heartbeat: Instant,
     want_send: bool,
     flush_done: u64,
+    /// The host has been told once that sending waits for `notice_shown`.
+    warned_held: bool,
 }
 
 impl Worker {
@@ -86,6 +95,9 @@ impl Worker {
             failures: 0,
             backoff_until: None,
             retry_after_until: None,
+            forget_failures: 0,
+            forget_retry_at: None,
+            warned_held: false,
             last_cycle: now,
             last_upkeep: now,
             last_heartbeat: now,
@@ -96,6 +108,7 @@ impl Worker {
     }
 
     pub(super) fn run(mut self) {
+        // `timing.tick` is clamped when it is built, so adding it to the clock cannot overflow.
         let mut next_tick = Instant::now() + self.shared.timing.tick;
         loop {
             let (flush_requested, stop, purge) = {
@@ -116,6 +129,7 @@ impl Worker {
             }
             if stop || flush_requested > self.flush_done {
                 self.drain_queue();
+                self.note_held();
                 self.send_cycle(true);
                 let clean = self.nothing_left();
                 self.flush_done = flush_requested;
@@ -131,6 +145,7 @@ impl Worker {
             } else if now.saturating_duration_since(self.last_upkeep) >= self.shared.timing.flush {
                 // Nothing to send, or no way to send it: orphans are still adopted and the caps kept.
                 self.upkeep(now);
+                self.note_held();
             }
             match self.queue.recv_timeout(next_tick.saturating_duration_since(Instant::now())) {
                 Ok(message) => {
@@ -152,11 +167,20 @@ impl Worker {
     }
 
     fn handle(&mut self, message: Message) {
-        if let Message::Item { epoch, category, item } = message
-            && epoch == self.shared.epoch.load(Ordering::Relaxed)
-            && self.shared.category_allowed(category)
-        {
-            self.shared.store(category, &item, false);
+        if let Message::Item { epoch, category, item } = message {
+            self.shared.store_queued(epoch, category, &item);
+        }
+    }
+
+    /// Tells the host, once, why nothing is arriving: data is waiting and sending is held until the user
+    /// has seen the notice. A host that forgot to call `notice_shown` finds out from its log.
+    fn note_held(&mut self) {
+        if !self.warned_held && self.transport.is_some() && self.shared.sending_held() && self.has_work() {
+            self.warned_held = true;
+            log::warn!(
+                target: LOG_TARGET,
+                "telemetry is recorded but not sent until Tracer::notice_shown() has been called; see Builder::send_before_notice"
+            );
         }
     }
 
@@ -198,11 +222,15 @@ impl Worker {
     }
 
     fn can_send(&self) -> bool {
-        self.transport.is_some() && !self.halted && !self.shared.off.load(Ordering::Relaxed)
+        self.transport.is_some() && !self.halted && !self.shared.off.load(Ordering::Relaxed) && !self.shared.sending_held()
     }
 
     fn has_work(&self) -> bool {
-        !lock(&self.shared.disk).is_empty() || !lock(&self.shared.identity).pending_forget.is_empty()
+        // Two statements on purpose: each lock is let go before the next is taken. Held together they
+        // would be taken in the opposite order to `forget`, and the two threads could wait on each other.
+        let spooled = !lock(&self.shared.disk).is_empty();
+        let forgets = !lock(&self.shared.identity).pending_forget.is_empty();
+        spooled || forgets
     }
 
     /// True when a flush has nothing more it could send.
@@ -232,7 +260,7 @@ impl Worker {
         self.last_cycle = now;
         self.want_send = true;
         self.upkeep(now);
-        if !self.send_forget_requests() {
+        if !self.send_forget_requests(forced) {
             return;
         }
         self.store_drop_counts();
@@ -242,11 +270,11 @@ impl Worker {
             let batch = lock(&shared.disk).next_batch(budget, &|category| shared.category_allowed(category));
             let Some(batch) = batch else { break };
             if batch.items.is_empty() {
-                lock(&shared.disk).complete(&batch);
+                lock(&shared.disk).complete(&batch, &shared.drops);
                 continue;
             }
             let Some(body) = envelope_json(&batch.header, now_ms(), &batch.items) else {
-                lock(&shared.disk).complete(&batch);
+                lock(&shared.disk).complete(&batch, &shared.drops);
                 shared.drops.add(DROP_REJECTED, batch.items.len() as u64);
                 continue;
             };
@@ -256,11 +284,11 @@ impl Worker {
             };
             match outcome {
                 Outcome::Delivered(reply) => {
-                    lock(&shared.disk).complete(&batch);
+                    lock(&shared.disk).complete(&batch, &shared.drops);
                     self.note_catalog(&batch, &reply);
                 }
                 Outcome::Rejected => {
-                    lock(&shared.disk).complete(&batch);
+                    lock(&shared.disk).complete(&batch, &shared.drops);
                     shared.drops.add(DROP_REJECTED, batch.items.len() as u64);
                 }
                 Outcome::Halted | Outcome::Retry => return,
@@ -270,24 +298,54 @@ impl Worker {
         shared.unsent.store(0, Ordering::Relaxed);
     }
 
-    /// Asks the server to delete earlier install ids. False when the cycle should stop here.
-    fn send_forget_requests(&mut self) -> bool {
+    /// Asks the server to delete earlier install ids. Best effort: a request that fails is tried again
+    /// later, with its own backoff, here and after the next launch, and never holds up ingest. One the
+    /// server refuses for good (a 4xx other than 401, 403 and 429) is given up and counted. False only
+    /// when the server does not accept the key, which stops all sending.
+    fn send_forget_requests(&mut self, forced: bool) -> bool {
+        if !forced && self.forget_retry_at.is_some_and(|at| Instant::now() < at) {
+            return true;
+        }
         let pending = lock(&self.shared.identity).pending_forget.clone();
         for install_id in pending {
             let Ok(body) = serde_json::to_vec(&ForgetRequest { schema: SCHEMA_VERSION, install_id: install_id.clone() }) else { continue };
-            match self.post(routes::FORGET, &body, false) {
-                Outcome::Delivered(_) | Outcome::Rejected => {
-                    let mut identity = lock(&self.shared.identity);
-                    let updated =
-                        Identity::update(&self.shared.dir, &identity, |saved| saved.pending_forget.retain(|pending| *pending != install_id));
-                    // Only the list is taken over here. A new install id is noticed on the next tick,
-                    // which also clears this session's data.
-                    identity.pending_forget = updated.pending_forget;
+            let Some(transport) = self.transport.as_mut() else { return true };
+            let reply = transport.send(&Request { path: routes::FORGET, app_key: &self.shared.app_key, body: &body, gzip: false });
+            match reply.as_ref().map(|reply| reply.status) {
+                Ok(200..=299) => {
+                    self.forget_failures = 0;
+                    self.forget_retry_at = None;
+                    self.settle_forget(&install_id);
                 }
-                Outcome::Halted | Outcome::Retry => return false,
+                Ok(401 | 403) => {
+                    self.halted = true;
+                    return false;
+                }
+                Ok(status @ 400..=499) if status != 429 => {
+                    self.shared.drops.add(DROP_FORGET, 1);
+                    self.settle_forget(&install_id);
+                }
+                _ => {
+                    let wait = self.backoff_wait(self.forget_failures);
+                    let asked = reply.ok().and_then(|reply| reply.retry_after).map_or(wait, |asked| asked.clamp(wait, MAX_RETRY_AFTER));
+                    self.forget_failures = self.forget_failures.saturating_add(1);
+                    self.forget_retry_at = Instant::now().checked_add(asked);
+                    break;
+                }
             }
         }
         true
+    }
+
+    /// Takes an install id off the list of forgets still owed.
+    fn settle_forget(&mut self, install_id: &str) {
+        let shared = &self.shared;
+        let mut identity = lock(&shared.identity);
+        // The record is merged with what other processes wrote. If that shows a newer install id, this
+        // process starts over under it, exactly as it would have on its next tick.
+        if shared.change_identity(&mut identity, |record| record.pending_forget.retain(|pending| pending != install_id)) {
+            shared.start_over(&identity.install_id);
+        }
     }
 
     /// Turns the drop counts into a `drops` item in the spool, so it leaves with the next batch and is
@@ -322,7 +380,10 @@ impl Worker {
                     Outcome::Halted
                 }
                 429 if reply.retry_after.is_some() => {
-                    self.retry_after_until = reply.retry_after.map(|wait| now + wait.min(MAX_RETRY_AFTER));
+                    // Never less than the shortest retry wait: a server that says "retry after 0" would
+                    // otherwise be asked again on every tick.
+                    let floor = self.shared.timing.retry_min.min(MAX_RETRY_AFTER);
+                    self.retry_after_until = reply.retry_after.and_then(|wait| now.checked_add(wait.clamp(floor, MAX_RETRY_AFTER)));
                     Outcome::Retry
                 }
                 _ => self.back_off(now),
@@ -334,17 +395,25 @@ impl Worker {
     /// Exponential backoff with jitter: the wait doubles from `retry_min` to `retry_max`, and the actual
     /// wait is a random point in its upper half.
     fn back_off(&mut self, now: Instant) -> Outcome {
-        let timing = self.shared.timing;
-        let ceiling = timing.retry_min.saturating_mul(1u32 << self.failures.min(20)).min(timing.retry_max);
+        let wait = self.backoff_wait(self.failures);
         self.failures = self.failures.saturating_add(1);
-        self.backoff_until = Some(now + jitter(ceiling, random_u64()));
+        self.backoff_until = now.checked_add(wait);
         Outcome::Retry
+    }
+
+    /// The wait after the given number of failures in a row.
+    fn backoff_wait(&self, failures: u32) -> Duration {
+        let timing = self.shared.timing;
+        let ceiling = timing.retry_min.saturating_mul(1u32 << failures.min(20)).min(timing.retry_max);
+        jitter(ceiling, random_u64())
     }
 
     /// Keeps the catalog acknowledgement in step with what the server said.
     fn note_catalog(&mut self, batch: &Batch, reply: &[u8]) {
         let shared = &self.shared;
-        let need_catalog = serde_json::from_slice::<IngestResponse>(reply).is_ok_and(|reply| reply.need_catalog);
+        // Only a reply that can be read says anything about the catalog. An empty or foreign body, from a
+        // proxy for instance, must not be taken for "the server has it".
+        let Ok(IngestResponse { need_catalog, .. }) = serde_json::from_slice::<IngestResponse>(reply) else { return };
         let mut selection = lock(&shared.selection);
         let changed = if need_catalog {
             self.catalog_item = None;

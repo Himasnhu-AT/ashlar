@@ -9,6 +9,11 @@ pub trait EventCategory: Copy + 'static {
     /// Every category, in declaration order.
     const ALL: &'static [Self];
 
+    /// Every declared event with the category it belongs to. [`events!`](crate::events) fills this in,
+    /// which lets [`crate::Builder::listen`] register the catalog by itself. A hand-written
+    /// implementation that leaves it empty must call [`crate::Builder::catalog`].
+    const EVENTS: &'static [(&'static str, Self)] = &[];
+
     fn name(self) -> &'static str;
 }
 
@@ -78,6 +83,8 @@ macro_rules! events {
 
         impl $crate::EventCategory for $category {
             const ALL: &'static [Self] = &[$( Self::$category_variant ),+];
+
+            const EVENTS: &'static [(&'static str, Self)] = &[$( ($event_name, Self::$event_category) ),*];
 
             fn name(self) -> &'static str {
                 match self {
@@ -176,6 +183,8 @@ mod tests {
         assert_eq!(Category::ALL, &[Category::File, Category::Edit, Category::View]);
         assert_eq!(Category::ALL.iter().map(|category| category.name()).collect::<Vec<_>>(), vec!["file", "edit", "view"]);
         assert_eq!(AppEvent::ALL, &[AppEvent::FileOpen, AppEvent::FileSave, AppEvent::Undo]);
+        assert_eq!(Category::EVENTS, &[("file.open", Category::File), ("file.save", Category::File), ("edit.undo", Category::Edit)]);
+        assert!(empty::Category::EVENTS.is_empty());
         assert_eq!(AppEvent::FileSave.name(), "file.save");
         assert_eq!(AppEvent::FileSave.category(), Category::File);
         assert_eq!(AppEvent::Undo.category().name(), "edit");

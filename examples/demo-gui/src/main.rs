@@ -25,10 +25,6 @@ tracer_sdk::events! {
     }
 }
 
-/// How often the UI is repainted when nothing happens. The hang watchdog needs a heartbeat well inside
-/// its threshold (2 s by default), and eframe only runs the loop on input or on a requested repaint.
-const IDLE_REPAINT: Duration = Duration::from_millis(500);
-
 struct DemoApp {
     tracer: Tracer,
     first_frame_done: bool,
@@ -53,7 +49,6 @@ impl DemoApp {
 
         let mut builder = Tracer::builder(&key, "demo", env!("CARGO_PKG_VERSION"))
             .data_dir(&data_dir)
-            .catalog::<DemoEvent>()
             .listen_all::<DemoEvent>()
             .logger(LoggerMode::Install)
             .inspect(true);
@@ -76,7 +71,8 @@ impl DemoApp {
     }
 
     fn contents(&mut self, ui: &mut eframe::egui::Ui) {
-        // First-run notice. Recording has already started (opt-out); the user can switch things off below.
+        // First-run notice. Recording has already started, but nothing is sent until the user has seen
+        // this and pressed OK; a category switched off below before that is never sent at all.
         if self.tracer.notice_pending() {
             ui.group(|ui| {
                 ui.label("This app sends crash reports, performance numbers and usage counts to its developer. You can switch each off below.");
@@ -118,7 +114,7 @@ impl DemoApp {
 
         ui.horizontal(|ui| {
             if ui.button("Block the UI for 3 s").clicked() {
-                // No heartbeat for 3 s: the watchdog reports a hang once the threshold passes.
+                // This turn of the loop takes 3 s: the watchdog reports a hang once the threshold passes.
                 log::warn!("blocking the UI thread");
                 std::thread::sleep(Duration::from_secs(3));
             }
@@ -162,9 +158,14 @@ fn crash_on_purpose() -> ! {
 }
 
 impl eframe::App for DemoApp {
-    /// Runs once per loop turn, whether or not a frame is drawn: the right place for the heartbeat.
+    /// Runs once per loop turn, whether or not a frame is drawn.
+    ///
+    /// The toolkit owns the event loop and only runs it on input, so this host never sees the wait
+    /// between turns. It marks the work it does see, here and in `ui`, as turns: a turn that takes longer
+    /// than the hang threshold is a hang, and the idle time in between never is. No timed repaint is
+    /// needed to keep the watchdog quiet.
     fn logic(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        self.tracer.heartbeat();
+        let _turn = self.tracer.turn();
         let (focused, active) = ctx.input(|input| (input.focused, !input.events.is_empty()));
         self.tracer.set_focused(focused);
         if active {
@@ -173,10 +174,9 @@ impl eframe::App for DemoApp {
     }
 
     fn ui(&mut self, ui: &mut eframe::egui::Ui, _frame: &mut eframe::Frame) {
+        let _turn = self.tracer.turn();
         let started = Instant::now();
         self.contents(ui);
-        // Repaint at least twice a second so the heartbeat keeps coming while the window is idle.
-        ui.ctx().request_repaint_after(IDLE_REPAINT);
         self.tracer.frame(started.elapsed());
         if !self.first_frame_done {
             self.first_frame_done = true;

@@ -35,7 +35,7 @@ use tracer_proto::{
 };
 
 use self::consent::Consent;
-use self::files::{lock, lock_soft, now_ms, read_json, write_json};
+use self::files::{deadline_in, lock, lock_soft, now_ms, read_json, wait_step, write_json};
 use self::identity::{Identity, derived_id, new_id};
 use self::inspect::Outbox;
 use self::sender::{Message, Worker};
@@ -44,7 +44,7 @@ use self::spool::{DROP_IO, Header, MAX_LINE_BYTES, SPOOL_DIR, Spool, category_co
 use self::usage::{DROP_PROP, Listening, build_event};
 use crate::config::Config;
 use crate::signals::{self, Signals};
-use crate::sink::Sink;
+use crate::sink::{LOG_TARGET, Sink};
 use crate::transport::Transport;
 
 /// Folder the SDK keeps its files in, inside the host's data directory.
@@ -52,6 +52,17 @@ const SDK_DIR: &str = "tracer";
 /// File the signal modules keep recent log lines in, inside the session folder. Named here only so
 /// `forget` can delete it.
 const BREADCRUMBS_FILE: &str = "breadcrumbs.jsonl";
+
+/// Longest tick, and longest wait between retries, whatever the config says. Keeps every sum of a time
+/// and an interval inside what the clock can express.
+const MAX_TICK: Duration = Duration::from_secs(60 * 60);
+const MAX_RETRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// One tick may add at most this many tick intervals to the session's time, and never less than a
+/// minute's worth, so that a worker held up by a slow request loses nothing but a machine that slept does
+/// not have its sleep counted.
+const MAX_TICKS_PER_SAMPLE: u32 = 5;
+const MIN_SAMPLE_CAP: Duration = Duration::from_secs(60);
 
 const DROP_QUEUE_FULL: &str = "queue_full";
 const DROP_BUSY: &str = "spool_busy";
@@ -126,7 +137,18 @@ struct Shared {
     /// Bit set of the signals the host enabled.
     enabled: u8,
     consent: Consent,
+    /// The install record. Held across file reads and writes, so host threads do not wait on it; they
+    /// read `install_id`.
     identity: Mutex<Identity>,
+    /// A copy of the current install id that is only ever locked for a moment.
+    install_id: Mutex<String>,
+    /// The install record in memory has not reached the file, because saving failed. Until it has, the
+    /// file is not believed, and every tick tries the save again.
+    identity_unsaved: AtomicBool,
+    /// Install ids this process has rotated away from. A file that still names one of them is behind.
+    retired: Mutex<Vec<String>>,
+    /// Nothing is sent until the user has seen the host's notice.
+    hold_until_notice: bool,
     session_id: String,
     /// This process's folder in the spool: `spool/<session id>`.
     session_dir: PathBuf,
@@ -177,6 +199,22 @@ impl Shared {
     /// Writes one item to this session's folder in the spool, on the calling thread. With `soft`, gives
     /// up rather than wait for a lock that may never be released.
     fn store(&self, category: u8, item: &Item, soft: bool) -> bool {
+        self.store_if(category, item, soft, || true)
+    }
+
+    /// Stores an item that waited in the queue, unless a `forget` or a consent change has overtaken it.
+    /// That is decided with the spool locked, the same lock `forget` wipes under, so an item queued under
+    /// the old install id cannot land under the new header.
+    fn store_queued(&self, epoch: u64, category: u8, item: &Item) -> bool {
+        self.store_if(category, item, false, || epoch == self.epoch.load(Ordering::Relaxed) && self.category_allowed(category))
+    }
+
+    /// True while sending waits for the user to have seen the host's notice.
+    fn sending_held(&self) -> bool {
+        self.hold_until_notice && !self.consent.notice_shown()
+    }
+
+    fn store_if(&self, category: u8, item: &Item, soft: bool, still_wanted: impl FnOnce() -> bool) -> bool {
         let Ok(json) = serde_json::to_string(item) else {
             self.drops.add(DROP_IO, 1);
             return false;
@@ -186,7 +224,7 @@ impl Shared {
             self.drops.add(DROP_BUSY, 1);
             return false;
         };
-        let stored = spool.append(category, &json, &self.drops);
+        let stored = still_wanted() && spool.append(category, &json, &self.drops);
         if stored {
             self.unsent.fetch_add(1, Ordering::Relaxed);
         }
@@ -252,7 +290,7 @@ impl Shared {
             let mut items = Vec::new();
             if self.permitted(Signal::Session) {
                 let status = if previous.panicked { SessionStatus::Crashed } else { SessionStatus::Abnormal };
-                let end = SessionEnd { status, totals: previous.totals, errors: previous.errors };
+                let end = SessionEnd { status, totals: previous.totals, errors: errors_of(previous.errors, previous.panicked) };
                 items.push((Signal::Session, Item { id: derived_id(&unclean.session_id, "session_end"), ts, body: ItemBody::SessionEnd(end) }));
             }
             if !previous.panicked && self.permitted(Signal::Crash) {
@@ -287,15 +325,46 @@ impl Shared {
             lock(&self.disk).purge(category_code(category));
         }
         let mut identity = lock(&self.identity);
+        if self.identity_unsaved.load(Ordering::Relaxed) {
+            // Memory is ahead of the file; try again to bring the file up to it.
+            self.change_identity(&mut identity, |_| {});
+            return;
+        }
         if let Some(saved) = Identity::load(&self.dir)
             && saved != *identity
         {
+            if lock(&self.retired).contains(&saved.install_id) {
+                // The file names an id this process has already rotated away from: it is behind, and
+                // must not bring the forgotten id back. Put the current record in its place.
+                self.identity_unsaved.store(true, Ordering::Relaxed);
+                self.change_identity(&mut identity, |_| {});
+                return;
+            }
             let forgotten = saved.install_id != identity.install_id;
-            *identity = saved;
+            self.set_identity(&mut identity, saved);
             if forgotten {
                 self.start_over(&identity.install_id);
             }
         }
+    }
+
+    /// Replaces the install record in memory, and the copy of the id that host threads read.
+    fn set_identity(&self, identity: &mut Identity, next: Identity) {
+        *lock(&self.install_id) = next.install_id.clone();
+        *identity = next;
+    }
+
+    /// Applies `change` to the install record and saves it. The record in memory changes whether or not
+    /// the save works; a failed save is remembered and tried again on later ticks. Returns true when the
+    /// install id is now a different one. The caller holds the `identity` lock.
+    fn change_identity(&self, identity: &mut Identity, change: impl FnOnce(&mut Identity)) -> bool {
+        let unsaved = self.identity_unsaved.load(Ordering::Relaxed);
+        let retired = lock(&self.retired).clone();
+        let (next, saved) = Identity::update(&self.dir, identity, |file| !unsaved && !retired.contains(&file.install_id), change);
+        self.identity_unsaved.store(!saved, Ordering::Relaxed);
+        let changed = next.install_id != identity.install_id;
+        self.set_identity(identity, next);
+        changed
     }
 
     /// The local half of `forget`: deletes what this process may delete and carries on under the new
@@ -308,6 +377,12 @@ impl Shared {
             spool.set_install_id(install_id);
         }
         let _ = std::fs::remove_file(self.session_dir.join(BREADCRUMBS_FILE));
+        // What the signal modules keep in memory was gathered under the old id: recent log lines, the
+        // last crash, the last performance window. None of it may follow into the new one.
+        let signals = lock(&self.signals).clone();
+        if let Some(signals) = signals {
+            signals.forget();
+        }
         self.drops.take();
         self.unsent.store(0, Ordering::Relaxed);
         self.write_marker(false);
@@ -315,7 +390,7 @@ impl Shared {
 
     /// A few `key: value` lines about this install and session, for the local report.
     fn session_summary(&self) -> String {
-        let install_id = lock(&self.identity).install_id.clone();
+        let install_id = lock(&self.install_id).clone();
         let totals = lock(&self.clock).totals();
         format!(
             "install_id: {install_id}\nsession_id: {}\nstarted_ms: {}\nduration_s: {}\nfocused_s: {}\nactive_s: {}\nidle_s: {}\nerrors: {}\n",
@@ -336,6 +411,13 @@ impl Shared {
     }
 }
 
+/// The `errors` a session ends with. Every panic is counted when it happens, because nobody can know
+/// then whether the process will survive it. The one that ended the session did not survive, and a
+/// session that ends `crashed` already says so, so it is taken off again.
+fn errors_of(counted: u32, crashed: bool) -> u32 {
+    if crashed { counted.saturating_sub(1) } else { counted }
+}
+
 fn signal_bit(signal: Signal) -> u8 {
     match signal {
         Signal::Session => 1,
@@ -349,7 +431,6 @@ fn signal_bit(signal: Signal) -> u8 {
 }
 
 pub(crate) struct Pipeline {
-    dir: PathBuf,
     session_dir: PathBuf,
     shared: Arc<Shared>,
     queue: SyncSender<Message>,
@@ -415,12 +496,12 @@ impl Pipeline {
             app_key: config.app_key.clone(),
             app_version: config.app_version.clone(),
             timing: Timing {
-                tick: config.tick_interval.max(Duration::from_millis(1)),
+                tick: config.tick_interval.clamp(Duration::from_millis(1), MAX_TICK),
                 flush: config.flush_interval,
                 heartbeat: config.heartbeat_interval,
                 idle_after: config.idle_after,
-                retry_min: config.retry_min.max(Duration::from_millis(1)),
-                retry_max: config.retry_max.max(config.retry_min).max(Duration::from_millis(1)),
+                retry_min: config.retry_min.clamp(Duration::from_millis(1), MAX_RETRY),
+                retry_max: config.retry_max.max(config.retry_min).clamp(Duration::from_millis(1), MAX_RETRY),
                 shutdown: config.shutdown_timeout,
                 batch_items: u64::try_from(config.batch_items.max(1)).unwrap_or(u64::MAX),
             },
@@ -428,14 +509,18 @@ impl Pipeline {
             closed: AtomicBool::new(false),
             enabled: config.signals.iter().fold(0, |bits, signal| bits | signal_bit(*signal)),
             consent: Consent::load(&dir),
+            install_id: Mutex::new(identity.install_id.clone()),
             identity: Mutex::new(identity),
+            identity_unsaved: AtomicBool::new(false),
+            retired: Mutex::new(Vec::new()),
+            hold_until_notice: !config.send_before_notice,
             session_id,
             session_dir: session_dir.clone(),
             started: now,
             started_ms,
             disk: Mutex::new(spool),
             drops: DropCounts::default(),
-            clock: Mutex::new(SessionClock::new(now)),
+            clock: Mutex::new(SessionClock::new(now, config.tick_interval.min(MAX_TICK).saturating_mul(MAX_TICKS_PER_SAMPLE).max(MIN_SAMPLE_CAP))),
             marker_removed: Mutex::new(false),
             focused: AtomicBool::new(true),
             last_input: AtomicU64::new(0),
@@ -453,6 +538,9 @@ impl Pipeline {
         let mut worker = None;
         let mut parked = Some(receiver);
         if usable {
+            if !config.listen_categories.is_empty() && config.catalog.events.is_empty() {
+                log::warn!(target: LOG_TARGET, "categories are listened to but no events were declared; declared events will not be recorded");
+            }
             shared.write_marker(false);
             shared.maintain();
             let mut catalog_item = None;
@@ -477,7 +565,7 @@ impl Pipeline {
                 }
             }
         }
-        Arc::new(Self { dir, session_dir, shared, queue, worker: Mutex::new(worker), _parked: Mutex::new(parked) })
+        Arc::new(Self { session_dir, shared, queue, worker: Mutex::new(worker), _parked: Mutex::new(parked) })
     }
 
     /// Hands the pipeline the signal modules so its worker can call [`Signals::tick`] about once a second.
@@ -514,8 +602,14 @@ impl Pipeline {
     }
 
     pub(crate) fn set_consent(&self, category: ConsentCategory, allowed: bool) {
+        if self.shared.off.load(Ordering::Relaxed) {
+            // Switched off for the whole process: nothing is recorded whatever the choice, and nothing
+            // is written, not even the choice.
+            self.shared.consent.set_in_memory(category, allowed);
+            return;
+        }
         self.shared.consent.set(category, allowed);
-        if !allowed && !self.shared.off.load(Ordering::Relaxed) {
+        if !allowed {
             // From here on nothing of this category is queued, stored or sent. The worker deletes what is
             // already on disk, so the host thread does not wait on the spool.
             self.shared.notify(|control| control.purge.push(category_code(category)));
@@ -528,7 +622,9 @@ impl Pipeline {
     }
 
     pub(crate) fn notice_shown(&self) {
-        self.shared.consent.set_notice_shown();
+        if !self.shared.off.load(Ordering::Relaxed) {
+            self.shared.consent.set_notice_shown();
+        }
     }
 
     pub(crate) fn forget(&self) {
@@ -541,10 +637,20 @@ impl Pipeline {
         }
         // Other running processes of the host see the new id in the install record on their next tick,
         // and each clears its own session folder then.
-        let rotated = Identity::update(&self.dir, &identity, |saved| {
-            saved.rotate(true);
+        let before = identity.install_id.clone();
+        shared.change_identity(&mut identity, |record| {
+            record.rotate(true);
         });
-        *identity = rotated;
+        {
+            // Whatever this process has turned away from stays turned away from, even if the file could
+            // not be rewritten and still names it.
+            let mut retired = lock(&shared.retired);
+            for id in identity.pending_forget.iter().chain([&before]) {
+                if !retired.contains(id) {
+                    retired.push(id.clone());
+                }
+            }
+        }
         shared.start_over(&identity.install_id);
         drop(identity);
         shared.notify(|control| control.kick = true);
@@ -552,7 +658,7 @@ impl Pipeline {
     }
 
     pub(crate) fn install_id(&self) -> String {
-        lock(&self.shared.identity).install_id.clone()
+        lock(&self.shared.install_id).clone()
     }
 
     pub(crate) fn session_id(&self) -> String {
@@ -565,7 +671,8 @@ impl Pipeline {
         if shared.off.load(Ordering::Relaxed) {
             return true;
         }
-        let deadline = Instant::now() + timeout;
+        // A timeout too long to add to the clock is no deadline at all.
+        let deadline = deadline_in(timeout);
         let mut control = lock(&shared.control);
         control.flush_requested += 1;
         let wanted = control.flush_requested;
@@ -574,11 +681,8 @@ impl Pipeline {
             if control.flush_done >= wanted {
                 return control.flush_clean;
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if control.stopped || left.is_zero() {
-                return false;
-            }
-            control = shared.control_changed.wait_timeout(control, left).unwrap_or_else(PoisonError::into_inner).0;
+            let Some(step) = wait_step(deadline).filter(|_| !control.stopped) else { return false };
+            control = shared.control_changed.wait_timeout(control, step).unwrap_or_else(PoisonError::into_inner).0;
         }
     }
 
@@ -598,7 +702,7 @@ impl Pipeline {
             if shared.permitted(Signal::Session) {
                 let crashed = shared.panicked.load(Ordering::Relaxed) && std::thread::panicking();
                 let status = if crashed { SessionStatus::Crashed } else { SessionStatus::Exited };
-                let end = SessionEnd { status, totals, errors: shared.errors.load(Ordering::Relaxed) };
+                let end = SessionEnd { status, totals, errors: errors_of(shared.errors.load(Ordering::Relaxed), crashed) };
                 shared.store(category_code(Signal::Session.consent()), &shared.item(ItemBody::SessionEnd(end)), false);
             }
             drop(clock);
@@ -608,16 +712,13 @@ impl Pipeline {
         }
         let handle = lock(&self.worker).take();
         if let Some(handle) = handle {
-            let deadline = Instant::now() + shared.timing.shutdown;
+            let deadline = deadline_in(shared.timing.shutdown);
             let mut control = lock(&shared.control);
             control.stop = true;
             self.wake();
             while !control.stopped {
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    break;
-                }
-                control = shared.control_changed.wait_timeout(control, left).unwrap_or_else(PoisonError::into_inner).0;
+                let Some(step) = wait_step(deadline) else { break };
+                control = shared.control_changed.wait_timeout(control, step).unwrap_or_else(PoisonError::into_inner).0;
             }
             let stopped = control.stopped;
             drop(control);

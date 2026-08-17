@@ -52,7 +52,11 @@ Every item has `id` (unique, client-generated; the server ignores an id it has a
 
 `crash.kind` is one of `panic`, `handled`, `hang`, `unclean_exit`, `child_exit`.
 
-`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms), `frozen` (over 700 ms) and `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket. Histograms merge by adding buckets.
+`crash.fatal` says the process could not continue. The client sets it where it can know: `true` for `unclean_exit` and `child_exit`, `false` for `handled` and `hang`. A `panic` is sent with `fatal: false`, because at capture the client cannot know whether the host catches it; the server marks it fatal when the session it belongs to ends `crashed`.
+
+`session_end.errors` counts handled errors and panics the process survived. The panic that ends a `crashed` session is not included.
+
+`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms; slow includes frozen), `frozen` (over 700 ms) and `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket. Histograms merge by adding buckets.
 
 ## Names
 

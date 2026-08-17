@@ -434,6 +434,25 @@ fn panic_that_ends_the_process_is_fatal() {
 }
 
 #[test]
+fn nothing_reaches_the_server_before_the_first_run_notice_is_acknowledged() {
+    let server = Server::start();
+    let demo = server.demo();
+    // The first run records a whole session but its user never closes the notice.
+    let run = demo.run("normal", &["--first-run", "--wrap-logger"]);
+    assert!(run.status.success(), "{}", run.stderr);
+    assert!(run.stderr.contains("notice_shown"), "the host should be told why nothing was sent: {}", run.stderr);
+    let db = server.db();
+    assert_eq!(db.count("SELECT count(*) FROM sessions") + db.count("SELECT count(*) FROM installs") + db.count("SELECT count(*) FROM events"), 0);
+    assert!(demo.sdk_dir().join("spool").read_dir().unwrap().count() >= 1, "what was recorded is kept on disk");
+
+    // On the next run the notice is acknowledged, and both sessions arrive.
+    let relaunch = demo.run("relaunch", &[]);
+    assert!(relaunch.status.success(), "{}", relaunch.stderr);
+    wait_for("both sessions to arrive", || db.count("SELECT count(*) FROM sessions WHERE status = 'exited'") == 2);
+    assert!(db.count("SELECT count(*) FROM events") >= 1);
+}
+
+#[test]
 fn abort_is_found_on_the_next_launch_as_an_unclean_exit() {
     let server = Server::start();
     let demo = server.demo();
