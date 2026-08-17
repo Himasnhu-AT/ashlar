@@ -4,16 +4,39 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 /// Settings for every subcommand. All come from `TRACER_*` environment variables and all are optional.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub bind: SocketAddr,
     pub data_dir: PathBuf,
     pub retention_days: u32,
     /// Ingest requests per minute per key and per client address. `0` switches the limit off.
     pub rate_per_min: u32,
+    /// Ingest requests per minute for one write key, over all addresses: a capacity guard, far above the
+    /// per-address limit. `0` switches it off.
+    pub key_rate_per_min: u32,
     pub trust_proxy: bool,
+    /// Only filled by `admin create`, which reads `TRACER_ADMIN_PASSWORD` itself; never by [`Config::from_env`].
     pub admin_password: Option<String>,
+    /// Mark cookies `Secure` and use the `__Host-` prefix. On unless `TRACER_SECURE_COOKIES=0`.
     pub secure_cookies: bool,
+    /// Ingest answers 507 once the database is larger than this many MiB. `0` switches the ceiling off.
+    pub max_db_mb: u64,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bind", &self.bind)
+            .field("data_dir", &self.data_dir)
+            .field("retention_days", &self.retention_days)
+            .field("rate_per_min", &self.rate_per_min)
+            .field("key_rate_per_min", &self.key_rate_per_min)
+            .field("trust_proxy", &self.trust_proxy)
+            .field("admin_password", &self.admin_password.as_ref().map(|_| "<redacted>"))
+            .field("secure_cookies", &self.secure_cookies)
+            .field("max_db_mb", &self.max_db_mb)
+            .finish()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -30,9 +53,11 @@ impl Default for Config {
             data_dir: PathBuf::from("./data"),
             retention_days: 90,
             rate_per_min: 120,
+            key_rate_per_min: 6000,
             trust_proxy: false,
             admin_password: None,
-            secure_cookies: false,
+            secure_cookies: true,
+            max_db_mb: 10_240,
         }
     }
 }
@@ -58,9 +83,14 @@ impl Config {
         if let Some(value) = get("TRACER_RATE_PER_MIN") {
             config.rate_per_min = value.parse().map_err(|_| bad("TRACER_RATE_PER_MIN", "expected a whole number"))?;
         }
+        if let Some(value) = get("TRACER_KEY_RATE_PER_MIN") {
+            config.key_rate_per_min = value.parse().map_err(|_| bad("TRACER_KEY_RATE_PER_MIN", "expected a whole number"))?;
+        }
+        if let Some(value) = get("TRACER_MAX_DB_MB") {
+            config.max_db_mb = value.parse().map_err(|_| bad("TRACER_MAX_DB_MB", "expected a whole number of MiB"))?;
+        }
         config.trust_proxy = get("TRACER_TRUST_PROXY").as_deref() == Some("1");
-        config.admin_password = get("TRACER_ADMIN_PASSWORD");
-        config.secure_cookies = get("TRACER_SECURE_COOKIES").as_deref() == Some("1");
+        config.secure_cookies = get("TRACER_SECURE_COOKIES").as_deref() != Some("0");
         Ok(config)
     }
 
@@ -93,7 +123,27 @@ mod tests {
         assert_eq!(config.bind.port(), 9000);
         assert_eq!(config.retention_days, 30);
         assert!(config.trust_proxy);
-        assert!(!config.secure_cookies);
+        assert!(config.secure_cookies, "cookies are Secure unless switched off");
+        assert!(!from(&[("TRACER_SECURE_COOKIES", "0")]).unwrap().secure_cookies);
+        assert!(from(&[("TRACER_SECURE_COOKIES", "1")]).unwrap().secure_cookies);
+    }
+
+    #[test]
+    fn new_limits_have_defaults_and_parse() {
+        let config = from(&[]).unwrap();
+        assert_eq!((config.key_rate_per_min, config.max_db_mb), (6000, 10_240));
+        let config = from(&[("TRACER_KEY_RATE_PER_MIN", "0"), ("TRACER_MAX_DB_MB", "5")]).unwrap();
+        assert_eq!((config.key_rate_per_min, config.max_db_mb), (0, 5));
+        assert_eq!(from(&[("TRACER_MAX_DB_MB", "big")]).unwrap_err().name, "TRACER_MAX_DB_MB");
+    }
+
+    #[test]
+    fn the_admin_password_is_never_read_from_the_environment_and_never_printed() {
+        let config = from(&[("TRACER_ADMIN_PASSWORD", "hunter2hunter2")]).unwrap();
+        assert_eq!(config.admin_password, None);
+        let with = Config { admin_password: Some("hunter2hunter2".into()), ..Config::default() };
+        let text = format!("{with:?}");
+        assert!(!text.contains("hunter2") && text.contains("redacted"), "{text}");
     }
 
     #[test]

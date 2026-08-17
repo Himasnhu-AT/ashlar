@@ -176,14 +176,16 @@ Settings come from the environment (all optional):
 | `TRACER_BIND` | `127.0.0.1:8090` | Listen address |
 | `TRACER_DATA_DIR` | `./data` | Folder for the database |
 | `TRACER_RETENTION_DAYS` | `90` | Age at which raw rows are pruned |
-| `TRACER_RATE_PER_MIN` | `120` | Ingest requests per minute per key and per address; `0` switches the limit off |
-| `TRACER_TRUST_PROXY` | unset | When `1`, take the client address from `X-Forwarded-For` |
-| `TRACER_ADMIN_PASSWORD` | unset | Password for `admin create` |
-| `TRACER_SECURE_COOKIES` | unset | When `1`, mark the login cookie `Secure` |
+| `TRACER_RATE_PER_MIN` | `120` | Requests per minute per client address on the public routes (ingest, forget, health), unknown keys included; `0` switches the limit off. Dashboard sign-in has its own limit, which stays on |
+| `TRACER_KEY_RATE_PER_MIN` | `6000` | Ingest requests per minute for one write key over all addresses: a capacity guard far above the per-address limit; `0` switches it off |
+| `TRACER_MAX_DB_MB` | `10240` | Ingest answers `507` once the database is larger than this many MiB; the dashboard and sign-in keep working; `0` switches the ceiling off |
+| `TRACER_TRUST_PROXY` | unset | When `1`, take the client address from the last `X-Forwarded-For` entry of the last such header line |
+| `TRACER_ADMIN_PASSWORD` | unset | Password for `admin create`; read by that command only |
+| `TRACER_SECURE_COOKIES` | on | Cookies are `Secure` and the session cookie uses the `__Host-` prefix. Set `0` to allow plain-HTTP use on a local machine |
 
 ### 4.2 Storage
 
-- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`. `0001_init` is the schema; `0002_dashboard` adds indexes for the dashboard queries.
+- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`. `0001_init` is the schema; `0002_dashboard` adds indexes for the dashboard queries; `0003_hardening` makes catalogs additive (`catalog_events.hash`), adds `events.declared`, `daily_events.declared`, `sessions.catalog_hash` and `issues.created_day`.
 - All access goes through a `Store` trait so a second backend can be added. The SQLite implementation runs on a dedicated writer thread plus read connections; async handlers reach it through `spawn_blocking` or a channel.
 - Conventions are in the header of `0001_init.sql`.
 
@@ -191,31 +193,36 @@ Settings come from the environment (all optional):
 
 `POST /v1/ingest`, in order:
 
-1. Look up `x-tracer-key`; unknown or revoked is 401.
-2. Rate limit per key and per client address (token bucket, in memory); over the limit is 429 with `Retry-After`. The address is used here and nowhere else.
-3. Read at most `MAX_ENVELOPE_BYTES` after gunzip; larger is 413. Parse; failure is 400. A `schema` above the server's is 422.
-4. In one transaction:
+1. Take one request from the client address's token bucket (in memory, bounded, IPv6 by /64) before anything else, so unknown keys and the health route are limited too; over the limit is 429 with `Retry-After`. The address is used here, for the sign-in limit and nowhere else. A request the address bucket refuses does not touch the key bucket.
+2. Look up `x-tracer-key`; unknown or revoked is 401. Then take one request from the key's own bucket (`TRACER_KEY_RATE_PER_MIN`, a capacity guard); over it is 429.
+3. When the database is over `TRACER_MAX_DB_MB`, answer 507. The client keeps its data and retries.
+4. Read at most `MAX_ENVELOPE_BYTES` after gunzip; larger is 413. Parse; failure is 400. A `schema` above the server's is 422.
+5. In one transaction:
    - Upsert the install (first/last seen, versions, device).
-   - Upsert the session from the envelope header.
-   - For each item, skip it if `(app_id, id)` is in `items_seen` (a duplicate), else record the id and store the item by type:
-     - `session_start`: store a carried catalog. If the server holds no catalog with this hash for this version, set `need_catalog` in the reply.
+   - Upsert the session **only when the envelope carries a session item** (`session_start`, `session_heartbeat` or `session_end`). Crashes, performance windows and events keep their `session_id` as plain text on their own rows, so a user who switched session reporting off never creates a session that the stale closer would turn `abnormal`.
+   - For each item, skip it if `(app_id, id)` is in `items_seen` (a duplicate), else store the item by type and record the id:
+     - `session_start`: remember the named `catalog_hash` on the session. A carried catalog is stored **next to** the others, keyed by `(app, version, hash)`, never in place of one (at most 8 per version and 200 per app); a hash the server does not hold and did not receive sets `need_catalog`.
      - `session_heartbeat`: raise the session totals (never lower them) and `last_seen`.
-     - `session_end`: set totals and status, unless the stored status is already terminal.
-     - `event`: validate the name. A non-dynamic name must be in the catalog for that app version when the server holds one; if it holds none, accept and set `need_catalog`. Otherwise reject and count it.
+     - `session_end`: raise the totals and set the status, unless the stored status is already terminal. When the status is `crashed`, the session's most recent `panic` crash is marked `fatal`.
+     - `event`: validate the name. **An event is never refused for being undeclared**: the catalog is client input, and a refused event is deleted by the client. A non-dynamic name is stored with `declared = 1` when it is in any catalog held for that app version (which includes the one the session's `session_start` named), else `declared = 0`. With no catalog held it is `declared = 1` and `need_catalog` is set.
      - `perf`: store.
-     - `crash`: compute the fingerprint, upsert the issue, store. A fatal panic also marks the session `crashed` if it is still `ok`.
-     - `drops`: add to `daily_drops`.
+     - `crash`: compute the fingerprint, upsert the issue, store. At most 20 crashes are taken per envelope (the rest count as rejected). An app creates at most 200 new issues per day; further new fingerprints share one "Too many distinct crashes" issue for that day, so nothing is dropped silently. A `panic` is marked `fatal` when its session has ended `crashed` (in either arrival order; the SDK cannot know at capture time whether the host survives). A fatal panic from the client also marks an `ok` session `crashed`.
+     - `drops`: add to `daily_drops`. Each count is clamped to 1,000,000, reasons must be valid names, at most 64 distinct reasons are kept per app per day (the rest count as `other`) and a stored total is capped.
      - unknown types: skip, count as rejected.
-5. Item times are corrected for clock drift by `received_at - sent_at` when the difference is over five minutes, and clamped to at most one day in the future.
+6. Item times are corrected for clock drift by `received_at - sent_at` when the difference is over five minutes, then clamped to the retention window in the past and to one hour in the future. Item ids longer than 64 bytes are rejected.
 
 **Fingerprint:** kind, plus the first frames of the backtrace that belong to the app (skipping `std`, `core`, `alloc`, panic and backtrace machinery, and with hex addresses and hash suffixes removed); when there is no usable backtrace, the location; when there is neither, the message with digits removed. The issue title is the message's first line, or the kind.
 
-`POST /v1/forget` deletes the install's rows from `installs`, `sessions`, `events`, `perf`, `crashes` and `daily_installs`, and removes issues left with no crashes.
+`POST /v1/forget` deletes the install's rows from `installs`, `sessions`, `events`, `perf`, `crashes` and `daily_installs`, and removes issues left with no crashes. It answers `200 {"ok":true}` whether or not the install existed, so it cannot be used to probe for install ids.
+
+**Connections.** The server runs hyper directly. A client has 15 seconds to send a request's headers, which also bounds an idle keep-alive connection, and at most 1,024 connections are served at once; further clients wait in the accept queue. The body of a request must arrive within 30 seconds.
 
 ### 4.4 Rollups and retention
 
-- A timer (every five minutes, and on demand) recomputes the `daily_*` tables for the last three days from the raw tables, by delete and insert inside a transaction.
-- Retention deletes raw rows older than `TRACER_RETENTION_DAYS` and `items_seen` older than 35 days, then lets SQLite reclaim space. Rollups are kept.
+- A timer (every five minutes, and on demand) recomputes the `daily_*` tables for the last three days from the raw tables, by delete and insert. It works one app at a time: the raw rows are read on a reader connection and the writer lock is held only to replace that app's rows, so one large app cannot stall ingest for the others.
+- Per app, only the 50 busiest versions, 20 busiest operating systems and 500 busiest event names keep their own rollup rows; the long tail is folded into `other`, so made-up values cannot grow the rollups.
+- `daily_events` is keyed by `declared` as well: declared and undeclared uses of one name are separate rows.
+- Retention deletes raw rows older than `TRACER_RETENTION_DAYS`, `daily_drops` and catalogs not seen within that time, and `items_seen` older than 35 days, then lets SQLite reclaim space. Rollups other than drops are kept.
 - Sessions still `ok` whose `last_seen` is over a day old are closed as `abnormal`.
 
 ### 4.5 Dashboard

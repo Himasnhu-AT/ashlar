@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use tracer_proto::{FRAME_BUCKETS, FrameStats, IngestResponse};
+use tracer_proto::{FRAME_BUCKETS, FrameStats, IngestResponse, SessionStatus};
 
 use super::types::{
     AdminSession, AppGlance, Breakdown, CatalogEntry, CrashBrief, CrashRow, CustomRow, DayTotals, DropRow, EventRow, IssueFilter, IssueRow, PerfRow,
@@ -20,12 +20,29 @@ use super::{AppRecord, KeyRecord, PruneStats, Store, StoreError, StoreResult, re
 use crate::ingest::{DAY_MS, Prepared, PreparedBody, PreparedCrash, PreparedItem};
 
 /// Schema migrations, applied in order. Add a new file; never edit one that has shipped.
-pub const MIGRATIONS: &[(&str, &str)] =
-    &[("0001_init", include_str!("../../migrations/0001_init.sql")), ("0002_dashboard", include_str!("../../migrations/0002_dashboard.sql"))];
+pub const MIGRATIONS: &[(&str, &str)] = &[
+    ("0001_init", include_str!("../../migrations/0001_init.sql")),
+    ("0002_dashboard", include_str!("../../migrations/0002_dashboard.sql")),
+    ("0003_hardening", include_str!("../../migrations/0003_hardening.sql")),
+];
 
 /// `items_seen` rows older than this many days are dropped by retention.
 const ITEMS_SEEN_DAYS: i64 = 35;
 const READER_POOL: usize = 4;
+/// Most distinct catalogs kept per app version, and per app.
+const MAX_CATALOGS_PER_VERSION: i64 = 8;
+const MAX_CATALOGS_PER_APP: i64 = 200;
+/// Most new crash issues an app can create per day; the rest share one overflow issue.
+const MAX_NEW_ISSUES_PER_DAY: i64 = 200;
+/// Most distinct drop reasons stored per app per day; the rest are counted as `other`.
+const MAX_DROP_REASONS_PER_DAY: i64 = 64;
+/// A stored drop total never exceeds this.
+const DROP_TOTAL_MAX: i64 = 1_000_000_000_000;
+/// Most distinct versions, operating systems and event names kept per app in the rollups; the long tail is
+/// folded into `other`.
+const ROLLUP_MAX_VERSIONS: i64 = 50;
+const ROLLUP_MAX_OS: i64 = 20;
+const ROLLUP_MAX_EVENTS: i64 = 500;
 
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
@@ -213,11 +230,28 @@ impl Store for SqliteStore {
     }
 
     fn rollup(&self, from_day: i64, to_day: i64) -> StoreResult<()> {
-        let mut conn = self.write();
-        let tx = conn.transaction()?;
-        rollup_tx(&tx, from_day, to_day)?;
-        tx.commit()?;
+        // One app per transaction. Raw rows are read on a reader connection, so the writer lock is held only
+        // for the deletes and inserts of one app, and ingest for the others is never stalled for long.
+        for app in self.list_apps()? {
+            let (keep, perf) = self.read(|conn| {
+                let keep = load_keep(conn, app.id, from_day, to_day)?;
+                let perf = load_perf(conn, app.id, from_day, to_day, &keep)?;
+                Ok((keep, perf))
+            })?;
+            let mut conn = self.write();
+            let tx = conn.transaction()?;
+            rollup_app_tx(&tx, app.id, from_day, to_day, &keep, perf)?;
+            tx.commit()?;
+        }
         Ok(())
+    }
+
+    fn size_bytes(&self) -> StoreResult<u64> {
+        self.read(|conn| {
+            let pages: i64 = conn.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+            let size: i64 = conn.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+            Ok(u64::try_from(pages.saturating_mul(size)).unwrap_or(0))
+        })
     }
 
     fn prune(&self, now: i64, retention_days: u32) -> StoreResult<PruneStats> {
@@ -238,6 +272,14 @@ impl Store for SqliteStore {
             installs: tx.execute("DELETE FROM installs WHERE last_seen < ?1", [cutoff_ms])? as u64,
         };
         tx.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [now])?;
+        tx.execute("DELETE FROM daily_drops WHERE day < ?1", [cutoff_day])?;
+        // Catalogs not seen within retention go; a client that still needs one is asked for it again.
+        tx.execute("DELETE FROM catalogs WHERE received_at < ?1", [cutoff_ms])?;
+        tx.execute(
+            "DELETE FROM catalog_events WHERE NOT EXISTS (
+                 SELECT 1 FROM catalogs c WHERE c.app_id = catalog_events.app_id AND c.version = catalog_events.version AND c.hash = catalog_events.hash)",
+            [],
+        )?;
         tx.commit()?;
         // Give space back to the file system and fold the WAL into the main file.
         conn.execute_batch("PRAGMA incremental_vacuum; PRAGMA wal_checkpoint(TRUNCATE);")?;
@@ -333,8 +375,8 @@ impl Store for SqliteStore {
         self.read(|conn| read::recent_custom_metrics(conn, app_id, since_day, version, limit))
     }
 
-    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<EventRow>> {
-        self.read(|conn| read::events_ranked(conn, app_id, from_day, to_day, version))
+    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>, declared: bool) -> StoreResult<Vec<EventRow>> {
+        self.read(|conn| read::events_ranked(conn, app_id, from_day, to_day, version, declared))
     }
 
     fn never_fired(&self, app_id: i64, version: Option<&str>) -> StoreResult<Vec<CatalogEntry>> {
@@ -398,26 +440,20 @@ fn ingest_tx(tx: &Transaction<'_>, app_id: i64, batch: &Prepared) -> rusqlite::R
     let os_version = device.and_then(|d| d.os_version.clone());
     let device_json = batch.device.as_ref().and_then(|d| serde_json::to_string(d).ok());
 
-    tx.prepare_cached(
-        "INSERT INTO sessions (app_id, session_id, install_id, version, build, process, os_name, started_at, day, last_seen)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8 / 86400000, ?9)
-         ON CONFLICT (app_id, session_id) DO UPDATE SET
-             started_at = min(sessions.started_at, excluded.started_at),
-             day        = min(sessions.started_at, excluded.started_at) / 86400000,
-             last_seen  = max(sessions.last_seen, excluded.last_seen)
-         WHERE sessions.install_id = excluded.install_id",
-    )?
-    .execute(params![
-        app_id,
-        batch.session_id,
-        batch.install_id,
-        batch.version,
-        batch.build,
-        batch.process,
-        os_name,
-        batch.started_at,
-        batch.last_seen
-    ])?;
+    // A session row exists only for envelopes that carry a session item. Crashes, performance windows and
+    // events from a user who switched session reporting off keep their session id as plain text.
+    if let Some((first, last)) = batch.session_span {
+        tx.prepare_cached(
+            "INSERT INTO sessions (app_id, session_id, install_id, version, build, process, os_name, started_at, day, last_seen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8 / 86400000, ?9)
+             ON CONFLICT (app_id, session_id) DO UPDATE SET
+                 started_at = min(sessions.started_at, excluded.started_at),
+                 day        = min(sessions.started_at, excluded.started_at) / 86400000,
+                 last_seen  = max(sessions.last_seen, excluded.last_seen)
+             WHERE sessions.install_id = excluded.install_id",
+        )?
+        .execute(params![app_id, batch.session_id, batch.install_id, batch.version, batch.build, batch.process, os_name, first, last])?;
+    }
 
     let ctx = Ctx {
         app_id,
@@ -466,27 +502,50 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
     let day = item.ts.div_euclid(DAY_MS);
     match &item.body {
         PreparedBody::SessionStart { catalog_hash, catalog } => {
-            if let Some(events) = catalog {
-                let hash = catalog_hash.as_deref().unwrap_or("unhashed");
-                tx.execute("DELETE FROM catalog_events WHERE app_id = ?1 AND version = ?2", params![app_id, batch.version])?;
-                tx.execute(
-                    "INSERT INTO catalogs (app_id, version, hash, received_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (app_id, version, hash) DO UPDATE SET received_at = excluded.received_at",
-                    params![app_id, batch.version, hash, batch.received_at],
-                )?;
-                let mut insert =
-                    tx.prepare_cached("INSERT OR IGNORE INTO catalog_events (app_id, version, name, category) VALUES (?1, ?2, ?3, ?4)")?;
-                for event in events {
-                    insert.execute(params![app_id, batch.version, event.name, event.category])?;
-                }
-            } else if let Some(hash) = catalog_hash {
-                let held: bool = tx.query_row(
+            if let Some(hash) = catalog_hash {
+                tx.prepare_cached("UPDATE sessions SET catalog_hash = ?4 WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3")?
+                    .execute(params![app_id, batch.session_id, batch.install_id, hash])?;
+            }
+            let held: bool = match catalog_hash {
+                Some(hash) => tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM catalogs WHERE app_id = ?1 AND version = ?2 AND hash = ?3)",
                     params![app_id, batch.version, hash],
                     |row| row.get(0),
-                )?;
-                if !held {
-                    response.need_catalog = true;
+                )?,
+                None => true,
+            };
+            match (catalog, held) {
+                // Catalogs are additive and keyed by hash: a new one is stored next to the others, never in
+                // place of one. Past the caps it is ignored (the session still counts).
+                (Some(events), false) => {
+                    let hash = catalog_hash.as_deref().unwrap_or("unhashed");
+                    let per_version: i64 =
+                        tx.query_row("SELECT count(*) FROM catalogs WHERE app_id = ?1 AND version = ?2", params![app_id, batch.version], |row| {
+                            row.get(0)
+                        })?;
+                    let per_app: i64 = tx.query_row("SELECT count(*) FROM catalogs WHERE app_id = ?1", params![app_id], |row| row.get(0))?;
+                    if per_version < MAX_CATALOGS_PER_VERSION && per_app < MAX_CATALOGS_PER_APP {
+                        tx.execute(
+                            "INSERT INTO catalogs (app_id, version, hash, received_at) VALUES (?1, ?2, ?3, ?4)",
+                            params![app_id, batch.version, hash, batch.received_at],
+                        )?;
+                        let mut insert = tx.prepare_cached(
+                            "INSERT OR IGNORE INTO catalog_events (app_id, version, hash, name, category) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        )?;
+                        for event in events {
+                            insert.execute(params![app_id, batch.version, hash, event.name, event.category])?;
+                        }
+                    }
                 }
+                (_, true) => {
+                    if let Some(hash) = catalog_hash {
+                        tx.execute(
+                            "UPDATE catalogs SET received_at = max(received_at, ?4) WHERE app_id = ?1 AND version = ?2 AND hash = ?3",
+                            params![app_id, batch.version, hash, batch.received_at],
+                        )?;
+                    }
+                }
+                (None, false) => response.need_catalog = true,
             }
         }
         PreparedBody::Heartbeat(totals) => {
@@ -525,27 +584,29 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
                 item.ts,
                 status.as_str()
             ])?;
+            if *status == SessionStatus::Crashed {
+                mark_last_panic_fatal(tx, app_id, &batch.session_id, &batch.install_id)?;
+            }
         }
         PreparedBody::Event(event) => {
-            if !event.dynamic {
-                let held: bool = tx
-                    .prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2)")?
-                    .query_row(params![app_id, batch.version], |row| row.get(0))?;
-                if held {
-                    let declared: bool = tx
-                        .prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2 AND name = ?3)")?
-                        .query_row(params![app_id, batch.version, event.name], |row| row.get(0))?;
-                    if !declared {
-                        return Ok(false);
-                    }
-                } else {
-                    response.need_catalog = true;
-                }
-            }
+            // An event is never refused for being undeclared: the catalog is client input and must not be
+            // able to cause data loss. It is stored with `declared = 0` and shown apart.
+            let held: bool = tx
+                .prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2)")?
+                .query_row(params![app_id, batch.version], |row| row.get(0))?;
+            let declared = if event.dynamic {
+                true
+            } else if held {
+                tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2 AND name = ?3)")?
+                    .query_row(params![app_id, batch.version, event.name], |row| row.get(0))?
+            } else {
+                response.need_catalog = true;
+                true
+            };
             let props = (!event.props.is_empty()).then(|| serde_json::to_string(&event.props).ok()).flatten();
             tx.prepare_cached(
-                "INSERT INTO events (app_id, install_id, session_id, ts, day, version, name, category, dynamic, props)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT INTO events (app_id, install_id, session_id, ts, day, version, name, category, dynamic, props, declared)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?
             .execute(params![
                 app_id,
@@ -557,7 +618,8 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
                 event.name,
                 event.category,
                 event.dynamic,
-                props
+                props,
+                declared
             ])?;
         }
         PreparedBody::Perf(perf) => {
@@ -596,11 +658,21 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
         PreparedBody::Crash(crash) => store_crash(tx, ctx, item, crash, day)?,
         PreparedBody::Drops(reasons) => {
             let mut upsert = tx.prepare_cached(
-                "INSERT INTO daily_drops (app_id, day, reason, count) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (app_id, day, reason) DO UPDATE SET count = count + excluded.count",
+                "INSERT INTO daily_drops (app_id, day, reason, count) VALUES (?1, ?2, ?3, min(?4, ?5))
+                 ON CONFLICT (app_id, day, reason) DO UPDATE SET count = min(count + excluded.count, ?5)",
             )?;
             for (reason, count) in reasons {
-                upsert.execute(params![app_id, day, reason, n(*count)])?;
+                let known: bool = tx
+                    .prepare_cached("SELECT EXISTS(SELECT 1 FROM daily_drops WHERE app_id = ?1 AND day = ?2 AND reason = ?3)")?
+                    .query_row(params![app_id, day, reason], |row| row.get(0))?;
+                let reason = if known {
+                    reason.as_str()
+                } else {
+                    let distinct: i64 =
+                        tx.query_row("SELECT count(*) FROM daily_drops WHERE app_id = ?1 AND day = ?2", params![app_id, day], |row| row.get(0))?;
+                    if distinct >= MAX_DROP_REASONS_PER_DAY { "other" } else { reason.as_str() }
+                };
+                upsert.execute(params![app_id, day, reason, n(*count), DROP_TOTAL_MAX])?;
             }
         }
     }
@@ -612,10 +684,25 @@ fn store_crash(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, prepare
     let app_id = ctx.app_id;
     let crash = &prepared.crash;
     let kind = crash.kind.as_str();
+    // A flood of distinct fingerprints cannot create unbounded issues: past the daily cap, new ones share
+    // one overflow issue for the day instead of being dropped silently.
+    let received_day = batch.received_at.div_euclid(DAY_MS);
+    let known: bool =
+        tx.query_row("SELECT EXISTS(SELECT 1 FROM issues WHERE app_id = ?1 AND fingerprint = ?2)", params![app_id, prepared.fingerprint], |row| {
+            row.get(0)
+        })?;
+    let created_today: i64 =
+        tx.query_row("SELECT count(*) FROM issues WHERE app_id = ?1 AND created_day = ?2", params![app_id, received_day], |row| row.get(0))?;
+    let overflow = !known && created_today >= MAX_NEW_ISSUES_PER_DAY;
+    let (fingerprint, title) = if overflow {
+        (format!("overflow:{received_day}"), "Too many distinct crashes".to_string())
+    } else {
+        (prepared.fingerprint.clone(), prepared.title.clone())
+    };
     let issue_id: i64 = tx
         .prepare_cached(
-            "INSERT INTO issues (app_id, fingerprint, kind, title, first_seen, last_seen, first_version, last_version, count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?6, 1)
+            "INSERT INTO issues (app_id, fingerprint, kind, title, first_seen, last_seen, first_version, last_version, count, created_day)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?6, 1, ?7)
              ON CONFLICT (app_id, fingerprint) DO UPDATE SET
                  first_version = CASE WHEN excluded.first_seen < issues.first_seen THEN excluded.first_version ELSE issues.first_version END,
                  last_version  = CASE WHEN excluded.last_seen >= issues.last_seen THEN excluded.last_version ELSE issues.last_version END,
@@ -624,7 +711,7 @@ fn store_crash(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, prepare
                  count         = issues.count + 1
              RETURNING id",
         )?
-        .query_row(params![app_id, prepared.fingerprint, kind, prepared.title, item.ts, batch.version], |row| row.get(0))?;
+        .query_row(params![app_id, fingerprint, kind, title, item.ts, batch.version, received_day], |row| row.get(0))?;
     let breadcrumbs = (!crash.breadcrumbs.is_empty()).then(|| serde_json::to_string(&crash.breadcrumbs).ok()).flatten();
     let perf = crash.perf.as_ref().and_then(|perf| serde_json::to_string(perf).ok());
     tx.prepare_cached(
@@ -662,47 +749,83 @@ fn store_crash(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, prepare
         tx.prepare_cached("UPDATE sessions SET status = 'crashed' WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND status = 'ok'")?
             .execute(params![app_id, batch.session_id, batch.install_id])?;
     }
+    if crash.kind == tracer_proto::CrashKind::Panic {
+        // The session may already be known to have ended in a crash (the end arrived first).
+        let ended_crashed: bool = tx
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM sessions WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND status = 'crashed')")?
+            .query_row(params![app_id, batch.session_id, batch.install_id], |row| row.get(0))?;
+        if ended_crashed {
+            mark_last_panic_fatal(tx, app_id, &batch.session_id, &batch.install_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// A session that ended `crashed` took its most recent panic with it: that crash is fatal. The client cannot
+/// know at capture time whether the host survives, so the server decides when the end arrives.
+fn mark_last_panic_fatal(tx: &Transaction<'_>, app_id: i64, session_id: &str, install_id: &str) -> rusqlite::Result<()> {
+    tx.prepare_cached(
+        "UPDATE crashes SET fatal = 1 WHERE id = (
+             SELECT id FROM crashes WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND kind = 'panic'
+             ORDER BY ts DESC, id DESC LIMIT 1)",
+    )?
+    .execute(params![app_id, session_id, install_id])?;
     Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // rollups
 
-fn rollup_tx(tx: &Transaction<'_>, from_day: i64, to_day: i64) -> rusqlite::Result<()> {
-    for table in ["daily_installs", "daily_sessions", "daily_events", "daily_perf"] {
-        tx.execute(&format!("DELETE FROM {table} WHERE day BETWEEN ?1 AND ?2"), params![from_day, to_day])?;
-    }
-    tx.execute(
-        "INSERT INTO daily_installs (app_id, day, install_id)
-         SELECT app_id, day, install_id FROM sessions WHERE day BETWEEN ?1 AND ?2
-         UNION SELECT app_id, day, install_id FROM events WHERE day BETWEEN ?1 AND ?2
-         UNION SELECT app_id, day, install_id FROM perf WHERE day BETWEEN ?1 AND ?2",
-        params![from_day, to_day],
+/// Which values keep their own rollup rows for one app: the most used ones. Everything else is folded into
+/// `other`, so a flood of made-up versions, operating systems or event names cannot grow the rollups.
+struct Keep {
+    versions: Vec<String>,
+    os: Vec<String>,
+    events: Vec<String>,
+}
+
+fn top_values(conn: &Connection, sql: &str, app_id: i64, from: i64, to: i64, limit: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map(params![app_id, from, to, limit], |row| row.get(0))?.collect()
+}
+
+fn load_keep(conn: &Connection, app_id: i64, from: i64, to: i64) -> rusqlite::Result<Keep> {
+    let versions = top_values(
+        conn,
+        "SELECT v FROM (
+             SELECT version AS v FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+             UNION ALL SELECT version FROM perf WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+             UNION ALL SELECT version FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3)
+         GROUP BY v ORDER BY count(*) DESC, v LIMIT ?4",
+        app_id,
+        from,
+        to,
+        ROLLUP_MAX_VERSIONS,
     )?;
-    tx.execute(
-        "INSERT INTO daily_sessions (app_id, day, version, os_name, sessions, opens, installs, exited, crashed, abnormal, errored,
-                                     crashed_installs, duration_s, focused_s, active_s, idle_s)
-         SELECT app_id, day, version, COALESCE(os_name, 'unknown'),
-                count(*),
-                sum(process = 'gui'),
-                count(DISTINCT install_id),
-                sum(status = 'exited'),
-                sum(status = 'crashed'),
-                sum(status = 'abnormal'),
-                sum(errors > 0),
-                count(DISTINCT CASE WHEN status IN ('crashed', 'abnormal') THEN install_id END),
-                sum(duration_s), sum(focused_s), sum(active_s), sum(idle_s)
-         FROM sessions WHERE day BETWEEN ?1 AND ?2
-         GROUP BY app_id, day, version, COALESCE(os_name, 'unknown')",
-        params![from_day, to_day],
+    let os = top_values(
+        conn,
+        "SELECT o FROM (
+             SELECT COALESCE(os_name, 'unknown') AS o FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+             UNION ALL SELECT COALESCE(os_name, 'unknown') FROM perf WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3)
+         GROUP BY o ORDER BY count(*) DESC, o LIMIT ?4",
+        app_id,
+        from,
+        to,
+        ROLLUP_MAX_OS,
     )?;
-    tx.execute(
-        "INSERT INTO daily_events (app_id, day, version, name, category, count, installs)
-         SELECT app_id, day, version, name, min(category), count(*), count(DISTINCT install_id)
-         FROM events WHERE day BETWEEN ?1 AND ?2 GROUP BY app_id, day, version, name",
-        params![from_day, to_day],
+    let events = top_values(
+        conn,
+        "SELECT name FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 GROUP BY name ORDER BY count(*) DESC, name LIMIT ?4",
+        app_id,
+        from,
+        to,
+        ROLLUP_MAX_EVENTS,
     )?;
-    rollup_perf(tx, from_day, to_day)
+    Ok(Keep { versions, os, events })
+}
+
+fn json_list(values: &[String]) -> String {
+    serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string())
 }
 
 #[derive(Default)]
@@ -717,52 +840,106 @@ struct PerfAcc {
     startup_n: i64,
 }
 
-fn rollup_perf(tx: &Transaction<'_>, from_day: i64, to_day: i64) -> rusqlite::Result<()> {
-    type Key = (i64, i64, String, String);
-    let mut groups: BTreeMap<Key, PerfAcc> = BTreeMap::new();
-    {
-        let mut stmt = tx.prepare(
-            "SELECT app_id, day, version, COALESCE(os_name, 'unknown'), frame_count, frame_sum_us, frame_max_us, slow, frozen, buckets,
-                    cpu_pct, rss_mb, rss_peak_mb, startup_ms
-             FROM perf WHERE day BETWEEN ?1 AND ?2",
-        )?;
-        let mut rows = stmt.query(params![from_day, to_day])?;
-        while let Some(row) = rows.next()? {
-            let key: Key = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-            let buckets: Option<String> = row.get(9)?;
-            let buckets: Vec<u64> = buckets.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
-            let frames = FrameStats {
-                count: row.get::<_, i64>(4)?.max(0) as u64,
-                sum_us: row.get::<_, i64>(5)?.max(0) as u64,
-                max_us: u32::try_from(row.get::<_, i64>(6)?.max(0)).unwrap_or(u32::MAX),
-                slow: row.get::<_, i64>(7)?.max(0) as u64,
-                frozen: row.get::<_, i64>(8)?.max(0) as u64,
-                buckets,
-            };
-            let acc = groups.entry(key).or_default();
-            acc.frames.merge(&frames);
-            if let Some(cpu) = row.get::<_, Option<f64>>(10)? {
-                acc.cpu_sum += cpu;
-                acc.cpu_n += 1;
-            }
-            if let Some(rss) = row.get::<_, Option<i64>>(11)? {
-                acc.rss_sum += rss;
-                acc.rss_n += 1;
-            }
-            let peak = row.get::<_, Option<i64>>(12)?.or(row.get::<_, Option<i64>>(11)?);
-            acc.rss_peak = acc.rss_peak.max(peak.unwrap_or(0));
-            if let Some(startup) = row.get::<_, Option<i64>>(13)? {
-                acc.startup_sum += startup;
-                acc.startup_n += 1;
-            }
+type PerfKey = (i64, String, String);
+
+fn fold(value: String, keep: &[String]) -> String {
+    if keep.contains(&value) { value } else { "other".to_string() }
+}
+
+/// Merges the raw performance rows of one app into per-day, per-version, per-OS accumulators. Runs on a
+/// reader connection, so the writer is not held while rows are loaded.
+fn load_perf(conn: &Connection, app_id: i64, from: i64, to: i64, keep: &Keep) -> rusqlite::Result<BTreeMap<PerfKey, PerfAcc>> {
+    let mut groups: BTreeMap<PerfKey, PerfAcc> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT day, version, COALESCE(os_name, 'unknown'), frame_count, frame_sum_us, frame_max_us, slow, frozen, buckets,
+                cpu_pct, rss_mb, rss_peak_mb, startup_ms
+         FROM perf WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3",
+    )?;
+    let mut rows = stmt.query(params![app_id, from, to])?;
+    while let Some(row) = rows.next()? {
+        let key: PerfKey = (row.get(0)?, fold(row.get(1)?, &keep.versions), fold(row.get(2)?, &keep.os));
+        let buckets: Option<String> = row.get(8)?;
+        let buckets: Vec<u64> = buckets.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        let non_negative = |value: i64| u64::try_from(value).unwrap_or(0);
+        let frames = FrameStats {
+            count: non_negative(row.get(3)?),
+            sum_us: non_negative(row.get(4)?),
+            max_us: u32::try_from(row.get::<_, i64>(5)?.max(0)).unwrap_or(u32::MAX),
+            slow: non_negative(row.get(6)?),
+            frozen: non_negative(row.get(7)?),
+            buckets,
+        };
+        let acc = groups.entry(key).or_default();
+        acc.frames.merge(&frames);
+        if let Some(cpu) = row.get::<_, Option<f64>>(9)? {
+            acc.cpu_sum += cpu;
+            acc.cpu_n += 1;
+        }
+        if let Some(rss) = row.get::<_, Option<i64>>(10)? {
+            acc.rss_sum += rss;
+            acc.rss_n += 1;
+        }
+        let peak = row.get::<_, Option<i64>>(11)?.or(row.get::<_, Option<i64>>(10)?);
+        acc.rss_peak = acc.rss_peak.max(peak.unwrap_or(0));
+        if let Some(startup) = row.get::<_, Option<i64>>(12)? {
+            acc.startup_sum += startup;
+            acc.startup_n += 1;
         }
     }
+    Ok(groups)
+}
+
+/// Replaces one app's rollup rows for the day range. Runs in its own transaction, so the writer is held for
+/// one app at a time.
+fn rollup_app_tx(tx: &Transaction<'_>, app_id: i64, from: i64, to: i64, keep: &Keep, perf: BTreeMap<PerfKey, PerfAcc>) -> rusqlite::Result<()> {
+    for table in ["daily_installs", "daily_sessions", "daily_events", "daily_perf"] {
+        tx.execute(&format!("DELETE FROM {table} WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3"), params![app_id, from, to])?;
+    }
+    tx.execute(
+        "INSERT INTO daily_installs (app_id, day, install_id)
+         SELECT app_id, day, install_id FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         UNION SELECT app_id, day, install_id FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         UNION SELECT app_id, day, install_id FROM perf WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3",
+        params![app_id, from, to],
+    )?;
+    let (versions, os, events) = (json_list(&keep.versions), json_list(&keep.os), json_list(&keep.events));
+    tx.execute(
+        "INSERT INTO daily_sessions (app_id, day, version, os_name, sessions, opens, installs, exited, crashed, abnormal, errored,
+                                     crashed_installs, duration_s, focused_s, active_s, idle_s)
+         SELECT app_id, day,
+                CASE WHEN version IN (SELECT value FROM json_each(?4)) THEN version ELSE 'other' END,
+                CASE WHEN COALESCE(os_name, 'unknown') IN (SELECT value FROM json_each(?5)) THEN COALESCE(os_name, 'unknown') ELSE 'other' END,
+                count(*),
+                sum(process = 'gui'),
+                count(DISTINCT install_id),
+                sum(status = 'exited'),
+                sum(status = 'crashed'),
+                sum(status = 'abnormal'),
+                sum(errors > 0),
+                count(DISTINCT CASE WHEN status IN ('crashed', 'abnormal') THEN install_id END),
+                sum(duration_s), sum(focused_s), sum(active_s), sum(idle_s)
+         FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         GROUP BY app_id, day, 3, 4",
+        params![app_id, from, to, versions, os],
+    )?;
+    tx.execute(
+        "INSERT INTO daily_events (app_id, day, version, name, declared, category, count, installs)
+         SELECT app_id, day,
+                CASE WHEN version IN (SELECT value FROM json_each(?4)) THEN version ELSE 'other' END,
+                CASE WHEN name IN (SELECT value FROM json_each(?5)) THEN name ELSE 'other' END,
+                declared,
+                CASE WHEN name IN (SELECT value FROM json_each(?5)) THEN min(category) ELSE 'other' END,
+                count(*), count(DISTINCT install_id)
+         FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         GROUP BY app_id, day, 3, 4, declared",
+        params![app_id, from, to, versions, events],
+    )?;
     let mut insert = tx.prepare(
         "INSERT INTO daily_perf (app_id, day, version, os_name, frame_count, frame_sum_us, frame_max_us, slow, frozen, buckets,
                                  cpu_sum, cpu_n, rss_sum, rss_n, rss_peak_mb, startup_sum, startup_n)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )?;
-    for ((app_id, day, version, os_name), mut acc) in groups {
+    for ((day, version, os_name), mut acc) in perf {
         acc.frames.buckets.resize(FRAME_BUCKETS, 0);
         let buckets = serde_json::to_string(&acc.frames.buckets).unwrap_or_else(|_| "[]".to_string());
         insert.execute(params![

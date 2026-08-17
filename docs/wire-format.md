@@ -12,7 +12,9 @@ Schema version **1**. The types live in `crates/tracer-proto`; the fixtures in i
 | Auth | `x-tracer-key: <app write key>` on ingest and forget |
 | Limits | 1 MiB per body after decompression |
 
-Replies to ingest are JSON: `{"accepted":n,"duplicates":n,"rejected":n,"need_catalog":bool}`.
+Replies to ingest are JSON: `{"accepted":n,"duplicates":n,"rejected":n,"need_catalog":bool}`. `rejected` counts items the server refused as malformed (a bad name, an unknown type, an over-long id, more than 20 crashes in one envelope); an event is **never** refused for not being in the catalog. `POST /v1/forget` replies `200 {"ok":true}` whether or not the install existed.
+
+The server limits requests per client address (`429`), and the address is used for that and nothing else.
 
 | Status | Meaning | Client does |
 |---|---|---|
@@ -20,7 +22,8 @@ Replies to ingest are JSON: `{"accepted":n,"duplicates":n,"rejected":n,"need_cat
 | 400, 413, 422 | Malformed or too large | Deletes the batch and counts a drop |
 | 401, 403 | Unknown or revoked key | Keeps data, stops sending until restart |
 | 429 | Rate limited | Waits for `Retry-After`, then retries |
-| 5xx, network error | Server trouble | Retries with backoff |
+| 507 | Server storage is full | Keeps data, retries with backoff (like any 5xx) |
+| other 5xx, network error | Server trouble | Retries with backoff |
 
 ## Envelope
 
@@ -36,7 +39,9 @@ One envelope carries items from **one session of one install**. Data from an ear
 | `sent_at` | integer | Client clock in Unix milliseconds, for drift correction |
 | `items` | array | See below |
 
-Every item has `id` (unique, client-generated; the server ignores an id it has already stored), `ts` (Unix milliseconds) and `type`.
+Every item has `id` (unique, client-generated, at most 64 bytes; the server ignores an id it has already stored), `ts` (Unix milliseconds) and `type`. The server moves `ts` onto its own clock when the client clock is more than five minutes off, and clamps it to the server's retention window in the past and one hour ahead.
+
+The server creates or updates the session record only for envelopes that carry a `session_start`, `session_heartbeat` or `session_end`. Events, `perf`, `crash` and `drops` in an envelope without one are stored with their `session_id` as plain text, so a client that has switched session reporting off creates no session.
 
 ## Item types
 
@@ -49,6 +54,10 @@ Every item has `id` (unique, client-generated; the server ignores an id it has a
 | `perf` | `window_s`, `frames`, `cpu_pct`, `rss_mb`, `rss_peak_mb`, `startup_ms`, `counters`, `gauges` |
 | `crash` | `kind`, `fatal`, `message`, `location`, `thread`, `backtrace`, `blocked_ms`, `exit_code`, `signal`, `context`, `breadcrumbs[]`, `perf` |
 | `drops` | `reasons` — what the client discarded, by reason |
+
+**`crash.fatal`.** A client cannot know at capture time whether a panic ends the host, so it sends `fatal: false` for `panic`, `handled` and `hang`, and `fatal: true` for `unclean_exit` and `child_exit` (which are found after the fact). The server decides for panics: when a session ends with `status: "crashed"` (a `session_end`, in the same or a later envelope, before or after the crash item arrives), that session's most recent `panic` is stored as fatal. A `fatal: true` panic from a client also marks its `ok` session `crashed`.
+
+**Catalog.** `session_start.catalog` is client input and is treated as unverified: catalogs are stored next to each other by `catalog_hash`, never replacing one. Each stored event carries a `declared` flag, set when its name is in a catalog held for the app version. `declared = false` events are kept and shown separately; they are not an error.
 
 `crash.kind` is one of `panic`, `handled`, `hang`, `unclean_exit`, `child_exit`.
 

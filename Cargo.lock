@@ -1069,6 +1069,8 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "log",
  "maud",
  "rusqlite",
@@ -1078,6 +1080,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tower-service",
  "tracer-proto",
  "ureq",
 ]

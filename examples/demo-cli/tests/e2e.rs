@@ -37,7 +37,7 @@ impl Server {
     /// A database with one app named "demo" and its write key. Nothing listens yet.
     fn offline() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let config = Config { data_dir: dir.path().join("server"), rate_per_min: 0, ..Config::default() };
+        let config = Config { data_dir: dir.path().join("server"), rate_per_min: 0, secure_cookies: false, ..Config::default() };
         std::fs::create_dir_all(&config.data_dir).unwrap();
         let db_path = config.db_path();
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
@@ -54,7 +54,7 @@ impl Server {
     }
 
     fn listen(&mut self, bind: SocketAddr) {
-        let config = Config { data_dir: self.dir.path().join("server"), rate_per_min: 0, ..Config::default() };
+        let config = Config { data_dir: self.dir.path().join("server"), rate_per_min: 0, secure_cookies: false, ..Config::default() };
         let state = AppState::new(self.store.clone() as Arc<dyn Store>, config);
         let (addr_tx, addr_rx) = std::sync::mpsc::channel::<SocketAddr>();
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -687,7 +687,7 @@ fn forget_deletes_the_install_and_the_next_run_has_a_new_id() {
 }
 
 #[test]
-fn undeclared_events_are_rejected_when_the_server_holds_the_catalog() {
+fn undeclared_events_are_stored_flagged_when_the_server_holds_the_catalog() {
     let server = Server::start();
     let event = |id: &str, name: &str| item(id, ItemBody::Event(Event { name: name.into(), category: "file".into(), ..Event::default() }));
     let catalog =
@@ -709,12 +709,15 @@ fn undeclared_events_are_rejected_when_the_server_holds_the_catalog() {
         ),
     ];
     let reply = post_envelope(&server, &envelope("2.0.0", "aa", "bb", items.clone()));
-    assert_eq!((reply["accepted"].as_u64(), reply["rejected"].as_u64(), reply["duplicates"].as_u64()), (Some(3), Some(1), Some(0)), "{reply}");
+    // The catalog is client input, so an undeclared name is never refused (that would lose real data if the
+    // catalog were wrong or forged): it is stored and flagged.
+    assert_eq!((reply["accepted"].as_u64(), reply["rejected"].as_u64(), reply["duplicates"].as_u64()), (Some(4), Some(0), Some(0)), "{reply}");
     assert_eq!(reply["need_catalog"], false);
-    assert_eq!(server.db().strings("SELECT name FROM events ORDER BY name"), ["file.open", "file.save"]);
+    assert_eq!(server.db().strings("SELECT name FROM events ORDER BY name"), ["file.open", "file.save", "file.undeclared"]);
+    assert_eq!(server.db().strings("SELECT name FROM events WHERE declared = 0"), ["file.undeclared"]);
 
-    // The same envelope again: the accepted ones are duplicates, the rejected one is still rejected.
+    // The same envelope again: every item is a duplicate.
     let again = post_envelope(&server, &envelope("2.0.0", "aa", "bb", items));
-    assert_eq!((again["accepted"].as_u64(), again["duplicates"].as_u64()), (Some(0), Some(3)), "{again}");
-    assert_eq!(server.db().count("SELECT count(*) FROM events"), 2);
+    assert_eq!((again["accepted"].as_u64(), again["duplicates"].as_u64()), (Some(0), Some(4)), "{again}");
+    assert_eq!(server.db().count("SELECT count(*) FROM events"), 3);
 }

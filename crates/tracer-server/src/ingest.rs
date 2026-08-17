@@ -16,7 +16,15 @@ pub const DAY_MS: i64 = 86_400_000;
 pub const DRIFT_THRESHOLD_MS: i64 = 300_000;
 /// Items beyond this many in one envelope are rejected.
 pub const MAX_ITEMS: usize = 2_000;
-pub const MAX_ID_LEN: usize = 128;
+pub const MAX_ID_LEN: usize = 64;
+/// Item times may be at most this far ahead of the server clock.
+pub const FUTURE_SLACK_MS: i64 = 3_600_000;
+/// Crash items beyond this many in one envelope are rejected.
+pub const MAX_CRASHES_PER_ENVELOPE: usize = 20;
+/// Largest count a single `drops` entry may add.
+pub const DROP_COUNT_MAX: u64 = 1_000_000;
+/// Retention assumed by [`prepare`] when the caller does not say.
+pub const DEFAULT_RETENTION_DAYS: u32 = 90;
 pub const MAX_MESSAGE_LEN: usize = 2 * 1024;
 pub const MAX_BACKTRACE_LEN: usize = 32 * 1024;
 pub const MAX_BREADCRUMBS: usize = 100;
@@ -43,6 +51,9 @@ pub struct Prepared {
     pub started_at: i64,
     /// Time of the newest item (or of receipt when there are none).
     pub last_seen: i64,
+    /// Earliest and latest time among the session items (`session_start`, `session_heartbeat`,
+    /// `session_end`). `None` when the envelope carries none: then no session row is created or touched.
+    pub session_span: Option<(i64, i64)>,
     pub received_at: i64,
     pub items: Vec<PreparedItem>,
     /// Items refused during preparation: bad names, unknown types, over the item cap.
@@ -88,6 +99,11 @@ pub enum PrepareError {
 
 /// Validates and sanitises `envelope`. `received_at` is the server clock in Unix milliseconds.
 pub fn prepare(envelope: Envelope, received_at: i64) -> Result<Prepared, PrepareError> {
+    prepare_with(envelope, received_at, DEFAULT_RETENTION_DAYS)
+}
+
+/// Like [`prepare`], with item times also clamped to the retention window in the past.
+pub fn prepare_with(envelope: Envelope, received_at: i64, retention_days: u32) -> Result<Prepared, PrepareError> {
     if !valid_id(&envelope.install_id) {
         return Err(PrepareError::BadInstallId);
     }
@@ -104,23 +120,31 @@ pub fn prepare(envelope: Envelope, received_at: i64) -> Result<Prepared, Prepare
     let mut started_at: Option<i64> = None;
     let mut start_item_at: Option<i64> = None;
     let mut last_seen: Option<i64> = None;
+    let mut session_span: Option<(i64, i64)> = None;
+    let mut crashes = 0usize;
+    let oldest = received_at.saturating_sub(i64::from(retention_days.max(1)).saturating_mul(DAY_MS));
 
     for (index, item) in envelope.items.into_iter().enumerate() {
         if index >= MAX_ITEMS || !valid_item_id(&item.id) {
             rejected = rejected.saturating_add(1);
             continue;
         }
-        let ts = corrected_ts(item.ts, sent_at, received_at);
+        let ts = corrected_ts(item.ts, sent_at, received_at).max(oldest);
         let body = match item.body {
             ItemBody::SessionStart(start) => {
+                note_session(&mut session_span, ts);
                 start_item_at = Some(start_item_at.map_or(ts, |at| at.min(ts)));
                 PreparedBody::SessionStart {
                     catalog_hash: start.catalog_hash.map(|hash| clean(&hash, MAX_VERSION_LEN)).filter(|h| !h.is_empty()),
                     catalog: start.catalog.map(|catalog| sanitize_catalog(catalog.events)),
                 }
             }
-            ItemBody::SessionHeartbeat(totals) => PreparedBody::Heartbeat(clamp_totals(totals)),
+            ItemBody::SessionHeartbeat(totals) => {
+                note_session(&mut session_span, ts);
+                PreparedBody::Heartbeat(clamp_totals(totals))
+            }
             ItemBody::SessionEnd(SessionEnd { status, totals, errors }) => {
+                note_session(&mut session_span, ts);
                 PreparedBody::End { status, totals: clamp_totals(totals), errors: errors.min(1_000_000) }
             }
             ItemBody::Event(event) => match sanitize_event(event) {
@@ -131,7 +155,12 @@ pub fn prepare(envelope: Envelope, received_at: i64) -> Result<Prepared, Prepare
                 }
             },
             ItemBody::Perf(perf) => PreparedBody::Perf(sanitize_perf(perf)),
+            ItemBody::Crash(_) if crashes >= MAX_CRASHES_PER_ENVELOPE => {
+                rejected = rejected.saturating_add(1);
+                continue;
+            }
             ItemBody::Crash(crash) => {
+                crashes += 1;
                 let crash = sanitize_crash(crash);
                 let print = fingerprint(crash.kind, crash.message.as_deref(), crash.location.as_deref(), crash.backtrace.as_deref());
                 PreparedBody::Crash(Box::new(PreparedCrash { crash, fingerprint: print.hash, title: print.title }))
@@ -140,10 +169,7 @@ pub fn prepare(envelope: Envelope, received_at: i64) -> Result<Prepared, Prepare
                 drops
                     .reasons
                     .into_iter()
-                    .filter_map(|(reason, count)| {
-                        let reason = clean(&reason, MAX_NAME_LEN);
-                        (!reason.is_empty()).then_some((reason, count.min(COUNTER_MAX)))
-                    })
+                    .filter_map(|(reason, count)| validate_name(&reason).ok().map(|()| (reason, count.min(DROP_COUNT_MAX))))
                     .take(MAX_MAPPED)
                     .collect(),
             ),
@@ -166,10 +192,15 @@ pub fn prepare(envelope: Envelope, received_at: i64) -> Result<Prepared, Prepare
         device: envelope.device.map(sanitize_device),
         started_at: start_item_at.or(started_at).unwrap_or(received_at),
         last_seen: last_seen.unwrap_or(received_at),
+        session_span,
         received_at,
         items,
         rejected,
     })
+}
+
+fn note_session(span: &mut Option<(i64, i64)>, ts: i64) {
+    *span = Some(span.map_or((ts, ts), |(first, last)| (first.min(ts), last.max(ts))));
 }
 
 fn process_name(kind: tracer_proto::ProcessKind) -> &'static str {
@@ -192,13 +223,13 @@ fn valid_item_id(id: &str) -> bool {
 }
 
 /// Moves a client timestamp onto the server clock when the client clock is more than five minutes off, then
-/// clamps it to at most one day in the future (and never before the epoch).
+/// clamps it to at most an hour in the future (and never before the epoch).
 pub fn corrected_ts(ts: u64, sent_at: u64, received_at: i64) -> i64 {
     let ts = i64::try_from(ts).unwrap_or(i64::MAX);
     let sent_at = i64::try_from(sent_at).unwrap_or(i64::MAX);
     let drift = received_at.saturating_sub(sent_at);
     let ts = if drift.unsigned_abs() > DRIFT_THRESHOLD_MS as u64 { ts.saturating_add(drift) } else { ts };
-    ts.min(received_at.saturating_add(DAY_MS)).max(0)
+    ts.min(received_at.saturating_add(FUTURE_SLACK_MS)).max(0)
 }
 
 /// Truncates to at most `max` bytes on a character boundary.
@@ -537,8 +568,8 @@ mod tests {
     }
 
     #[test]
-    fn future_times_are_clamped_to_one_day_and_never_negative() {
-        assert_eq!(corrected_ts(u64::MAX, NOW as u64, NOW), NOW + DAY_MS);
+    fn future_times_are_clamped_to_one_hour_and_never_negative() {
+        assert_eq!(corrected_ts(u64::MAX, NOW as u64, NOW), NOW + FUTURE_SLACK_MS);
         assert_eq!(corrected_ts(0, 10_000_000_000_000, NOW), 0);
     }
 
