@@ -21,8 +21,16 @@ use crate::cli;
 use crate::http::{AppState, blocking, client_ip};
 use crate::ingest::DAY_MS;
 
-pub const SESSION_COOKIE: &str = "tracer_session";
-const LOGIN_COOKIE: &str = "tracer_login";
+/// Cookie names. Over HTTPS (the default) the session cookie carries the `__Host-` prefix, which makes the
+/// browser refuse it unless it is `Secure`, has `Path=/` and names no `Domain`; the short-lived login-form
+/// cookie lives under `/login`, so it takes `__Secure-` instead.
+pub fn session_cookie_name(secure: bool) -> &'static str {
+    if secure { "__Host-tracer_session" } else { "tracer_session" }
+}
+
+fn login_cookie_name(secure: bool) -> &'static str {
+    if secure { "__Secure-tracer_login" } else { "tracer_login" }
+}
 /// How long a login lasts.
 pub const SESSION_MS: i64 = 14 * DAY_MS;
 const LOGIN_FORM_SECONDS: u32 = 15 * 60;
@@ -105,13 +113,13 @@ fn set_cookie(response: &mut Response, name: &str, value: &str, max_age: u32, pa
 }
 
 fn clear_session_cookie(response: &mut Response, secure: bool) {
-    set_cookie(response, SESSION_COOKIE, "", 0, "/", "Lax", secure);
+    set_cookie(response, session_cookie_name(secure), "", 0, "/", "Lax", secure);
 }
 
 /// The logged-in user for this request, or the response to send instead: a redirect to the login page.
 pub async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Session, Response> {
     let secure = state.config.secure_cookies;
-    let Some(token) = cookie_value(headers, SESSION_COOKIE) else { return Err(redirect("/login")) };
+    let Some(token) = cookie_value(headers, session_cookie_name(secure)) else { return Err(redirect("/login")) };
     if !token_shape_ok(&token) {
         let mut response = redirect("/login");
         clear_session_cookie(&mut response, secure);
@@ -167,7 +175,15 @@ fn login_page(state: &AppState, status: StatusCode, message: Option<&str>, no_ad
     let markup = super::view::plain("Sign in", login_markup(message, csrf.as_deref(), no_admin));
     let mut response = html_response(status, markup);
     if let Some(cookie) = cookie {
-        set_cookie(&mut response, LOGIN_COOKIE, &cookie, LOGIN_FORM_SECONDS, "/login", "Strict", state.config.secure_cookies);
+        set_cookie(
+            &mut response,
+            login_cookie_name(state.config.secure_cookies),
+            &cookie,
+            LOGIN_FORM_SECONDS,
+            "/login",
+            "Strict",
+            state.config.secure_cookies,
+        );
     }
     response
 }
@@ -206,7 +222,7 @@ pub async fn login_post(State(state): State<AppState>, request: Request) -> Resp
     let Some(form) = form::read_body(body).await else {
         return login_page(&state, StatusCode::BAD_REQUEST, Some("The form could not be read."), false);
     };
-    let cookie_ok = cookie_value(&parts.headers, LOGIN_COOKIE)
+    let cookie_ok = cookie_value(&parts.headers, login_cookie_name(state.config.secure_cookies))
         .zip(form.get("csrf"))
         .is_some_and(|(cookie, given)| ct_eq(login_csrf_for(&cookie).as_bytes(), given.as_bytes()));
     if !cookie_ok {
@@ -214,6 +230,13 @@ pub async fn login_post(State(state): State<AppState>, request: Request) -> Resp
     }
     let username = form.get("username").cloned().unwrap_or_default();
     let password = form.get("password").cloned().unwrap_or_default();
+    // Recent failures for this user name, and across all of them, make every attempt wait, right or wrong:
+    // the delay depends only on the text of the user name, so it reveals nothing about the account.
+    let tracked: String = username.chars().take(MAX_USERNAME).collect();
+    let extra = state.limiters.login_delay(&tracked, Instant::now());
+    if !extra.is_zero() {
+        tokio::time::sleep(extra).await;
+    }
     let within_limits = !username.is_empty() && username.len() <= MAX_USERNAME && password.len() <= MAX_PASSWORD;
 
     let lookup_name = username.clone();
@@ -226,6 +249,8 @@ pub async fn login_post(State(state): State<AppState>, request: Request) -> Resp
     };
     let admin_id = found.as_ref().map(|(id, _)| *id);
     let hash = found.map(|(_, hash)| hash);
+    // Only a few password checks run at once; the rest queue. Each costs memory and CPU.
+    let slot = state.login_slots.acquire().await;
     let verified = tokio::task::spawn_blocking(move || match (&hash, within_limits) {
         (Some(hash), true) => cli::verify_password(&password, hash),
         (None, true) => {
@@ -238,11 +263,14 @@ pub async fn login_post(State(state): State<AppState>, request: Request) -> Resp
     })
     .await
     .unwrap_or(false);
+    drop(slot);
 
     let Some(admin_id) = admin_id.filter(|_| verified) else {
+        state.limiters.login_failed(&tracked, Instant::now());
         tokio::time::sleep(FAILURE_DELAY.saturating_sub(started.elapsed())).await;
         return login_page(&state, StatusCode::UNAUTHORIZED, Some(BAD_LOGIN), false);
     };
+    state.limiters.login_succeeded(&tracked);
     let Some(token) = random_hex(32) else {
         return error_page(StatusCode::INTERNAL_SERVER_ERROR, "No random source", "The server could not create a session token.", None);
     };
@@ -259,8 +287,9 @@ pub async fn login_post(State(state): State<AppState>, request: Request) -> Resp
         return error_page(StatusCode::INTERNAL_SERVER_ERROR, "Storage error", "The server could not save the session.", None);
     }
     let mut response = redirect("/");
-    set_cookie(&mut response, SESSION_COOKIE, &token, (SESSION_MS / 1000) as u32, "/", "Lax", state.config.secure_cookies);
-    set_cookie(&mut response, LOGIN_COOKIE, "", 0, "/login", "Strict", state.config.secure_cookies);
+    let secure = state.config.secure_cookies;
+    set_cookie(&mut response, session_cookie_name(secure), &token, (SESSION_MS / 1000) as u32, "/", "Lax", secure);
+    set_cookie(&mut response, login_cookie_name(secure), "", 0, "/login", "Strict", secure);
     response
 }
 

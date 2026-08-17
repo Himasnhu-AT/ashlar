@@ -41,6 +41,7 @@ pub struct TestServer {
     pub store: Arc<SqliteStore>,
     pub key: String,
     pub app_id: i64,
+    pub state: AppState,
     agent: ureq::Agent,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -48,7 +49,7 @@ pub struct TestServer {
 }
 
 pub fn config_in(dir: &Path) -> Config {
-    Config { data_dir: dir.to_path_buf(), rate_per_min: 0, ..Config::default() }
+    Config { data_dir: dir.to_path_buf(), rate_per_min: 0, key_rate_per_min: 0, secure_cookies: false, ..Config::default() }
 }
 
 impl TestServer {
@@ -71,9 +72,14 @@ impl TestServer {
 
     /// Starts a server on `config.data_dir`. No app is created.
     pub fn start(config: Config) -> Self {
+        Self::start_with_limits(config, http::ServerLimits::default())
+    }
+
+    pub fn start_with_limits(config: Config, limits: http::ServerLimits) -> Self {
         let store = Arc::new(SqliteStore::open(&config.db_path()).unwrap());
         let db_path = config.db_path();
         let state = AppState::new(store.clone() as Arc<dyn Store>, config);
+        let served = state.clone();
         let (addr_tx, addr_rx) = std::sync::mpsc::channel::<SocketAddr>();
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let thread = std::thread::spawn(move || {
@@ -81,7 +87,7 @@ impl TestServer {
             runtime.block_on(async move {
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
-                http::serve(listener, http::router(state), async {
+                http::serve_with(listener, http::router(served), limits, async {
                     let _ = shutdown_rx.await;
                 })
                 .await
@@ -96,6 +102,7 @@ impl TestServer {
             store,
             key: String::new(),
             app_id: 0,
+            state,
             agent,
             shutdown: Some(shutdown),
             thread: Some(thread),
@@ -104,7 +111,15 @@ impl TestServer {
     }
 
     pub fn post_raw(&self, path: &str, key: Option<&str>, gzip: bool, body: &[u8]) -> Reply {
+        self.post_with(path, key, gzip, body, &[])
+    }
+
+    /// Like [`TestServer::post_raw`] with extra request headers (each appended as its own header line).
+    pub fn post_with(&self, path: &str, key: Option<&str>, gzip: bool, body: &[u8], headers: &[(&str, &str)]) -> Reply {
         let mut request = self.agent.post(format!("{}{path}", self.base));
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         if let Some(key) = key {
             request = request.header("x-tracer-key", key);
         }

@@ -99,7 +99,8 @@ fn unknown_fields_and_item_types_are_tolerated() {
     // is held yet, so the server asks for one.
     assert_eq!(reply.counts(), (2, 0, 1, true));
     assert_eq!(server.text("SELECT kind FROM crashes"), "other");
-    assert_eq!(server.text("SELECT process FROM sessions"), "other");
+    // No session item, so no session row.
+    assert_eq!(server.count("SELECT count(*) FROM sessions"), 0);
 }
 
 #[test]
@@ -171,8 +172,8 @@ fn rate_limit_returns_429_with_retry_after() {
     assert_eq!(limited.status, 429);
     let wait: u64 = limited.retry_after.expect("Retry-After").parse().unwrap();
     assert!((1..=60).contains(&wait), "{wait}");
-    // Health is not rate limited.
-    assert_eq!(server.get("/v1/health").status, 200);
+    // Health shares the address bucket, so it is limited too.
+    assert_eq!(server.get("/v1/health").status, 429);
 }
 
 #[test]
@@ -215,7 +216,8 @@ fn events_are_checked_against_a_held_catalog_and_accepted_with_need_catalog_othe
     let hash_only = item("s", ItemBody::SessionStart(SessionStart { catalog_hash: Some("hash1".into()), ..SessionStart::default() }));
     assert!(server.ingest(&envelope("i1", "s2", vec![hash_only])).counts().3);
 
-    // Carrying the catalog stores it; undeclared names are then refused, declared and dynamic ones accepted.
+    // Carrying the catalog stores it. An undeclared name is still stored, flagged `declared = 0`; nothing is
+    // ever refused because of the catalog.
     let mut dynamic = event("e4", "undeclared.but.dynamic");
     if let ItemBody::Event(inner) = &mut dynamic.body {
         inner.dynamic = true;
@@ -225,11 +227,12 @@ fn events_are_checked_against_a_held_catalog_and_accepted_with_need_catalog_othe
         "s3",
         vec![start_with_catalog("s3start", &["file.open"]), event("e2", "file.open"), event("e3", "undeclared"), dynamic],
     ));
-    assert_eq!(reply.counts(), (3, 0, 1, false));
-    assert_eq!(server.count("SELECT count(*) FROM events WHERE name = 'undeclared'"), 0);
-    assert_eq!(server.count("SELECT count(*) FROM events WHERE name = 'file.open'"), 1);
+    assert_eq!(reply.counts(), (4, 0, 0, false));
+    assert_eq!(server.count("SELECT declared FROM events WHERE name = 'undeclared'"), 0);
+    assert_eq!(server.count("SELECT declared FROM events WHERE name = 'file.open'"), 1);
+    assert_eq!(server.count("SELECT declared FROM events WHERE name = 'undeclared.but.dynamic'"), 1);
 
-    // The refused event's id was not recorded, and the acknowledged hash no longer triggers need_catalog.
+    // The acknowledged hash no longer triggers need_catalog.
     let hash_only = item("s5", ItemBody::SessionStart(SessionStart { catalog_hash: Some("hash1".into()), ..SessionStart::default() }));
     assert!(!server.ingest(&envelope("i1", "s4", vec![hash_only])).counts().3);
 
@@ -245,7 +248,8 @@ fn crashes_with_the_same_stack_share_an_issue_and_different_stacks_do_not() {
     let one = "0: 0x1000 - demo::render::draw::h0123456789abcdef\n1: 0x2000 - demo::main::h1111111111111111\n2: std::rt::lang_start";
     let same = "   0: 0x7777 - demo::render::draw::hfedcba9876543210\n   1: 0x8888 - demo::main::h2222222222222222\n             at src/main.rs:9\n   2: std::rt::lang_start";
     let other = "0: demo::audio::mix::h0123456789abcdef\n1: demo::main::h1111111111111111";
-    assert_eq!(server.ingest(&envelope("i1", "s1", vec![crash("c1", one)])).status, 200);
+    let beat = item("h1", ItemBody::SessionHeartbeat(totals(1)));
+    assert_eq!(server.ingest(&envelope("i1", "s1", vec![beat, crash("c1", one)])).status, 200);
     assert_eq!(server.ingest(&envelope("i2", "s2", vec![crash("c2", same)])).status, 200);
     assert_eq!(server.count("SELECT count(*) FROM issues"), 1);
     assert_eq!(server.count("SELECT count FROM issues"), 2);
@@ -299,6 +303,6 @@ fn hostile_values_are_truncated_not_fatal() {
     assert_eq!(reply.counts().0, 2);
     assert_eq!(server.count("SELECT length(message) FROM crashes"), 2048);
     assert_eq!(server.count("SELECT length(backtrace) FROM crashes"), 32 * 1024);
-    assert_eq!(server.count("SELECT length(version) FROM sessions"), 64);
+    assert_eq!(server.count("SELECT length(version) FROM events"), 64);
     assert_eq!(server.count("SELECT length(json_extract(props, '$.note')) FROM events"), 64);
 }

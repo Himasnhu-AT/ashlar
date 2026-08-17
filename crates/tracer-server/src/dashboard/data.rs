@@ -14,6 +14,14 @@ use crate::store::{
 
 pub type Params = HashMap<String, String>;
 
+/// A secondary query must not take a whole page down: on failure it is logged and the section is empty.
+fn soft<T: Default>(what: &str, result: StoreResult<T>) -> T {
+    result.unwrap_or_else(|error| {
+        log::error!("could not load {what}: {error}");
+        T::default()
+    })
+}
+
 pub const RANGES: [i64; 3] = [7, 30, 90];
 pub const DEFAULT_DAYS: i64 = 30;
 pub const KINDS: [&str; 6] = ["panic", "handled", "hang", "unclean_exit", "child_exit", "other"];
@@ -179,6 +187,8 @@ pub struct UsagePage {
     pub dau: Vec<f64>,
     pub sessions: Vec<f64>,
     pub events: Vec<EventRow>,
+    /// Events the catalog does not list. Client-supplied, so shown apart from the declared ones.
+    pub undeclared: Vec<EventRow>,
     pub never_fired: Vec<CatalogEntry>,
     pub versions: Vec<VersionInfo>,
 }
@@ -194,8 +204,9 @@ pub fn load_usage(store: &dyn Store, app: &AppRecord, f: &Filters, now: i64) -> 
         summary: SessionSummary::from_days(&totals, &dau),
         dau: metrics::fill_days(from, to, dau.iter().map(|(d, n)| (*d, *n as f64))),
         sessions: metrics::fill_days(from, to, totals.iter().map(|d| (d.day, d.sessions as f64))),
-        events: store.events_ranked(app.id, from, to, v)?,
-        never_fired: store.never_fired(app.id, v)?,
+        events: store.events_ranked(app.id, from, to, v, true)?,
+        undeclared: soft("undeclared events", store.events_ranked(app.id, from, to, v, false)),
+        never_fired: soft("never-fired events", store.never_fired(app.id, v)),
         versions: store.versions(app.id)?,
     })
 }
@@ -214,7 +225,7 @@ pub fn load_settings(store: &dyn Store, app: &AppRecord, f: &Filters, now: i64) 
     let (from, to) = f.range(now);
     Ok(SettingsPage {
         keys: store.list_keys(app.id)?,
-        drops: store.drops(app.id, from, to)?,
+        drops: soft("drop counts", store.drops(app.id, from, to)),
         glance: store.app_glance(app.id, to - 6, to)?,
         from,
         to,

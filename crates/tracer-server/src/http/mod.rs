@@ -8,7 +8,7 @@ pub mod limiter;
 use std::future::Future;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use axum::Router;
@@ -19,6 +19,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use http_body_util::BodyExt;
 use serde::Serialize;
+use tokio::sync::Semaphore;
+use tower_service::Service;
 use tracer_proto::{ForgetRequest, HEADER_APP_KEY, MAX_ENVELOPE_BYTES, SCHEMA_VERSION, routes};
 
 pub use limiter::Limiters;
@@ -35,18 +37,49 @@ const MAX_KEY_LEN: usize = 200;
 /// How much of an oversized body is read and thrown away before the connection is given up on.
 const DRAIN_MAX: usize = 8 * 1024 * 1024;
 
+/// Password checks (argon2) running at once. Each costs tens of megabytes and a good fraction of a second.
+pub const LOGIN_CONCURRENCY: usize = 4;
+/// How long a measured database size is trusted.
+const SIZE_CACHE: Duration = Duration::from_secs(2);
+
 /// State shared by every handler. Cheap to clone.
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<dyn Store>,
     pub config: Arc<Config>,
     pub limiters: Arc<Limiters>,
+    /// Permits for concurrent password verification.
+    pub login_slots: Arc<Semaphore>,
+    size: Arc<Mutex<Option<(Instant, bool)>>>,
 }
 
 impl AppState {
     pub fn new(store: Arc<dyn Store>, config: Config) -> Self {
-        let limiters = Arc::new(Limiters::new(config.rate_per_min));
-        Self { store, config: Arc::new(config), limiters }
+        let limiters = Arc::new(Limiters::new(config.rate_per_min, config.key_rate_per_min));
+        Self { store, config: Arc::new(config), limiters, login_slots: Arc::new(Semaphore::new(LOGIN_CONCURRENCY)), size: Arc::new(Mutex::new(None)) }
+    }
+
+    /// True when the database is over `TRACER_MAX_DB_MB`. Only ingest asks: the dashboard and login keep
+    /// working so the operator can still get in and fix it. A failed measurement counts as "not full".
+    pub async fn storage_full(&self) -> bool {
+        let limit = self.config.max_db_mb.saturating_mul(1024 * 1024);
+        if limit == 0 {
+            return false;
+        }
+        if let Some((at, full)) = *self.size.lock().unwrap_or_else(PoisonError::into_inner)
+            && at.elapsed() < SIZE_CACHE
+        {
+            return full;
+        }
+        let full = match blocking(&self.store, |store| store.size_bytes()).await {
+            Ok(bytes) => bytes > limit,
+            Err(error) => {
+                log::error!("could not measure the database: {error}");
+                false
+            }
+        };
+        *self.size.lock().unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), full));
+        full
     }
 }
 
@@ -64,9 +97,85 @@ pub fn router(state: AppState) -> Router {
     api_router().with_state(state)
 }
 
+/// Connection-level limits against slow and idle clients.
+#[derive(Debug, Clone, Copy)]
+pub struct ServerLimits {
+    /// A client gets this long to send a request's headers. It also bounds an idle keep-alive connection,
+    /// since the clock runs while the server waits for the next request.
+    pub header_read_timeout: Duration,
+    /// Connections served at once. Further clients wait in the accept queue until one closes.
+    pub max_connections: usize,
+}
+
+impl Default for ServerLimits {
+    fn default() -> Self {
+        Self { header_read_timeout: Duration::from_secs(15), max_connections: 1024 }
+    }
+}
+
+/// How long shutdown waits for in-flight requests.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+
 /// Serves `app` on `listener` until `shutdown` completes, then lets in-flight requests finish.
 pub async fn serve(listener: tokio::net::TcpListener, app: Router, shutdown: impl Future<Output = ()> + Send + 'static) -> std::io::Result<()> {
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(shutdown).await
+    serve_with(listener, app, ServerLimits::default(), shutdown).await
+}
+
+/// [`serve`] with explicit connection limits. Runs hyper directly (HTTP/1.1) so it can set a header read
+/// timeout and cap the number of open connections, which `axum::serve` does not offer.
+pub async fn serve_with(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    limits: ServerLimits,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    use hyper_util::server::graceful::GracefulShutdown;
+
+    let graceful = GracefulShutdown::new();
+    let slots = Arc::new(Semaphore::new(limits.max_connections.max(1)));
+    tokio::pin!(shutdown);
+    loop {
+        let permit = tokio::select! {
+            permit = Arc::clone(&slots).acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => break,
+            },
+            () = &mut shutdown => break,
+        };
+        let (stream, peer) = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    // Usually too many open files: back off instead of spinning.
+                    log::warn!("accept failed: {error}");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+            () = &mut shutdown => break,
+        };
+        let _ = stream.set_nodelay(true);
+        let app = app.clone();
+        let service = hyper::service::service_fn(move |mut request: hyper::Request<hyper::body::Incoming>| {
+            request.extensions_mut().insert(ConnectInfo(peer));
+            let mut app = app.clone();
+            async move { app.call(request).await }
+        });
+        let mut builder = hyper::server::conn::http1::Builder::new();
+        builder.timer(TokioTimer::new()).header_read_timeout(limits.header_read_timeout);
+        let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                log::debug!("connection ended: {error}");
+            }
+            drop(permit);
+        });
+    }
+    if tokio::time::timeout(SHUTDOWN_GRACE, graceful.shutdown()).await.is_err() {
+        log::warn!("some connections were still open after {} s; closing", SHUTDOWN_GRACE.as_secs());
+    }
+    Ok(())
 }
 
 /// Resolves when the process receives ctrl-c.
@@ -117,11 +226,15 @@ fn storage_failure(error: &StoreError) -> Response {
 // ---------------------------------------------------------------------------------------------------------
 // handlers
 
-async fn health_handler(State(state): State<AppState>) -> Response {
+async fn health_handler(State(state): State<AppState>, request: Request) -> Response {
     #[derive(Serialize)]
     struct Health {
         status: &'static str,
         version: &'static str,
+    }
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|info| info.0);
+    if let Err(response) = limit_address(&state, request.headers(), peer) {
+        return *response;
     }
     match blocking(&state.store, |store| store.health()).await {
         Ok(()) => json(StatusCode::OK, &Health { status: "ok", version: env!("CARGO_PKG_VERSION") }),
@@ -132,8 +245,23 @@ async fn health_handler(State(state): State<AppState>) -> Response {
     }
 }
 
-/// Steps 1 and 2 of the ingest procedure, shared by ingest and forget: the key, then the rate limits.
+fn rate_limited(wait: u64) -> Response {
+    let mut response = failure(StatusCode::TOO_MANY_REQUESTS, "rate limited");
+    response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait));
+    response
+}
+
+/// Takes one request from the client address's bucket. Done first on every public route, before anything
+/// that costs a database read, so unknown keys and the health route are limited as well.
+fn limit_address(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> Result<(), Box<Response>> {
+    let addr = client_ip(headers, peer, state.config.trust_proxy);
+    state.limiters.check_addr(addr, Instant::now()).map_err(|wait| Box::new(rate_limited(wait)))
+}
+
+/// The first steps of the ingest procedure, shared by ingest and forget: the address limit, then the key,
+/// then the per-key capacity guard. A request the address bucket refuses never touches the key bucket.
 async fn authenticate(state: &AppState, headers: &HeaderMap, peer: Option<SocketAddr>) -> Result<AppRecord, Response> {
+    limit_address(state, headers, peer).map_err(|response| *response)?;
     let key = headers
         .get(HEADER_APP_KEY)
         .and_then(|value| value.to_str().ok())
@@ -147,11 +275,8 @@ async fn authenticate(state: &AppState, headers: &HeaderMap, peer: Option<Socket
         Ok(None) => return Err(failure(StatusCode::UNAUTHORIZED, "missing or unknown key")),
         Err(error) => return Err(storage_failure(&error)),
     };
-    let addr = client_ip(headers, peer, state.config.trust_proxy);
-    if let Err(wait) = state.limiters.check(&key, addr, Instant::now()) {
-        let mut response = failure(StatusCode::TOO_MANY_REQUESTS, "rate limited");
-        response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(wait));
-        return Err(response);
+    if let Err(wait) = state.limiters.check_key(&key, Instant::now()) {
+        return Err(rate_limited(wait));
     }
     Ok(app)
 }
@@ -159,9 +284,13 @@ async fn authenticate(state: &AppState, headers: &HeaderMap, peer: Option<Socket
 /// The address used for rate limiting only. With a trusted proxy it is the last `X-Forwarded-For` entry,
 /// the one the proxy itself appended; earlier entries are client-supplied and can be forged.
 pub(crate) fn client_ip(headers: &HeaderMap, peer: Option<SocketAddr>, trust_proxy: bool) -> IpAddr {
+    // The proxy appends to the last header line it sees, so only the last line's last entry is trustworthy
+    // even when a client sent several `X-Forwarded-For` lines of its own.
     if trust_proxy
         && let Some(addr) = headers
-            .get("x-forwarded-for")
+            .get_all("x-forwarded-for")
+            .iter()
+            .next_back()
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.rsplit(',').next())
             .and_then(|last| last.trim().parse::<IpAddr>().ok())
@@ -178,6 +307,9 @@ async fn ingest_handler(State(state): State<AppState>, request: Request) -> Resp
         Ok(app) => app,
         Err(response) => return response,
     };
+    if state.storage_full().await {
+        return failure(StatusCode::INSUFFICIENT_STORAGE, "storage full");
+    }
     let bytes = match read_body(&parts.headers, body).await {
         Ok(bytes) => bytes,
         Err(response) => return response,
@@ -189,7 +321,7 @@ async fn ingest_handler(State(state): State<AppState>, request: Request) -> Resp
         Ok(envelope) => envelope,
         Err(_) => return failure(StatusCode::BAD_REQUEST, "malformed envelope"),
     };
-    let prepared = match ingest::prepare(envelope, crate::now_ms()) {
+    let prepared = match ingest::prepare_with(envelope, crate::now_ms(), state.config.retention_days) {
         Ok(prepared) => prepared,
         Err(error) => return failure(StatusCode::BAD_REQUEST, &error.to_string()),
     };
@@ -220,13 +352,14 @@ async fn forget_handler(State(state): State<AppState>, request: Request) -> Resp
     if forget.install_id.is_empty() || forget.install_id.len() > 64 {
         return failure(StatusCode::BAD_REQUEST, "install_id is missing or malformed");
     }
+    // The reply is the same whether or not the install existed, so it cannot be used to probe for install ids.
     match blocking(&state.store, move |store| store.forget(app.id, &forget.install_id)).await {
-        Ok(deleted) => {
+        Ok(_) => {
             #[derive(Serialize)]
             struct Forgotten {
-                deleted: u64,
+                ok: bool,
             }
-            json(StatusCode::OK, &Forgotten { deleted })
+            json(StatusCode::OK, &Forgotten { ok: true })
         }
         Err(error) => storage_failure(&error),
     }
@@ -318,6 +451,17 @@ mod tests {
         assert_eq!(client_ip(&headers, Some(peer), false), peer.ip());
         assert_eq!(client_ip(&headers, Some(peer), true), "9.9.9.9".parse::<IpAddr>().unwrap());
         headers.insert("x-forwarded-for", HeaderValue::from_static("garbage"));
+        assert_eq!(client_ip(&headers, Some(peer), true), peer.ip());
+    }
+
+    #[test]
+    fn several_forwarded_for_lines_use_the_last_line_and_its_last_entry() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-for", HeaderValue::from_static("6.6.6.6"));
+        headers.append("x-forwarded-for", HeaderValue::from_static("5.5.5.5, 9.9.9.9"));
+        let peer: SocketAddr = "10.0.0.1:5555".parse().unwrap();
+        assert_eq!(client_ip(&headers, Some(peer), true), "9.9.9.9".parse::<IpAddr>().unwrap());
+        headers.append("x-forwarded-for", HeaderValue::from_static("not an address"));
         assert_eq!(client_ip(&headers, Some(peer), true), peer.ip());
     }
 

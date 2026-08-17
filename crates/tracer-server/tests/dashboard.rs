@@ -600,7 +600,20 @@ fn secure_cookie_flag_follows_the_setting() {
     let mut b = Browser::new(&server);
     let login = b.login("admin", PASSWORD);
     assert_eq!(login.status, 303);
-    assert!(login.headers["set-cookie"].iter().any(|c| c.starts_with("tracer_session=") && c.contains("; Secure")));
+    let cookies = &login.headers["set-cookie"];
+    let session = cookies.iter().find(|c| c.starts_with("__Host-tracer_session=")).expect("a __Host- session cookie");
+    assert!(session.contains("; Secure") && session.contains("Path=/") && !session.contains("Domain"), "{session}");
+    assert!(cookies.iter().any(|c| c.starts_with("__Secure-tracer_login=") && c.contains("; Secure")));
+}
+
+#[test]
+fn cookies_are_secure_by_default_and_plain_http_is_an_explicit_opt_out() {
+    assert!(tracer_server::config::Config::default().secure_cookies);
+    let server = TestServer::demo();
+    ensure_admin(&server);
+    let login = Browser::new(&server).login("admin", PASSWORD);
+    let session = login.headers["set-cookie"].iter().find(|c| c.starts_with("tracer_session=")).expect("a plain session cookie").clone();
+    assert!(!session.contains("Secure"), "{session}");
 }
 
 #[test]
@@ -627,7 +640,8 @@ fn a_wrong_password_looks_exactly_like_an_unknown_user() {
 
 #[test]
 fn login_needs_its_form_token_and_is_rate_limited() {
-    let server = TestServer::demo_with(|config| config.rate_per_min = 60);
+    // The login limit is independent of the ingest limit: switching ingest limiting off leaves it on.
+    let server = TestServer::demo_with(|config| config.rate_per_min = 0);
     ensure_admin(&server);
     let mut b = Browser::new(&server);
     // No token, wrong token, and no cookie are all refused before any password check.
@@ -649,6 +663,52 @@ fn login_needs_its_form_token_and_is_rate_limited() {
     assert!(limited.header("retry-after").parse::<u64>().unwrap() >= 1);
     // Even the right password is refused while limited.
     assert_eq!(b.login("admin", PASSWORD).status, 429);
+}
+
+#[test]
+fn password_checks_wait_for_a_free_slot() {
+    let server = TestServer::demo();
+    ensure_admin(&server);
+    let slots = server.state.login_slots.clone();
+    let all = slots.clone().try_acquire_many_owned(tracer_server::http::LOGIN_CONCURRENCY as u32).unwrap();
+    let base = server.base.clone();
+    let started = std::time::Instant::now();
+    let worker = std::thread::spawn(move || {
+        let mut browser = Browser {
+            base,
+            agent: ureq::Agent::config_builder().http_status_as_error(false).max_redirects(0).max_redirects_will_error(false).build().into(),
+            cookies: BTreeMap::new(),
+        };
+        browser.login("admin", PASSWORD).status
+    });
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(!worker.is_finished(), "the password check ran without a free slot");
+    drop(all);
+    assert_eq!(worker.join().unwrap(), 303);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(700));
+}
+
+#[test]
+fn repeated_failures_for_one_user_name_slow_every_attempt_the_same_way() {
+    let server = seeded();
+    // Five wrong guesses at one name; the extra wait starts after the third.
+    for _ in 0..4 {
+        assert_eq!(Browser::new(&server).login("admin", "wrong").status, 401);
+    }
+    let timed = |user: &str, password: &str| {
+        let started = std::time::Instant::now();
+        let status = Browser::new(&server).login(user, password).status;
+        (status, started.elapsed())
+    };
+    let (status, wrong_for_real_user) = timed("admin", "wrong");
+    assert_eq!(status, 401);
+    assert!(wrong_for_real_user >= std::time::Duration::from_millis(500), "{wrong_for_real_user:?}");
+    // A name that does not exist gets nothing different once it has the same history.
+    for _ in 0..4 {
+        Browser::new(&server).login("ghost", "wrong");
+    }
+    let (_, wrong_for_ghost) = timed("ghost", "wrong");
+    assert!(wrong_for_ghost >= std::time::Duration::from_millis(500), "{wrong_for_ghost:?}");
 }
 
 #[test]

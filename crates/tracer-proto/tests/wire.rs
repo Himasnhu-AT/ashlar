@@ -76,3 +76,20 @@ fn name_validation() {
     assert_eq!(validate_name("file."), Err(NameError::BadSeparator));
     assert!(const_str_eq("abc", "abc") && !const_str_eq("abc", "abd") && !const_str_eq("abc", "ab"));
 }
+
+#[test]
+fn frame_stats_arithmetic_saturates_instead_of_overflowing() {
+    let mut huge = tracer_proto::FrameStats::empty();
+    huge.count = u64::MAX;
+    huge.sum_us = u64::MAX;
+    huge.slow = u64::MAX;
+    huge.frozen = u64::MAX;
+    huge.buckets = vec![u64::MAX; tracer_proto::FRAME_BUCKETS];
+    let mut total = huge.clone();
+    total.merge(&huge);
+    assert_eq!((total.count, total.sum_us, total.slow, total.frozen), (u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    assert!(total.buckets.iter().all(|bucket| *bucket == u64::MAX));
+    total.record(800_000);
+    assert_eq!(total.count, u64::MAX);
+    assert_eq!(total.sum_us, u64::MAX);
+}

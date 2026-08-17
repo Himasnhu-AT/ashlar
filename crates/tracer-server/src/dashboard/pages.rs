@@ -280,7 +280,7 @@ pub fn usage(app: &AppRecord, f: &Filters, u: &UsagePage, ingest_url: &str) -> M
                 ],
             }))
             p class="note" { "Idle time is the last two parts together. Totals come from the session heartbeats the SDK sent." }
-            h2 { "Events by count" }
+            h2 { "Declared events by count" }
             (event_bars("Top events by count", "Events", by_count.iter().map(|e| (e.name.clone(), e.count as f64)).collect()))
             h2 { "Events by installs" }
             (event_bars("Top events by installs", "Install-days (installs per day, summed)", by_installs.iter().map(|e| (e.name.clone(), e.installs as f64)).collect()))
@@ -292,11 +292,24 @@ pub fn usage(app: &AppRecord, f: &Filters, u: &UsagePage, ingest_url: &str) -> M
                     }
                 }
             }
+            @if !u.undeclared.is_empty() {
+                h2 { "Undeclared events" }
+                p class="note" {
+                    "These events are not in the catalog the app declared for its version. Event names come from the client, "
+                    "so anyone holding the write key can send any name: treat this table as unverified."
+                }
+                div class="scroll" {
+                    table class="data" {
+                        thead { tr { th scope="col" { "Event" } th scope="col" { "Category" } th scope="col" class="num" { "Count" } th scope="col" class="num" { "Install-days" } } }
+                        tbody { @for e in &u.undeclared { tr { th scope="row" { (e.name) } td { (e.category) } td class="num" { (fmt::int(e.count)) } td class="num" { (fmt::int(e.installs)) } } } }
+                    }
+                }
+            }
             h2 { "Declared but never fired" }
             @if u.never_fired.is_empty() {
                 p { "Every declared event has fired at least once, or no catalog has been received." }
             } @else {
-                p class="note" { "Events in the catalog sent by the SDK that have no recorded use on any day." }
+                p class="note" { "Events in the catalog most installs of the version reported that have no recorded use on any day (at most 200 shown)." }
                 div class="scroll" {
                     table class="data narrow" {
                         thead { tr { th scope="col" { "Event" } th scope="col" { "Category" } } }

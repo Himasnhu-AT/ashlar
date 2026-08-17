@@ -78,7 +78,7 @@ pub fn load_report(store: &dyn Store, app: &AppRecord, version: &str, now: i64) 
         &IssueFilter { version: Some(version), since_ms: from.saturating_mul(DAY_MS), sort: IssueSort::Count, ..IssueFilter::default() },
         TOP_ISSUES,
     )?;
-    let mut features = store.events_ranked(app.id, from, to, Some(version))?;
+    let mut features = store.events_ranked(app.id, from, to, Some(version), true)?;
     features.truncate(TOP_FEATURES);
     Ok(Some(Report {
         app: app.slug.clone(),
@@ -284,6 +284,18 @@ pub fn md_escape(text: &str) -> String {
             c => out.push(c),
         }
     }
+    neutralise_links(&out)
+}
+
+/// Client text must not turn into live links or notifications when the Markdown is pasted somewhere that
+/// renders it. A zero-width space breaks the pattern that autolinking and `@mention` detection look for
+/// (`scheme://`, `www.`, `@name`) without changing how the text reads.
+fn neutralise_links(text: &str) -> String {
+    const ZWSP: &str = "\u{200B}";
+    let mut out = text.replace("://", &format!(":{ZWSP}//")).replace('@', &format!("@{ZWSP}"));
+    for www in ["www.", "WWW.", "Www."] {
+        out = out.replace(www, &format!("{}{ZWSP}.", &www[..3]));
+    }
     out
 }
 
@@ -413,7 +425,18 @@ mod tests {
     fn markdown_escapes_markup_and_table_breakers() {
         assert_eq!(md_escape("<script>alert(1)</script>"), "&lt;script&gt;alert\\(1\\)&lt;/script&gt;");
         assert_eq!(md_escape("a|b\nc"), "a\\|b c");
-        assert_eq!(md_escape("[x](http://e)"), "\\[x\\]\\(http://e\\)");
+        assert_eq!(md_escape("[x](http://e)"), "\\[x\\]\\(http:\u{200B}//e\\)");
+    }
+
+    #[test]
+    fn markdown_does_not_leave_bare_urls_or_mentions_in_client_text() {
+        let escaped = md_escape("see https://evil.example/x, www.evil.example and @octocat or me@evil.example");
+        assert!(!escaped.contains("://") && !escaped.contains("www.") && !escaped.contains("@o") && !escaped.contains("@e"), "{escaped}");
+        // It still reads the same once the invisible characters are ignored.
+        assert_eq!(escaped.replace('\u{200B}', ""), "see https://evil.example/x, www.evil.example and @octocat or me@evil.example");
+        let r = report("click https://evil.example @everyone");
+        let md = markdown(&r);
+        assert!(!md.contains("https://evil") && !md.contains("@everyone"), "{md}");
     }
 
     #[test]

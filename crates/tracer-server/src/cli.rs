@@ -180,6 +180,9 @@ fn serve(config: &Config) -> Result<(), CliError> {
     runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind(config.bind).await?;
         log::info!("tracer-server {} listening on {}", env!("CARGO_PKG_VERSION"), listener.local_addr()?);
+        if let Some(warning) = bind_warning(config) {
+            log::warn!("{warning}");
+        }
         let timers = jobs::spawn_timers(Arc::clone(&store), config.retention_days);
         let app = http::router(AppState::new(store, config.clone()));
         let result = http::serve(listener, app, http::ctrl_c()).await;
@@ -189,6 +192,19 @@ fn serve(config: &Config) -> Result<(), CliError> {
         log::info!("shut down");
         result.map_err(CliError::from)
     })
+}
+
+/// A warning for a server reachable beyond this machine that does not read client addresses from a proxy.
+pub fn bind_warning(config: &Config) -> Option<String> {
+    if config.bind.ip().is_loopback() || config.trust_proxy {
+        return None;
+    }
+    Some(format!(
+        "listening on {} without TRACER_TRUST_PROXY=1: if a reverse proxy sits in front, every client appears to come from \
+         the proxy's address, so the per-address and login rate limits are shared by all of them and one noisy client can \
+         lock the others out. Set TRACER_TRUST_PROXY=1 behind a proxy that sets X-Forwarded-For, or bind to 127.0.0.1.",
+        config.bind
+    ))
 }
 
 /// A new write key: `tk_` plus 192 random bits in URL-safe base64.
@@ -229,7 +245,11 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 pub fn main(args: Vec<String>) -> std::process::ExitCode {
     crate::logging::init();
     let result = parse(&args).and_then(|command| {
-        let config = Config::from_env()?;
+        let mut config = Config::from_env()?;
+        if matches!(command, Command::AdminCreate { .. }) {
+            // The password is read only here, by the one command that needs it.
+            config.admin_password = std::env::var("TRACER_ADMIN_PASSWORD").ok().filter(|password| !password.is_empty());
+        }
         let stdout = std::io::stdout();
         let stdin = std::io::stdin();
         execute(command, &config, &mut stdout.lock(), &mut stdin.lock())
@@ -263,6 +283,14 @@ mod tests {
         assert!(parse(&args(&["rollup", "--days", "0"])).is_err());
         assert!(parse(&args(&["app", "create", "only-slug"])).is_err());
         assert!(parse(&args(&["frobnicate"])).is_err());
+    }
+
+    #[test]
+    fn a_public_bind_without_a_trusted_proxy_warns() {
+        let public = Config { bind: "0.0.0.0:8090".parse().unwrap(), ..Config::default() };
+        assert!(bind_warning(&public).unwrap().contains("TRACER_TRUST_PROXY"));
+        assert!(bind_warning(&Config { trust_proxy: true, ..public }).is_none());
+        assert!(bind_warning(&Config::default()).is_none());
     }
 
     #[test]

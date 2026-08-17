@@ -378,17 +378,17 @@ impl FrameStats {
         if self.buckets.len() != FRAME_BUCKETS {
             self.buckets.resize(FRAME_BUCKETS, 0);
         }
-        self.count += 1;
-        self.sum_us += u64::from(us);
+        self.count = self.count.saturating_add(1);
+        self.sum_us = self.sum_us.saturating_add(u64::from(us));
         self.max_us = self.max_us.max(us);
         if us > SLOW_FRAME_US {
-            self.slow += 1;
+            self.slow = self.slow.saturating_add(1);
         }
         if us > FROZEN_FRAME_US {
-            self.frozen += 1;
+            self.frozen = self.frozen.saturating_add(1);
         }
         if let Some(slot) = self.buckets.get_mut(Self::bucket_index(us)) {
-            *slot += 1;
+            *slot = slot.saturating_add(1);
         }
     }
 
@@ -396,13 +396,13 @@ impl FrameStats {
         if self.buckets.len() < FRAME_BUCKETS {
             self.buckets.resize(FRAME_BUCKETS, 0);
         }
-        self.count += other.count;
-        self.sum_us += other.sum_us;
+        self.count = self.count.saturating_add(other.count);
+        self.sum_us = self.sum_us.saturating_add(other.sum_us);
         self.max_us = self.max_us.max(other.max_us);
-        self.slow += other.slow;
-        self.frozen += other.frozen;
+        self.slow = self.slow.saturating_add(other.slow);
+        self.frozen = self.frozen.saturating_add(other.frozen);
         for (slot, add) in self.buckets.iter_mut().zip(&other.buckets) {
-            *slot += *add;
+            *slot = slot.saturating_add(*add);
         }
     }
 

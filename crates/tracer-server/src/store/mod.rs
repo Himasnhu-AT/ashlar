@@ -55,6 +55,8 @@ pub struct PruneStats {
 pub trait Store: Send + Sync + 'static {
     /// Cheap liveness check for the health route.
     fn health(&self) -> StoreResult<()>;
+    /// Size of the database in bytes, for the ingest size ceiling.
+    fn size_bytes(&self) -> StoreResult<u64>;
 
     // ---- apps, keys, admins ----
 
@@ -82,7 +84,7 @@ pub trait Store: Send + Sync + 'static {
     // ---- jobs ----
 
     /// Recomputes the `daily_*` rollups (except drops) for days `from_day..=to_day` (days since the epoch)
-    /// by delete and insert inside one transaction.
+    /// by delete and insert, one app per transaction.
     fn rollup(&self, from_day: i64, to_day: i64) -> StoreResult<()>;
     /// Deletes raw rows older than `retention_days` whole days before `now`. Rollups are kept.
     fn prune(&self, now: i64, retention_days: u32) -> StoreResult<PruneStats>;
@@ -121,8 +123,10 @@ pub trait Store: Send + Sync + 'static {
     fn perf_rows(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<PerfRow>>;
     /// Counters and gauges from recent raw perf rows.
     fn recent_custom_metrics(&self, app_id: i64, since_day: i64, version: Option<&str>, limit: i64) -> StoreResult<Vec<CustomRow>>;
-    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>) -> StoreResult<Vec<EventRow>>;
-    /// Declared events that have never been fired, from the catalog of `version` or of any version.
+    /// Events by use. `declared` picks the events a catalog lists (true) or the ones it does not (false).
+    fn events_ranked(&self, app_id: i64, from_day: i64, to_day: i64, version: Option<&str>, declared: bool) -> StoreResult<Vec<EventRow>>;
+    /// Declared events that have never been fired, from the catalog most installs of `version` reported (or,
+    /// without a version, of each version). A catalog nobody else reported cannot add to the list.
     fn never_fired(&self, app_id: i64, version: Option<&str>) -> StoreResult<Vec<CatalogEntry>>;
     fn drops(&self, app_id: i64, from_day: i64, to_day: i64) -> StoreResult<Vec<DropRow>>;
 }

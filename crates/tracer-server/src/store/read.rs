@@ -245,23 +245,34 @@ pub fn recent_custom_metrics(conn: &Connection, app_id: i64, since_day: i64, ver
         .collect()
 }
 
-pub fn events_ranked(conn: &Connection, app_id: i64, from: i64, to: i64, version: Option<&str>) -> rusqlite::Result<Vec<EventRow>> {
+pub fn events_ranked(conn: &Connection, app_id: i64, from: i64, to: i64, version: Option<&str>, declared: bool) -> rusqlite::Result<Vec<EventRow>> {
     let mut stmt = conn.prepare_cached(
         "SELECT name, min(category), sum(count), sum(installs) FROM daily_events
-         WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND (?4 IS NULL OR version = ?4)
+         WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND (?4 IS NULL OR version = ?4) AND declared = ?6
          GROUP BY name ORDER BY sum(count) DESC, name LIMIT ?5",
     )?;
-    stmt.query_map(params![app_id, from, to, version, MAX_EVENTS], |row| {
+    stmt.query_map(params![app_id, from, to, version, MAX_EVENTS, declared], |row| {
         Ok(EventRow { name: row.get(0)?, category: row.get(1)?, count: row.get(2)?, installs: row.get(3)? })
     })?
     .collect()
 }
 
-/// Declared events (in the catalog of `version`, or of any version) that have no rollup row on any day.
+/// Declared events that have no rollup row on any day, from the catalog most installs of a version reported:
+/// for each version, the catalog hash named by the most distinct installs (ties go to the smaller hash). A
+/// catalog only one hostile client sent therefore cannot flood the list, which is also capped.
 pub fn never_fired(conn: &Connection, app_id: i64, version: Option<&str>) -> rusqlite::Result<Vec<CatalogEntry>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT ce.name, min(ce.category) FROM catalog_events ce
-         WHERE ce.app_id = ?1 AND (?2 IS NULL OR ce.version = ?2)
+        "WITH dominant AS (
+             SELECT version, hash FROM (
+                 SELECT version, catalog_hash AS hash,
+                        ROW_NUMBER() OVER (PARTITION BY version ORDER BY count(DISTINCT install_id) DESC, catalog_hash) AS rank
+                 FROM sessions
+                 WHERE app_id = ?1 AND catalog_hash IS NOT NULL AND (?2 IS NULL OR version = ?2)
+                 GROUP BY version, catalog_hash)
+             WHERE rank = 1)
+         SELECT ce.name, min(ce.category) FROM catalog_events ce
+         JOIN dominant d ON d.version = ce.version AND d.hash = ce.hash
+         WHERE ce.app_id = ?1
            AND NOT EXISTS (SELECT 1 FROM daily_events de WHERE de.app_id = ce.app_id AND de.name = ce.name)
          GROUP BY ce.name ORDER BY ce.name LIMIT ?3",
     )?;
@@ -270,8 +281,8 @@ pub fn never_fired(conn: &Connection, app_id: i64, version: Option<&str>) -> rus
 
 pub fn drops(conn: &Connection, app_id: i64, from: i64, to: i64) -> rusqlite::Result<Vec<DropRow>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT reason, sum(count) FROM daily_drops WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
-         GROUP BY reason ORDER BY sum(count) DESC, reason LIMIT ?4",
+        "SELECT reason, sum(min(count, 1000000000000)) FROM daily_drops WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         GROUP BY reason ORDER BY 2 DESC, reason LIMIT ?4",
     )?;
     stmt.query_map(params![app_id, from, to, MAX_DROPS], |row| Ok(DropRow { reason: row.get(0)?, count: row.get(1)? }))?.collect()
 }
