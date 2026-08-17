@@ -33,8 +33,9 @@ fn main() -> ExitCode {
         "test" => &[("test", test)],
         "wasm" => &[("wasm", wasm)],
         "msrv" => &[("msrv", msrv)],
+        "demo" => &[("demo", demo)],
         _ => {
-            eprintln!("usage: cargo xtask <ci|fmt|names|clippy|test|wasm|msrv>");
+            eprintln!("usage: cargo xtask <ci|fmt|names|clippy|test|wasm|msrv|demo>");
             return ExitCode::FAILURE;
         }
     };
@@ -80,6 +81,13 @@ fn msrv() -> bool {
         return true;
     }
     cargo(&[&toolchain, "check", "-p", "tracer-proto", "-p", "tracer-sdk", "-p", "tracer-server"])
+}
+
+/// Checks and lints the windowed demo, which lives outside the workspace because its GUI toolkit has a
+/// very large dependency tree. Not part of `ci`. It compiles the demo; it does not run it.
+fn demo() -> bool {
+    cargo(&["check", "--manifest-path", "examples/demo-gui/Cargo.toml", "--locked"])
+        && cargo(&["clippy", "--manifest-path", "examples/demo-gui/Cargo.toml", "--locked", "--", "-D", "warnings"])
 }
 
 /// Fails when a forbidden word appears in any tracked text file.

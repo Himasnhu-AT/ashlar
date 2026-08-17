@@ -44,6 +44,8 @@ tracer.heartbeat();             // once per main-loop turn
 
 ## Documentation
 
+- [Integrating the SDK into a host app](docs/integration.md)
+- [Self-hosting the server](docs/self-hosting.md)
 - [Architecture](docs/architecture.md)
 - [Wire format](docs/wire-format.md)
 - [Privacy and collected fields](docs/privacy.md)

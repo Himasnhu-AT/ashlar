@@ -1,0 +1,24 @@
+[package]
+name = "demo-cli"
+description = "A scriptable host process that exercises the SDK end to end"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tracer-sdk.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tracer-proto.workspace = true
+tracer-server = { path = "../../crates/tracer-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+ureq = { version = "3", default-features = false, features = ["gzip"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tempfile = "3"
+serde_json.workspace = true
+
+[lints]
+workspace = true
