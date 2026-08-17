@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use tracer_proto::{Catalog, CatalogEvent, ConsentCategory, Crash, CrashKind, Item, ItemBody, Perf, SessionStatus, Signal};
 
-use super::files::testing::TempDir;
-use super::files::{lock, read_json};
+use super::files::testing::{TempDir, runs_in_own_process};
+use super::files::{lock, read_json, write_json};
+use super::identity::derived_id;
 use super::session::{Marker, SESSION_FILE};
 use super::spool::SPOOL_DIR;
 use super::{DROP_BUSY, DROP_QUEUE_FULL, Pipeline, SDK_DIR};
@@ -67,11 +68,76 @@ fn session_start_is_on_disk_after_start_with_catalog_and_selection() {
     assert_eq!(start.catalog.as_ref().map(|catalog| catalog.events.len()), Some(2));
     assert_eq!(start.listening, vec!["file".to_owned()]);
     assert_eq!(start.signals, vec!["session", "usage", "crash", "hang", "perf", "sys", "logs"]);
-    let marker: Marker = read_json(&dir.path().join(SDK_DIR).join(SESSION_FILE)).unwrap();
+    let marker: Marker = read_json(&pipeline.session_dir().join(SESSION_FILE)).unwrap();
     assert_eq!(marker.header.session_id, pipeline.session_id());
     assert_eq!(marker.header.install_id, pipeline.install_id());
     assert!(!marker.panicked);
-    assert_eq!(pipeline.data_dir(), dir.path().join(SDK_DIR));
+    assert_eq!(pipeline.session_dir(), dir.path().join(SDK_DIR).join(SPOOL_DIR).join(pipeline.session_id()));
+}
+
+/// Ends `pipeline` and leaves its folder as a killed process would have: marker present, lock free.
+fn leave_unclean(pipeline: &Pipeline) -> String {
+    let marker: Marker = read_json(&pipeline.session_dir().join(SESSION_FILE)).unwrap();
+    pipeline.shutdown();
+    std::fs::create_dir_all(pipeline.session_dir()).unwrap();
+    assert!(write_json(&pipeline.session_dir().join(SESSION_FILE), &marker));
+    pipeline.session_id()
+}
+
+#[test]
+fn an_unclean_session_is_reported_with_ids_derived_from_its_session_id() {
+    let dir = TempDir::new("pipeline");
+    let config = config(dir.path());
+    let gone = leave_unclean(&idle(&config));
+    let reports = |lines: Vec<(String, u8, Item)>| -> Vec<(u8, Item)> {
+        lines
+            .into_iter()
+            .filter(|(session, _, _)| *session == gone)
+            .map(|(_, category, item)| (category, item))
+            .filter(|(_, item)| {
+                !matches!(item.body, ItemBody::SessionStart(_) | ItemBody::SessionEnd(tracer_proto::SessionEnd { status: SessionStatus::Exited, .. }))
+            })
+            .collect()
+    };
+    let adopter = idle(&config);
+    let first = reports(spooled(dir.path()));
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert!(matches!(&first[0], (b'u', Item { body: ItemBody::SessionEnd(end), .. }) if end.status == SessionStatus::Abnormal));
+    assert!(matches!(&first[1], (b'c', Item { body: ItemBody::Crash(crash), .. }) if crash.kind == CrashKind::UncleanExit && crash.fatal));
+    assert_eq!(first[0].1.id, derived_id(&gone, "session_end"));
+    assert_eq!(first[1].1.id, derived_id(&gone, "unclean_exit"));
+    assert!(!dir.path().join(SDK_DIR).join(SPOOL_DIR).join(&gone).join(SESSION_FILE).exists());
+    // Looking again reports nothing more.
+    adopter.shared.maintain();
+    assert_eq!(reports(spooled(dir.path())).len(), 2);
+    adopter.shutdown();
+
+    // Had the adopter died after writing the report but before removing the marker, the next process
+    // would write it again; the same ids let the server keep one.
+    let marker = Marker { panicked: false, ..read_json::<Marker>(&idle(&config).session_dir().join(SESSION_FILE)).unwrap() };
+    let mut repeated = marker.clone();
+    repeated.header.session_id = gone.clone();
+    assert!(write_json(&dir.path().join(SDK_DIR).join(SPOOL_DIR).join(&gone).join(SESSION_FILE), &repeated));
+    let _later = idle(&config);
+    let again = reports(spooled(dir.path()));
+    assert_eq!(again.len(), 4);
+    assert_eq!((&again[2].1.id, &again[3].1.id), (&first[0].1.id, &first[1].1.id));
+}
+
+#[test]
+fn the_session_summary_names_the_install_the_session_and_its_totals() {
+    let dir = TempDir::new("pipeline");
+    let pipeline = idle(&config(dir.path()));
+    pipeline.count_error();
+    pipeline.shared.sample(pipeline.shared.started + Duration::from_secs(90));
+    let summary = pipeline.session_summary();
+    let expected = format!(
+        "install_id: {}\nsession_id: {}\nstarted_ms: {}\nduration_s: 90\nfocused_s: 90\nactive_s: 0\nidle_s: 90\nerrors: 1\n",
+        pipeline.install_id(),
+        pipeline.session_id(),
+        pipeline.shared.started_ms
+    );
+    assert_eq!(summary, expected);
 }
 
 #[test]
@@ -125,6 +191,9 @@ fn submit_now_lands_on_disk_without_the_worker() {
 
 #[test]
 fn submit_now_tolerates_a_poisoned_lock() {
+    if runs_in_own_process("pipeline::tests::submit_now_tolerates_a_poisoned_lock") {
+        return;
+    }
     let dir = TempDir::new("pipeline");
     let pipeline = idle(&config(dir.path()));
     let poisoner = pipeline.clone();
@@ -139,7 +208,7 @@ fn submit_now_tolerates_a_poisoned_lock() {
     pipeline.submit_now(Signal::Crash, crash());
     pipeline.mark_panicked();
     assert_eq!(spooled(dir.path()).len(), 2);
-    assert!(read_json::<Marker>(&dir.path().join(SDK_DIR).join(SESSION_FILE)).unwrap().panicked);
+    assert!(read_json::<Marker>(&pipeline.session_dir().join(SESSION_FILE)).unwrap().panicked);
     pipeline.shutdown();
     assert_eq!(spooled(dir.path()).len(), 3);
 }
@@ -164,7 +233,7 @@ fn mark_panicked_and_errors_reach_the_marker() {
     pipeline.count_error();
     pipeline.count_error();
     pipeline.mark_panicked();
-    let marker: Marker = read_json(&dir.path().join(SDK_DIR).join(SESSION_FILE)).unwrap();
+    let marker: Marker = read_json(&pipeline.session_dir().join(SESSION_FILE)).unwrap();
     assert!(marker.panicked);
     assert_eq!(marker.errors, 2);
     assert!(marker.updated >= marker.started);
@@ -203,7 +272,7 @@ fn shutdown_writes_the_session_end_and_removes_the_marker() {
     pipeline.mark_panicked();
     pipeline.shutdown();
     pipeline.shutdown();
-    assert!(!dir.path().join(SDK_DIR).join(SESSION_FILE).exists());
+    assert!(!pipeline.session_dir().join(SESSION_FILE).exists());
     let lines = spooled(dir.path());
     assert_eq!(lines.len(), 2);
     // A panic was seen, but the thread ending the session is not panicking: the process survived it.
@@ -213,11 +282,14 @@ fn shutdown_writes_the_session_end_and_removes_the_marker() {
     pipeline.submit_now(Signal::Crash, crash());
     pipeline.mark_panicked();
     assert_eq!(spooled(dir.path()).len(), 2);
-    assert!(!dir.path().join(SDK_DIR).join(SESSION_FILE).exists());
+    assert!(!pipeline.session_dir().join(SESSION_FILE).exists());
 }
 
 #[test]
 fn a_session_that_ends_while_panicking_is_crashed() {
+    if runs_in_own_process("pipeline::tests::a_session_that_ends_while_panicking_is_crashed") {
+        return;
+    }
     let dir = TempDir::new("pipeline");
     let pipeline = idle(&config(dir.path()));
     pipeline.mark_panicked();
@@ -294,7 +366,7 @@ fn the_kill_switch_leaves_saved_consent_and_identity_alone() {
     assert!(!pipeline.allows(Signal::Usage));
     pipeline.shutdown();
     assert_eq!(std::fs::read(dir.path().join(SDK_DIR).join("consent.json")).unwrap(), before);
-    assert!(!dir.path().join(SDK_DIR).join(SESSION_FILE).exists());
+    assert!(!pipeline.session_dir().join(SESSION_FILE).exists());
 }
 
 #[test]

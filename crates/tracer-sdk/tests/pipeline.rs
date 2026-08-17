@@ -37,16 +37,21 @@ const WAIT: Duration = Duration::from_secs(10);
 // ---- helpers ----
 
 /// A folder under the build's temporary directory, removed on drop.
-struct TempDir(PathBuf);
+struct TempDir(PathBuf, bool);
 
 impl TempDir {
+    /// A folder another process created and will remove.
+    fn existing(path: PathBuf) -> Self {
+        Self(path, false)
+    }
+
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let name = format!("pipeline-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
         let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
-        Self(path)
+        Self(path, true)
     }
 
     fn path(&self) -> &Path {
@@ -61,7 +66,9 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        if self.1 {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
 
@@ -253,6 +260,25 @@ fn disk_bytes(dir: &Path) -> u64 {
     total
 }
 
+/// Bytes of items waiting in the spool: the segment files of every session folder. The folder of a
+/// running session also holds its lock, header and marker, which are not waiting for anything.
+fn pending_bytes(dir: &TempDir) -> u64 {
+    let mut total = 0;
+    for session in std::fs::read_dir(dir.sdk().join("spool")).into_iter().flatten().flatten() {
+        for file in std::fs::read_dir(session.path()).into_iter().flatten().flatten() {
+            if file.path().extension().is_some_and(|extension| extension == "jsonl") {
+                total += file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
+/// The folder a running tracer owns in the spool.
+fn session_dir(dir: &TempDir, tracer: &Tracer) -> PathBuf {
+    dir.sdk().join("spool").join(tracer.session_id())
+}
+
 /// Size of the spool at one moment. The worker may be evicting and appending while the folder is read,
 /// and a walk that straddles that would count a file that is gone together with one that replaced it, so
 /// this reads until two walks in a row agree.
@@ -387,7 +413,7 @@ fn consent_off_sends_nothing_for_the_category_and_removes_its_unsent_items() {
         tracer.track(AppEvent::FileOpen);
     }
     assert!(!tracer.flush_blocking(WAIT));
-    assert!(disk_bytes(&dir.sdk().join("spool")) > 0);
+    assert!(pending_bytes(&dir) > 0);
     assert!(tracer.consent(ConsentCategory::Usage));
 
     tracer.set_consent(ConsentCategory::Usage, false);
@@ -397,7 +423,7 @@ fn consent_off_sends_nothing_for_the_category_and_removes_its_unsent_items() {
     }
     server.set_offline(false);
     assert!(tracer.flush_blocking(WAIT));
-    assert_eq!(disk_bytes(&dir.sdk().join("spool")), 0);
+    assert_eq!(pending_bytes(&dir), 0);
     assert!(server.events().is_empty());
     assert!(!server.items().iter().any(|(_, item)| is_session_item(item)));
 
@@ -545,7 +571,7 @@ fn offline_then_online_delivers_the_backlog_exactly_once() {
     assert_eq!(ends.len(), 1);
     assert_eq!(ends[0].0.session_id, first_session);
     // Nothing is left, and nothing more is sent once there is nothing to send.
-    assert_eq!(disk_bytes(&dir.sdk().join("spool")), 0);
+    assert_eq!(pending_bytes(&dir), 0);
     let requests = server.seen().len();
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(server.seen().len(), requests);
@@ -588,7 +614,7 @@ fn a_large_backlog_is_split_into_envelopes_under_the_size_limit() {
         }
         assert!(!tracer.flush_blocking(WAIT), "chunk {chunk}");
     }
-    assert!(disk_bytes(&dir.sdk().join("spool")) > MAX_ENVELOPE_BYTES as u64);
+    assert!(pending_bytes(&dir) > MAX_ENVELOPE_BYTES as u64);
     server.set_offline(false);
     assert!(tracer.flush_blocking(WAIT));
     let stored: Vec<Seen> = server.seen().into_iter().filter(|seen| seen.status == 200).collect();
@@ -662,7 +688,7 @@ fn an_unknown_key_stops_sending_but_keeps_the_data() {
     assert!(!tracer.flush_blocking(WAIT));
     std::thread::sleep(Duration::from_millis(150));
     assert_eq!(server.seen().len(), 1, "nothing more may be sent after a 401");
-    assert!(disk_bytes(&dir.sdk().join("spool")) > 0);
+    assert!(pending_bytes(&dir) > 0);
     drop(tracer);
     assert_eq!(server.seen().len(), 1);
 
@@ -730,7 +756,7 @@ fn the_spool_stays_under_its_cap_and_evictions_are_reported() {
     // Every item is accounted for: delivered, or counted as dropped. The extra two are the session
     // start and the closing event.
     assert_eq!(delivered + evicted + drops.get("queue_full").copied().unwrap_or(0), total + 2, "{drops:?}");
-    assert_eq!(disk_bytes(&dir.sdk().join("spool")), 0);
+    assert_eq!(pending_bytes(&dir), 0);
 }
 
 #[test]
@@ -748,7 +774,7 @@ fn flush_blocking_reports_whether_everything_was_sent() {
     // No interval is due: only the flush can have sent these.
     assert!(tracer.flush_blocking(WAIT));
     assert_eq!(server.events().len(), 30);
-    assert_eq!(disk_bytes(&dir.sdk().join("spool")), 0);
+    assert_eq!(pending_bytes(&dir), 0);
 
     // Offline, a flush still returns as soon as the attempt has failed, with data left.
     server.set_offline(true);
@@ -837,7 +863,8 @@ fn a_clean_run_reports_its_start_heartbeats_and_end() {
     let server = Server::default();
     let started = Instant::now();
     let tracer = builder(&dir, &server).configure(|config| config.heartbeat_interval = Duration::from_millis(250)).init();
-    assert!(dir.sdk().join("session.json").exists());
+    let marker = session_dir(&dir, &tracer).join("session.json");
+    assert!(marker.exists());
     assert_eq!(tracer.session_id().len(), 32);
     assert_eq!(tracer.install_id().len(), 32);
     tracer.set_focused(false);
@@ -848,7 +875,9 @@ fn a_clean_run_reports_its_start_heartbeats_and_end() {
     let session = tracer.session_id();
     drop(tracer);
     let longest = started.elapsed();
-    assert!(!dir.sdk().join("session.json").exists());
+    // Everything was sent, so nothing of the session is left on disk: no marker, no folder.
+    assert!(!marker.exists());
+    assert_eq!(std::fs::read_dir(dir.sdk().join("spool")).unwrap().count(), 0);
 
     assert!(server.envelopes().iter().all(|envelope| envelope.session_id == session));
     let items: Vec<Item> = server.items().into_iter().map(|(_, item)| item).collect();
@@ -898,17 +927,21 @@ fn input_makes_focused_time_active() {
     assert!(totals.active_s >= 1 && totals.active_s + 1 >= totals.duration_s, "{totals:?}");
 }
 
-/// Runs a session, then puts its marker back after the clean shutdown removed it, as if the process
-/// had been killed. `edit` can change the marker first.
+/// Runs a session, then leaves its folder as a killed process would: the marker still there (after the
+/// clean shutdown removed it), no lock held, and none of the items it had recorded. `edit` can change the
+/// marker first. The two-process tests further down do this with a process that really is killed.
 fn leave_marker_behind(dir: &TempDir, server: &Server, edit: impl FnOnce(&mut serde_json::Value)) -> String {
     let tracer = builder(dir, server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
     let session = tracer.session_id();
-    let marker_path = dir.sdk().join("session.json");
-    let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(&marker_path).unwrap()).unwrap();
+    let folder = session_dir(dir, &tracer);
+    let mut marker: serde_json::Value = serde_json::from_slice(&std::fs::read(folder.join("session.json")).unwrap()).unwrap();
     drop(tracer);
-    assert!(!marker_path.exists());
+    assert!(!folder.join("session.json").exists());
     edit(&mut marker);
-    std::fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(dir.sdk().join("spool"));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("lock"), b"").unwrap();
+    std::fs::write(folder.join("session.json"), serde_json::to_vec(&marker).unwrap()).unwrap();
     session
 }
 
@@ -923,8 +956,6 @@ fn a_leftover_marker_is_reported_as_an_abnormal_end_and_an_unclean_exit() {
         marker["totals"] = serde_json::json!({"seq": 4, "duration_s": 240, "focused_s": 200, "active_s": 90, "idle_s": 150});
         marker["errors"] = serde_json::json!(3);
     });
-    // Whatever the clean shutdown left is cleared, so only what the next run reports is seen.
-    std::fs::remove_dir_all(dir.sdk().join("spool")).unwrap();
     server.set_offline(false);
 
     // The next run is a newer version; the report must still carry the previous run's header.
@@ -973,7 +1004,6 @@ fn a_leftover_marker_with_the_panicked_flag_is_a_crashed_end_and_no_extra_crash(
     let dir = TempDir::new();
     let server = Server::offline();
     let previous = leave_marker_behind(&dir, &server, |marker| marker["panicked"] = serde_json::json!(true));
-    std::fs::remove_dir_all(dir.sdk().join("spool")).unwrap();
     server.set_offline(false);
     let tracer = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
     assert!(tracer.flush_blocking(WAIT));
@@ -991,7 +1021,6 @@ fn a_leftover_marker_respects_consent_and_disabled_signals() {
     let dir = TempDir::new();
     let server = Server::offline();
     let previous = leave_marker_behind(&dir, &server, |_| {});
-    std::fs::remove_dir_all(dir.sdk().join("spool")).unwrap();
     server.set_offline(false);
     // The crash signal is not enabled in this run, so only the session end is reported.
     let tracer = builder(&dir, &server).init();
@@ -1093,17 +1122,17 @@ fn forget_wipes_local_data_asks_the_server_and_changes_the_install_id() {
         tracer.track(AppEvent::Undo);
     }
     assert!(!tracer.flush_blocking(WAIT));
-    std::fs::write(dir.sdk().join("breadcrumbs.jsonl"), b"{}\n").unwrap();
-    assert!(disk_bytes(&dir.sdk().join("spool")) > 0);
+    std::fs::write(session_dir(&dir, &tracer).join("breadcrumbs.jsonl"), b"{}\n").unwrap();
+    assert!(pending_bytes(&dir) > 0);
     assert!(dir.sdk().join("outbox.jsonl").exists());
 
     tracer.forget();
     let new_id = tracer.install_id();
     assert_ne!(new_id, old_id);
     assert_eq!(new_id.len(), 32);
-    assert_eq!(disk_bytes(&dir.sdk().join("spool")), 0);
+    assert_eq!(pending_bytes(&dir), 0);
     assert!(!dir.sdk().join("outbox.jsonl").exists());
-    assert!(!dir.sdk().join("breadcrumbs.jsonl").exists());
+    assert!(!session_dir(&dir, &tracer).join("breadcrumbs.jsonl").exists());
     let install = std::fs::read_to_string(dir.sdk().join("install.json")).unwrap();
     assert!(install.contains(&format!(r#""install_id":"{new_id}""#)));
 
@@ -1173,4 +1202,335 @@ fn a_tracer_without_a_data_dir_is_disabled_and_harmless() {
     assert_eq!((tracer.install_id(), tracer.session_id()), (String::new(), String::new()));
     drop(tracer);
     assert!(server.seen().is_empty());
+}
+
+// ---- several processes on one data directory ----
+
+/// Every item both servers stored, with the envelope it came in.
+fn all_items(servers: &[&Server]) -> Vec<(Envelope, Item)> {
+    servers.iter().flat_map(|server| server.items()).collect()
+}
+
+fn is_unclean_report(item: &Item) -> bool {
+    match &item.body {
+        ItemBody::Crash(crash) => crash.kind == CrashKind::UncleanExit,
+        ItemBody::SessionEnd(end) => end.status != SessionStatus::Exited,
+        _ => false,
+    }
+}
+
+#[test]
+fn two_tracers_on_one_data_directory_leave_each_other_alone() {
+    if reran_without_kill_switches("two_tracers_on_one_data_directory_leave_each_other_alone") {
+        return;
+    }
+    let dir = TempDir::new();
+    let (first_server, second_server) = (Server::default(), Server::default());
+    let signals = [Signal::Session, Signal::Usage, Signal::Crash];
+    let first = builder(&dir, &first_server).signals(&signals).init();
+    let second = builder(&dir, &second_server).signals(&signals).init();
+    assert_eq!(first.install_id(), second.install_id());
+    assert_ne!(first.session_id(), second.session_id());
+    assert!(session_dir(&dir, &first).join("lock").exists() && session_dir(&dir, &second).join("session.json").exists());
+
+    for _ in 0..5 {
+        first.track(AppEvent::FileOpen);
+    }
+    for _ in 0..7 {
+        second.track(AppEvent::Undo);
+    }
+    assert!(first.flush_blocking(WAIT) && second.flush_blocking(WAIT));
+
+    // The first can no longer send, so its next items wait in its folder. The second, which sends every
+    // few milliseconds, must not take them: not send them, not delete them.
+    first_server.set_offline(true);
+    for _ in 0..9 {
+        first.track(AppEvent::FileSave);
+    }
+    assert!(!first.flush_blocking(WAIT));
+    let waiting = pending_bytes(&dir);
+    assert!(waiting > 0);
+    for _ in 0..10 {
+        second.track(AppEvent::Undo);
+        assert!(second.flush_blocking(WAIT));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(pending_bytes(&dir), waiting);
+    assert!(second_server.envelopes().iter().all(|envelope| envelope.session_id == second.session_id()));
+    assert!(first_server.envelopes().iter().all(|envelope| envelope.session_id == first.session_id()));
+    first_server.set_offline(false);
+    assert!(first.flush_blocking(WAIT));
+
+    let items = all_items(&[&first_server, &second_server]);
+    assert_eq!(items.iter().map(|(_, item)| item.id.as_str()).collect::<HashSet<_>>().len(), items.len());
+    let count = |server: &Server, name: &str| server.events().iter().filter(|(event, _)| event == name).count();
+    assert_eq!((count(&first_server, "file.open"), count(&first_server, "file.save"), count(&first_server, "edit.undo")), (5, 9, 0));
+    assert_eq!((count(&second_server, "edit.undo"), count(&second_server, "file.save")), (17, 0));
+    // Neither took the other, running, for a session that ended badly.
+    assert!(!items.iter().any(|(_, item)| is_unclean_report(item)), "{items:?}");
+
+    // One ends cleanly while the other runs on; the one that ended leaves nothing behind.
+    let ended = session_dir(&dir, &first);
+    drop(first);
+    assert!(!ended.exists());
+    assert!(session_dir(&dir, &second).join("session.json").exists());
+    assert!(second.flush_blocking(WAIT));
+    drop(second);
+    let items = all_items(&[&first_server, &second_server]);
+    assert!(!items.iter().any(|(_, item)| is_unclean_report(item)));
+    assert_eq!(items.iter().filter(|(_, item)| matches!(item.body, ItemBody::SessionEnd(_))).count(), 2);
+    assert_eq!(std::fs::read_dir(dir.sdk().join("spool")).unwrap().count(), 0);
+}
+
+#[test]
+fn consent_switched_off_in_one_tracer_stops_the_other() {
+    if reran_without_kill_switches("consent_switched_off_in_one_tracer_stops_the_other") {
+        return;
+    }
+    let dir = TempDir::new();
+    let (first_server, second_server) = (Server::default(), Server::offline());
+    let first = builder(&dir, &first_server).init();
+    let second = builder(&dir, &second_server).init();
+    for _ in 0..6 {
+        second.track(AppEvent::Undo);
+    }
+    assert!(!second.flush_blocking(WAIT));
+    assert!(pending_bytes(&dir) > 0);
+
+    first.set_consent(ConsentCategory::Usage, false);
+    wait_for("the other tracer to see the change", || !second.consent(ConsentCategory::Usage));
+    // The other tracer drops what it had not sent, and records nothing more.
+    wait_for("the other tracer to delete its unsent items", || pending_bytes(&dir) == 0);
+    second.track(AppEvent::Undo);
+    second_server.set_offline(false);
+    assert!(second.flush_blocking(WAIT));
+    assert!(second_server.items().is_empty());
+    // A category switched off in the second is kept when the first changes another one.
+    second.set_consent(ConsentCategory::Crash, false);
+    first.set_consent(ConsentCategory::Usage, true);
+    wait_for("both to agree", || second.consent(ConsentCategory::Usage) && !first.consent(ConsentCategory::Crash));
+    second.notice_shown();
+    wait_for("the notice state to be shared", || !first.notice_pending());
+    second.track(AppEvent::FileOpen);
+    assert!(second.flush_blocking(WAIT));
+    assert_eq!(second_server.events(), vec![("file.open".to_owned(), false)]);
+}
+
+#[test]
+fn forget_in_one_tracer_is_followed_by_the_other() {
+    if reran_without_kill_switches("forget_in_one_tracer_is_followed_by_the_other") {
+        return;
+    }
+    let dir = TempDir::new();
+    let (first_server, second_server) = (Server::default(), Server::offline());
+    let first = builder(&dir, &first_server).init();
+    let second = builder(&dir, &second_server).init();
+    let old_id = first.install_id();
+    for _ in 0..6 {
+        second.track(AppEvent::Undo);
+    }
+    assert!(!second.flush_blocking(WAIT));
+
+    first.forget();
+    let new_id = first.install_id();
+    assert_ne!(new_id, old_id);
+    wait_for("the other tracer to take the new id", || second.install_id() == new_id);
+    wait_for("the other tracer to delete its unsent items", || pending_bytes(&dir) == 0);
+    second_server.set_offline(false);
+    second.track(AppEvent::FileSave);
+    assert!(first.flush_blocking(WAIT) && second.flush_blocking(WAIT));
+    // Nothing recorded under the old id leaves the second tracer after the forget.
+    assert!(second_server.envelopes().iter().all(|envelope| envelope.install_id == new_id));
+    assert_eq!(second_server.events(), vec![("file.save".to_owned(), false)]);
+    let forgets: Vec<ForgetRequest> = first_server.forgets().into_iter().chain(second_server.forgets()).collect();
+    assert!(!forgets.is_empty() && forgets.iter().all(|forget| forget.install_id == old_id), "{forgets:?}");
+    drop((first, second));
+    let after = builder(&dir, &first_server).init();
+    assert_eq!(after.install_id(), new_id);
+    assert!(after.flush_blocking(WAIT));
+    assert!(first_server.envelopes().iter().chain(&second_server.envelopes()).filter(|envelope| envelope.install_id == old_id).all(|envelope| {
+        // Only what the first tracer had sent before the forget.
+        envelope.items.iter().all(|item| matches!(item.body, ItemBody::SessionStart(_)))
+    }));
+}
+
+/// Not a test of its own: the part a second process plays in the tests below. `TRACER_TEST_ROLE` says
+/// which part, and the process works in the data directory the parent test gives it.
+#[test]
+fn multiprocess_child() {
+    let (Some(role), Some(path)) = (std::env::var_os("TRACER_TEST_ROLE"), std::env::var_os("TRACER_TEST_CHILD_DIR")) else { return };
+    let dir = TempDir::existing(PathBuf::from(path));
+    let pid = std::process::id();
+    // Written under another name and renamed, so the parent never reads half a file.
+    let report = |name: &str, text: String| {
+        let temporary = dir.path().join(format!("{name}.{pid}.part"));
+        std::fs::write(&temporary, text).unwrap();
+        std::fs::rename(&temporary, dir.path().join(name)).unwrap();
+    };
+    match role.to_str().unwrap() {
+        // Starts, says which install id it got, and ends.
+        "starter" => {
+            let tracer = builder(&dir, &Server::offline()).init();
+            report(&format!("install-{pid}.txt"), tracer.install_id());
+        }
+        // Records a log line and some events it cannot send, then waits to be killed.
+        "victim" => {
+            let server = Server::offline();
+            let tracer = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash, Signal::Logs]).init();
+            let logger = tracer.logger(None);
+            logger.log(&log::Record::builder().args(format_args!("about to do the risky thing")).level(log::Level::Warn).target("host").build());
+            for _ in 0..12 {
+                tracer.track(AppEvent::FileSave);
+            }
+            assert!(!tracer.flush_blocking(WAIT));
+            wait_for("the log line to be saved", || session_dir(&dir, &tracer).join("breadcrumbs.jsonl").exists());
+            report("victim.txt", format!("{} {}", tracer.session_id(), tracer.install_id()));
+            loop {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        // Runs until the parent switches usage consent off, then shows that it stopped recording.
+        "listener" => {
+            let server = Server::default();
+            let tracer = builder(&dir, &server).init();
+            tracer.track(AppEvent::FileOpen);
+            tracer.track(AppEvent::FileOpen);
+            assert!(tracer.flush_blocking(WAIT));
+            report("listener-ready.txt", tracer.session_id());
+            wait_for("consent to be switched off by the parent", || !tracer.consent(ConsentCategory::Usage));
+            for _ in 0..5 {
+                tracer.track(AppEvent::FileSave);
+            }
+            assert!(tracer.flush_blocking(WAIT));
+            let names: Vec<String> = server.events().into_iter().map(|(name, _)| name).collect();
+            drop(tracer);
+            report("listener-done.txt", names.join(","));
+        }
+        other => panic!("unknown role {other}"),
+    }
+}
+
+fn spawn_child(role: &str, dir: &TempDir) -> std::process::Child {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", "multiprocess_child", "--test-threads=1"]);
+    child.env_remove("DO_NOT_TRACK").env_remove("TRACER_DISABLED").env("TRACER_TEST_ROLE", role).env("TRACER_TEST_CHILD_DIR", dir.path());
+    child.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    child.spawn().unwrap()
+}
+
+/// Waits for a file a child reports with, and returns its text.
+fn read_report(dir: &TempDir, name: &str, child: &mut std::process::Child) -> String {
+    let path = dir.path().join(name);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "timed out waiting for {name}");
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(path.exists(), "the child ended with {status} without writing {name}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::fs::read_to_string(path).unwrap()
+}
+
+#[test]
+fn processes_starting_together_on_a_fresh_directory_agree_on_the_install_id() {
+    if reran_without_kill_switches("processes_starting_together_on_a_fresh_directory_agree_on_the_install_id") {
+        return;
+    }
+    let dir = TempDir::new();
+    let mut children: Vec<std::process::Child> = (0..6).map(|_| spawn_child("starter", &dir)).collect();
+    let server = Server::default();
+    let own = builder(&dir, &server).init().install_id();
+    let mut ids = vec![own];
+    for child in &mut children {
+        let name = format!("install-{}.txt", child.id());
+        ids.push(read_report(&dir, &name, child));
+        assert!(child.wait().unwrap().success());
+    }
+    assert_eq!(ids[0].len(), 32);
+    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 1, "{ids:?}");
+}
+
+#[test]
+fn a_killed_process_is_reported_once_with_its_log_lines_by_whichever_process_sees_it_first() {
+    if reran_without_kill_switches("a_killed_process_is_reported_once_with_its_log_lines_by_whichever_process_sees_it_first") {
+        return;
+    }
+    let dir = TempDir::new();
+    let (first_server, second_server) = (Server::default(), Server::default());
+    let signals = [Signal::Session, Signal::Usage, Signal::Crash];
+    let first = builder(&dir, &first_server).signals(&signals).init();
+    let second = builder(&dir, &second_server).signals(&signals).init();
+    let servers = [&first_server, &second_server];
+
+    let mut victim = spawn_child("victim", &dir);
+    let report = read_report(&dir, "victim.txt", &mut victim);
+    let (victim_session, victim_install) = report.split_once(' ').unwrap();
+    assert_eq!(victim_install, first.install_id());
+    let victim_dir = dir.sdk().join("spool").join(victim_session);
+    let of_victim = |items: Vec<(Envelope, Item)>| {
+        items.into_iter().filter(|(envelope, _)| envelope.session_id == victim_session).map(|(_, item)| item).collect::<Vec<Item>>()
+    };
+
+    // While it runs, the two tracers here pass over it many times and leave it alone: nothing of it is
+    // sent, nothing is deleted, and it is not taken for a session that ended badly.
+    let waiting = disk_bytes(&victim_dir);
+    for _ in 0..15 {
+        first.track(AppEvent::FileOpen);
+        assert!(first.flush_blocking(WAIT) && second.flush_blocking(WAIT));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(victim.try_wait().unwrap().is_none(), "the victim is still running");
+    assert!(of_victim(all_items(&servers)).is_empty());
+    assert!(!all_items(&servers).iter().any(|(_, item)| is_unclean_report(item)));
+    assert!(disk_bytes(&victim_dir) >= waiting && victim_dir.join("session.json").exists() && victim_dir.join("breadcrumbs.jsonl").exists());
+
+    victim.kill().unwrap();
+    victim.wait().unwrap();
+    wait_for("the unclean exit to be reported", || of_victim(all_items(&servers)).iter().any(is_unclean_report));
+    // Both go on looking; nothing is reported a second time.
+    for _ in 0..10 {
+        assert!(first.flush_blocking(WAIT) && second.flush_blocking(WAIT));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let items = of_victim(all_items(&servers));
+    assert_eq!(items.iter().map(|item| item.id.as_str()).collect::<HashSet<_>>().len(), items.len(), "{items:?}");
+    let crashes: Vec<_> = items.iter().filter_map(|item| if let ItemBody::Crash(crash) = &item.body { Some(crash) } else { None }).collect();
+    assert_eq!(crashes.len(), 1);
+    assert_eq!((crashes[0].kind, crashes[0].fatal), (CrashKind::UncleanExit, true));
+    assert!(
+        crashes[0].breadcrumbs.iter().any(|crumb| crumb.message.contains("about to do the risky thing") && crumb.level == "warn"),
+        "{:?}",
+        crashes[0].breadcrumbs
+    );
+    let ends: Vec<_> = items.iter().filter_map(|item| if let ItemBody::SessionEnd(end) = &item.body { Some(end.status) } else { None }).collect();
+    assert_eq!(ends, vec![SessionStatus::Abnormal]);
+    // What it had recorded and could not send arrives too, once, under its own session.
+    assert_eq!(items.iter().filter(|item| matches!(&item.body, ItemBody::Event(event) if event.name == "file.save")).count(), 12);
+    assert_eq!(items.iter().filter(|item| matches!(item.body, ItemBody::SessionStart(_))).count(), 1);
+    // One of the two did all of it, and the folder is gone.
+    let reporters = servers.iter().filter(|server| !of_victim(server.items()).is_empty()).count();
+    assert_eq!(reporters, 1);
+    assert!(!victim_dir.exists());
+    assert!(!all_items(&servers).iter().any(|(envelope, item)| envelope.session_id != victim_session && is_unclean_report(item)));
+}
+
+#[test]
+fn consent_switched_off_here_stops_another_process() {
+    if reran_without_kill_switches("consent_switched_off_here_stops_another_process") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    let tracer = builder(&dir, &server).init();
+    let mut listener = spawn_child("listener", &dir);
+    let listener_session = read_report(&dir, "listener-ready.txt", &mut listener);
+    assert_ne!(listener_session, tracer.session_id());
+    tracer.set_consent(ConsentCategory::Usage, false);
+    let recorded = read_report(&dir, "listener-done.txt", &mut listener);
+    assert!(listener.wait().unwrap().success());
+    // Only the two events from before the change; the five after it were never recorded.
+    assert_eq!(recorded, "file.open,file.open");
+    // And this process never touched the other's session.
+    assert!(server.envelopes().iter().all(|envelope| envelope.session_id == tracer.session_id()));
 }

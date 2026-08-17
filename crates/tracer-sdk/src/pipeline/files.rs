@@ -86,6 +86,27 @@ pub(crate) mod testing {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+
+    /// For a test that panics on purpose. The panic hook is process-wide, and tests elsewhere in this
+    /// crate replace it while they run, so a deliberate panic here would run through whatever hook one
+    /// of them has installed at that moment. Such a test therefore runs its body in a process of its
+    /// own: called in the test run, this starts that process for the test called `name` (its full
+    /// path) and returns true, and the caller returns; called in that process, it returns false.
+    pub(crate) fn runs_in_own_process(name: &str) -> bool {
+        const MARKER: &str = "TRACER_TEST_OWN_PROCESS";
+        if std::env::var_os(MARKER).is_some() {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--test-threads=1"])
+            .env(MARKER, "1")
+            .output()
+            .unwrap();
+        let report = String::from_utf8_lossy(&output.stdout);
+        // "1 passed" guards against a mistyped name, which would run nothing and still succeed.
+        assert!(output.status.success() && report.contains("1 passed"), "{name} in its own process:\n{report}");
+        true
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +135,9 @@ mod tests {
 
     #[test]
     fn soft_lock_survives_poison_and_gives_up_when_held() {
+        if super::testing::runs_in_own_process("pipeline::files::tests::soft_lock_survives_poison_and_gives_up_when_held") {
+            return;
+        }
         let mutex = std::sync::Arc::new(Mutex::new(5));
         let held = lock(&mutex);
         assert!(lock_soft(&mutex).is_none());

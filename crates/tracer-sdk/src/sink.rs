@@ -2,7 +2,7 @@
 //!
 //! The pipeline (queue, spool, transport, session, consent) implements [`Sink`]. The signal modules
 //! (crash, hang, perf, sys, logs) only ever talk to a `dyn Sink`, so they can be tested with
-//! [`testing::MemorySink`] and never touch the network or the spool directly.
+//! `testing::MemorySink` and never touch the network or the spool directly.
 
 use std::path::Path;
 
@@ -20,8 +20,15 @@ pub(crate) trait Sink: Send + Sync + 'static {
     /// True when the host enabled this signal and the end user has not switched it off.
     fn allows(&self, signal: Signal) -> bool;
 
-    /// The SDK's own directory inside the host's data directory.
-    fn data_dir(&self) -> &Path;
+    /// The directory of this process's session, inside the SDK's own directory. Files a signal module
+    /// saves for a later launch to find, such as recent log lines, go here: if this process dies,
+    /// whichever process adopts the directory gets them together with the rest of the session. The SDK's
+    /// directory itself is shared by every process of the host, so nothing per-process belongs there.
+    fn session_dir(&self) -> &Path;
+
+    /// A few plain `key: value` lines about the install and the running session (ids, start time, running
+    /// totals), for the local report.
+    fn session_summary(&self) -> String;
 
     /// Records that something was thrown away, for the `drops` item.
     fn count_drop(&self, reason: &'static str);
@@ -91,8 +98,12 @@ pub(crate) mod testing {
             self.denied.lock().map(|denied| !denied.contains(&signal)).unwrap_or(false)
         }
 
-        fn data_dir(&self) -> &Path {
+        fn session_dir(&self) -> &Path {
             &self.dir
+        }
+
+        fn session_summary(&self) -> String {
+            "install_id: test-install\nsession_id: test-session\n".to_owned()
         }
 
         fn count_drop(&self, reason: &'static str) {
