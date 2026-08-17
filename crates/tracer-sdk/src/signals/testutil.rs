@@ -39,21 +39,21 @@ pub(crate) struct Fixture {
     pub signals: Arc<Signals>,
     pub sink: Arc<MemorySink>,
     pub dir: TempDir,
-    /// Held while the panic hook is installed, so tests that swap the process-wide hook cannot overlap.
-    _serial: Option<MutexGuard<'static, ()>>,
 }
 
 impl Fixture {
+    /// Does not install the panic hook, so unrelated panics elsewhere in the process (other tests panic on
+    /// purpose) cannot show up as crashes in this fixture's sink.
     pub(crate) fn new(edit: impl FnOnce(&mut Config)) -> Self {
         Self::build(edit, false)
     }
 
-    /// Like [`Fixture::new`] for a caller that already holds [`serial`].
+    /// Installs the process-wide panic hook when the config enables `Crash`. The caller must hold [`serial`].
     pub(crate) fn new_locked(edit: impl FnOnce(&mut Config)) -> Self {
         Self::build(edit, true)
     }
 
-    fn build(edit: impl FnOnce(&mut Config), already_serial: bool) -> Self {
+    fn build(edit: impl FnOnce(&mut Config), hook: bool) -> Self {
         let dir = TempDir::new();
         let sink = Arc::new(MemorySink::new(dir.path()));
         let mut config = Config::new("key", "demo", "1.2.3");
@@ -62,10 +62,10 @@ impl Fixture {
         config.sys_interval = Duration::from_millis(1);
         config.hang_threshold = Duration::from_millis(100);
         edit(&mut config);
-        let installs_hook = config.signals.contains(&Signal::Crash) || config.logger == crate::config::LoggerMode::Install;
-        let serial = (installs_hook && !already_serial).then(serial);
+        super::crash::SKIP_HOOK.with(|skip| skip.set(!hook));
         let signals = Signals::start(&config, sink.clone());
-        Self { signals, sink, dir, _serial: serial }
+        super::crash::SKIP_HOOK.with(|skip| skip.set(false));
+        Self { signals, sink, dir }
     }
 
     pub(crate) fn deny(&self, signal: Signal) {

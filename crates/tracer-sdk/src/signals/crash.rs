@@ -14,12 +14,27 @@ thread_local! {
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Set by the test fixture around `Signals::start` when the test does not want the process-wide hook.
+    pub(super) static SKIP_HOOK: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Longest source location, in bytes.
 const MAX_LOCATION: usize = 256;
 
 /// Installs a panic hook that reports the panic and then runs the hook that was set before. The hook holds
 /// the shared state weakly, so once the `Signals` that installed it are gone it only chains.
 pub(super) fn install_hook(shared: &Arc<Shared>) {
+    // `take_hook` and `set_hook` panic when called from a panicking thread, and a panic while unwinding
+    // aborts the process. A `Tracer` built from a destructor during unwinding must not do that: go without.
+    if std::thread::panicking() {
+        return;
+    }
+    #[cfg(test)]
+    if SKIP_HOOK.with(Cell::get) {
+        return;
+    }
     let weak = Arc::downgrade(shared);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -112,6 +127,15 @@ mod tests {
     use super::*;
     use crate::signals::testutil::{Fixture, serial};
 
+    /// Crashes whose message contains `needle`. Other tests in the process panic on purpose, and a live hook
+    /// sees those panics too, so assertions about the hook must pick out their own.
+    fn panics_about(fixture: &Fixture, needle: &str) -> Vec<Crash> {
+        crashes(fixture)
+            .into_iter()
+            .filter(|crash| crash.kind == CrashKind::Panic && crash.message.as_deref().is_some_and(|m| m.contains(needle)))
+            .collect()
+    }
+
     fn crashes(fixture: &Fixture) -> Vec<Crash> {
         fixture
             .sink
@@ -131,6 +155,11 @@ mod tests {
 
     impl Drop for RestoreHook {
         fn drop(&mut self) {
+            // Changing the hook from a panicking thread panics, and a panic during unwinding aborts the
+            // whole test process. Leave the hook as it is if the test already failed.
+            if std::thread::panicking() {
+                return;
+            }
             let _ = std::panic::take_hook();
             if let Some(hook) = self.0.take() {
                 std::panic::set_hook(hook);
@@ -164,7 +193,15 @@ mod tests {
 
         assert!(previous_ran.load(Ordering::SeqCst), "the previous hook must still run");
         assert!(fixture.sink.panicked.load(Ordering::SeqCst), "mark_panicked must be called");
-        let items = fixture.sink.items.lock().expect("lock").clone();
+        let items: Vec<_> = fixture
+            .sink
+            .items
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(_, body, _)| matches!(body, ItemBody::Crash(c) if c.message.as_deref().is_some_and(|m| m.contains("failed to open"))))
+            .cloned()
+            .collect();
         assert_eq!(items.len(), 1, "exactly one item: {items:?}");
         let (signal, body, now) = &items[0];
         assert_eq!(*signal, Signal::Crash);
@@ -194,7 +231,8 @@ mod tests {
             panic!("formatted {n}");
         })
         .join();
-        let all = crashes(&fixture);
+        let all: Vec<_> =
+            crashes(&fixture).into_iter().filter(|c| c.message.as_deref().is_some_and(|m| m.contains("non-text") || m == "formatted 3")).collect();
         assert_eq!(all.len(), 2);
         assert!(all[0].message.as_deref().is_some_and(|m| m.contains("non-text")));
         assert_eq!(all[1].message.as_deref(), Some("formatted 3"));
@@ -234,14 +272,15 @@ mod tests {
         let first = Fixture::new_locked(|config| config.signals = vec![Signal::Crash]);
         let second = Fixture::new_locked(|config| config.signals = vec![Signal::Crash]);
         let _ = std::thread::spawn(|| panic!("one")).join();
-        assert_eq!(crashes(&first).len(), 1);
-        assert_eq!(crashes(&second).len(), 1);
+        assert_eq!(panics_about(&first, "one").len(), 1);
+        assert_eq!(panics_about(&second, "one").len(), 1);
 
         let Fixture { signals, sink, .. } = first;
         drop(signals);
         let _ = std::thread::spawn(|| panic!("two")).join();
-        assert_eq!(sink.bodies().len(), 1, "a dropped Signals no longer reports");
-        assert_eq!(crashes(&second).len(), 2);
+        let seen_by_first = sink.bodies().into_iter().filter(|b| matches!(b, ItemBody::Crash(c) if c.message.as_deref() == Some("two"))).count();
+        assert_eq!(seen_by_first, 0, "a dropped Signals no longer reports");
+        assert_eq!(panics_about(&second, "two").len(), 1);
     }
 
     #[test]
@@ -256,7 +295,7 @@ mod tests {
         assert!(Reentry::enter().is_none(), "second entry on the same thread is refused");
         let _ = std::thread::spawn(|| panic!("other thread")).join();
         drop(guard);
-        assert_eq!(crashes(&fixture).len(), 1, "other threads are unaffected");
+        assert_eq!(panics_about(&fixture, "other thread").len(), 1, "other threads are unaffected");
         assert!(Reentry::enter().is_some(), "flag is released");
     }
 
@@ -271,7 +310,35 @@ mod tests {
         let _perf = crate::signals::lock(&shared.perf, true);
         let _crash_slot = crate::signals::lock(&shared.last_crash, true);
         let _ = std::thread::spawn(|| panic!("while locked")).join();
-        assert_eq!(crashes(&fixture).len(), 1);
+        // The hook gave up on the busy locks instead of waiting for them; it still reported the panic.
+        assert_eq!(panics_about(&fixture, "while locked").len(), 1);
+    }
+
+    /// Regression test for the intermittent abort ("thread caused non-unwinding panic"): changing the hook from
+    /// a thread that is already panicking panics inside a destructor during unwinding, which aborts. Neither
+    /// starting the SDK nor the test helper may do that.
+    #[test]
+    fn starting_signals_while_panicking_does_not_touch_the_hook() {
+        let _serial = serial();
+        let _restore = save_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        struct StartOnDrop(Option<Fixture>, Arc<AtomicBool>);
+        impl Drop for StartOnDrop {
+            fn drop(&mut self) {
+                // Runs during unwinding.
+                self.0 = Some(Fixture::new_locked(|config| config.signals = vec![Signal::Crash]));
+                self.1.store(true, Ordering::SeqCst);
+            }
+        }
+        let started = Arc::new(AtomicBool::new(false));
+        let flag = started.clone();
+        let result = std::thread::spawn(move || {
+            let _guard = StartOnDrop(None, flag);
+            panic!("unwinding while the SDK starts");
+        })
+        .join();
+        assert!(result.is_err(), "the thread panicked and unwound normally");
+        assert!(started.load(Ordering::SeqCst), "the destructor ran to completion instead of aborting");
     }
 
     #[test]
