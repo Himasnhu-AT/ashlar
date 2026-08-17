@@ -1,12 +1,13 @@
 //! What the end user allows, and the process-wide kill switches.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tracer_proto::ConsentCategory;
 
-use super::files::{read_json, write_json};
+use super::files::{lock, read_json, write_json};
 
 pub(super) const CONSENT_FILE: &str = "consent.json";
 
@@ -31,10 +32,16 @@ fn allowed() -> bool {
 }
 
 /// The live consent state. Reads are one atomic load.
+///
+/// The file is shared by every process of the host that uses the same data directory, so the worker
+/// reads it again on each tick ([`Consent::refresh`]) and a choice made in one process reaches the others.
 pub(super) struct Consent {
     bits: AtomicU8,
     notice_shown: AtomicBool,
     path: PathBuf,
+    /// Held while the file is read into memory or changed and saved, so that a refresh cannot put back
+    /// what a change on another thread has just replaced.
+    file: Mutex<()>,
 }
 
 impl Consent {
@@ -42,15 +49,23 @@ impl Consent {
     pub(super) fn load(dir: &Path) -> Self {
         let path = dir.join(CONSENT_FILE);
         let file = read_json::<ConsentFile>(&path).unwrap_or(ConsentFile { crash: true, performance: true, usage: true, notice_shown: false });
-        let mut bits = 0;
-        for (category, on) in
-            [(ConsentCategory::Crash, file.crash), (ConsentCategory::Performance, file.performance), (ConsentCategory::Usage, file.usage)]
-        {
-            if on {
-                bits |= bit(category);
-            }
+        Self { bits: AtomicU8::new(file.bits()), notice_shown: AtomicBool::new(file.notice_shown), path, file: Mutex::new(()) }
+    }
+
+    /// Takes over what the file says now, if it can be read. Returns the categories that were allowed
+    /// and no longer are.
+    pub(super) fn refresh(&self) -> Vec<ConsentCategory> {
+        let _file = lock(&self.file);
+        self.read_file()
+    }
+
+    fn read_file(&self) -> Vec<ConsentCategory> {
+        let Some(file) = read_json::<ConsentFile>(&self.path) else { return Vec::new() };
+        let before = self.bits.swap(file.bits(), Ordering::Relaxed);
+        if file.notice_shown {
+            self.notice_shown.store(true, Ordering::Relaxed);
         }
-        Self { bits: AtomicU8::new(bits), notice_shown: AtomicBool::new(file.notice_shown), path }
+        CATEGORIES.into_iter().filter(|category| before & bit(*category) != 0 && file.bits() & bit(*category) == 0).collect()
     }
 
     pub(super) fn get(&self, category: ConsentCategory) -> bool {
@@ -64,6 +79,9 @@ impl Consent {
 
     /// Changes one category and saves the file.
     pub(super) fn set(&self, category: ConsentCategory, allowed: bool) {
+        let _file = lock(&self.file);
+        // Start from the file, so that a choice another process made for another category is kept.
+        self.read_file();
         if allowed {
             self.bits.fetch_or(bit(category), Ordering::Relaxed);
         } else {
@@ -77,6 +95,8 @@ impl Consent {
     }
 
     pub(super) fn set_notice_shown(&self) {
+        let _file = lock(&self.file);
+        self.read_file();
         self.notice_shown.store(true, Ordering::Relaxed);
         self.save();
     }
@@ -92,6 +112,15 @@ impl Consent {
             notice_shown: self.notice_shown(),
         };
         write_json(&self.path, &file);
+    }
+}
+
+const CATEGORIES: [ConsentCategory; 3] = [ConsentCategory::Crash, ConsentCategory::Performance, ConsentCategory::Usage];
+
+impl ConsentFile {
+    fn bits(&self) -> u8 {
+        let allowed = [(ConsentCategory::Crash, self.crash), (ConsentCategory::Performance, self.performance), (ConsentCategory::Usage, self.usage)];
+        allowed.into_iter().filter(|(_, on)| *on).fold(0, |bits, (category, _)| bits | bit(category))
     }
 }
 
@@ -149,6 +178,35 @@ mod tests {
         assert!(reloaded.notice_shown() && reloaded.any());
         let text = std::fs::read_to_string(dir.path().join(CONSENT_FILE)).unwrap();
         assert_eq!(text, r#"{"crash":true,"performance":true,"usage":false,"notice_shown":true}"#);
+    }
+
+    #[test]
+    fn a_change_by_another_process_is_picked_up_and_merged() {
+        let dir = TempDir::new("consent");
+        let here = Consent::load(dir.path());
+        let there = Consent::load(dir.path());
+        assert!(here.refresh().is_empty(), "no file yet, nothing changes");
+        there.set(ConsentCategory::Usage, false);
+        there.set_notice_shown();
+        assert!(here.get(ConsentCategory::Usage));
+        assert_eq!(here.refresh(), vec![ConsentCategory::Usage]);
+        assert!(!here.get(ConsentCategory::Usage) && here.notice_shown());
+        assert!(here.refresh().is_empty(), "reported once");
+        // A change here keeps the other process's choice instead of writing over it.
+        there.set(ConsentCategory::Crash, false);
+        here.set(ConsentCategory::Performance, false);
+        assert!(there.refresh().contains(&ConsentCategory::Performance));
+        for consent in [&here, &there] {
+            assert!(!consent.get(ConsentCategory::Crash) && !consent.get(ConsentCategory::Performance) && !consent.get(ConsentCategory::Usage));
+            assert!(!consent.any());
+        }
+        there.set(ConsentCategory::Usage, true);
+        assert!(here.refresh().is_empty());
+        assert!(here.get(ConsentCategory::Usage));
+        // A file that cannot be read changes nothing.
+        std::fs::write(dir.path().join(CONSENT_FILE), b"{").unwrap();
+        assert!(here.refresh().is_empty());
+        assert!(here.get(ConsentCategory::Usage) && !here.get(ConsentCategory::Crash));
     }
 
     #[test]

@@ -158,14 +158,14 @@ pub(super) fn save(shared: &Shared) {
             text.push('\n');
         }
     }
-    if report::write_atomic(&path_in(shared.sink.data_dir()), text.as_bytes()).is_err() {
+    if report::write_atomic(&path_in(shared.sink.session_dir()), text.as_bytes()).is_err() {
         shared.sink.count_drop("breadcrumbs_write");
     }
 }
 
 /// Deletes the saved file. Called at clean shutdown, when there is nothing left to recover.
 pub(super) fn remove_saved(shared: &Shared) {
-    let _ = std::fs::remove_file(path_in(shared.sink.data_dir()));
+    let _ = std::fs::remove_file(path_in(shared.sink.session_dir()));
 }
 
 /// Reads and deletes the file saved by the previous run. Any problem with it gives an empty list.

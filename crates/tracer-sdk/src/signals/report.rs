@@ -29,6 +29,8 @@ pub(super) struct Report<'a> {
     pub build: Option<&'a str>,
     pub signals: Vec<&'static str>,
     pub generated_ms: u64,
+    /// `key: value` lines about the install and session, from the pipeline.
+    pub session: &'a str,
     pub device: &'a Device,
     pub perf: Option<&'a Perf>,
     pub crash: Option<&'a Crash>,
@@ -40,12 +42,14 @@ pub(super) fn write(shared: &Shared, path: &Path) -> std::io::Result<()> {
     let perf = shared.last_perf();
     let crash = super::lock(&shared.last_crash, true).and_then(|slot| slot.clone());
     let breadcrumbs = if shared.allowed(Signal::Logs) { shared.ring.snapshot(true) } else { Vec::new() };
+    let session = shared.sink.session_summary();
     let report = Report {
         app_name: &shared.settings.app_name,
         app_version: &shared.settings.app_version,
         build: shared.settings.build.as_deref(),
         signals: shared.settings.signals.iter().map(|signal| signal.as_str()).collect(),
         generated_ms: now_ms(),
+        session: &session,
         device: &device,
         perf: perf.as_ref(),
         crash: crash.as_ref(),
@@ -69,6 +73,14 @@ pub(super) fn render(report: &Report<'_>) -> String {
     }
     let _ = writeln!(out, "  Signals: {}", if report.signals.is_empty() { "none".to_owned() } else { report.signals.join(", ") });
     let _ = writeln!(out);
+
+    if !report.session.trim().is_empty() {
+        let _ = writeln!(out, "Session");
+        for line in report.session.lines().filter(|line| !line.trim().is_empty()) {
+            let _ = writeln!(out, "  {line}");
+        }
+        let _ = writeln!(out);
+    }
 
     let device = report.device;
     let _ = writeln!(out, "Device");
@@ -253,6 +265,7 @@ mod tests {
             build: Some("abc"),
             signals: vec!["crash", "perf"],
             generated_ms: 0,
+            session: "install_id: abc\nsession_id: def\n",
             device: &device,
             perf: Some(&perf),
             crash: Some(&crash),
@@ -260,6 +273,7 @@ mod tests {
         });
         for needle in [
             "demo",
+            "  install_id: abc\n  session_id: def\n",
             "1.2.3",
             "abc",
             "crash, perf",
@@ -288,6 +302,7 @@ mod tests {
             build: None,
             signals: vec![],
             generated_ms: 0,
+            session: "install_id: abc\nsession_id: def\n",
             device: &device,
             perf: None,
             crash: None,

@@ -34,6 +34,8 @@ impl Outbox {
         if line_bytes > self.max_bytes {
             return;
         }
+        // Other processes of the host append to the same file, so its size is looked up, not remembered.
+        self.bytes = std::fs::metadata(&self.path).map(|metadata| metadata.len()).unwrap_or(0);
         if self.bytes + line_bytes > self.max_bytes {
             self.trim(self.max_bytes / 2);
         }

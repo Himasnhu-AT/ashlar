@@ -5,7 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tracer_proto::{
@@ -14,7 +14,7 @@ use tracer_proto::{
 
 use super::Shared;
 use super::files::{lock, now_ms, write_json};
-use super::identity::random_u64;
+use super::identity::{Identity, random_u64};
 use super::session::SELECTION_FILE;
 use super::spool::{Batch, CAT_META, Header, category_code};
 use crate::transport::{Request, Transport};
@@ -68,6 +68,7 @@ pub(super) struct Worker {
     /// Earliest time the server allows the next attempt. Nothing goes earlier.
     retry_after_until: Option<Instant>,
     last_cycle: Instant,
+    last_upkeep: Instant,
     last_heartbeat: Instant,
     want_send: bool,
     flush_done: u64,
@@ -86,6 +87,7 @@ impl Worker {
             backoff_until: None,
             retry_after_until: None,
             last_cycle: now,
+            last_upkeep: now,
             last_heartbeat: now,
             // Once at startup, for anything left from earlier runs.
             want_send: true,
@@ -102,9 +104,9 @@ impl Worker {
                 (control.flush_requested, control.stop, std::mem::take(&mut control.purge))
             };
             if !purge.is_empty() {
-                let mut disk = lock(&self.shared.disk);
+                let mut spool = lock(&self.shared.disk);
                 for category in purge {
-                    disk.spool.purge(category);
+                    spool.purge(category);
                 }
             }
             let now = Instant::now();
@@ -126,6 +128,9 @@ impl Worker {
                 }
             } else if self.send_due(now) {
                 self.send_cycle(false);
+            } else if now.saturating_duration_since(self.last_upkeep) >= self.shared.timing.flush {
+                // Nothing to send, or no way to send it: orphans are still adopted and the caps kept.
+                self.upkeep(now);
             }
             match self.queue.recv_timeout(next_tick.saturating_duration_since(Instant::now())) {
                 Ok(message) => {
@@ -151,8 +156,13 @@ impl Worker {
             && epoch == self.shared.epoch.load(Ordering::Relaxed)
             && self.shared.category_allowed(category)
         {
-            self.shared.store(None, category, &item, false);
+            self.shared.store(category, &item, false);
         }
+    }
+
+    fn upkeep(&mut self, now: Instant) {
+        self.last_upkeep = now;
+        self.shared.maintain();
     }
 
     /// Stores everything that is queued right now.
@@ -164,6 +174,7 @@ impl Worker {
 
     fn tick(&mut self, now: Instant) {
         let shared = self.shared.clone();
+        shared.sync_shared_files();
         shared.sample(now);
         if now.saturating_duration_since(self.last_heartbeat) >= shared.timing.heartbeat {
             self.last_heartbeat = now;
@@ -172,7 +183,7 @@ impl Worker {
             if let Some(totals) = clock.next_heartbeat()
                 && shared.permitted(Signal::Session)
             {
-                shared.store(None, category_code(Signal::Session.consent()), &shared.item(ItemBody::SessionHeartbeat(totals)), false);
+                shared.store(category_code(Signal::Session.consent()), &shared.item(ItemBody::SessionHeartbeat(totals)), false);
             }
             drop(clock);
             shared.write_marker(false);
@@ -191,7 +202,7 @@ impl Worker {
     }
 
     fn has_work(&self) -> bool {
-        !lock(&self.shared.disk).spool.is_empty() || !lock(&self.shared.identity).pending_forget.is_empty()
+        !lock(&self.shared.disk).is_empty() || !lock(&self.shared.identity).pending_forget.is_empty()
     }
 
     /// True when a flush has nothing more it could send.
@@ -220,6 +231,7 @@ impl Worker {
         }
         self.last_cycle = now;
         self.want_send = true;
+        self.upkeep(now);
         if !self.send_forget_requests() {
             return;
         }
@@ -227,18 +239,14 @@ impl Worker {
         let shared = self.shared.clone();
         let budget = (MAX_ENVELOPE_BYTES as u64).saturating_sub(HEADER_ALLOWANCE);
         loop {
-            let batch = {
-                let mut disk = lock(&shared.disk);
-                disk.spool.expire(SystemTime::now(), &shared.drops);
-                disk.spool.next_batch(budget, &|category| shared.category_allowed(category))
-            };
+            let batch = lock(&shared.disk).next_batch(budget, &|category| shared.category_allowed(category));
             let Some(batch) = batch else { break };
             if batch.items.is_empty() {
-                lock(&shared.disk).spool.complete(&batch);
+                lock(&shared.disk).complete(&batch);
                 continue;
             }
             let Some(body) = envelope_json(&batch.header, now_ms(), &batch.items) else {
-                lock(&shared.disk).spool.complete(&batch);
+                lock(&shared.disk).complete(&batch);
                 shared.drops.add(DROP_REJECTED, batch.items.len() as u64);
                 continue;
             };
@@ -248,11 +256,11 @@ impl Worker {
             };
             match outcome {
                 Outcome::Delivered(reply) => {
-                    lock(&shared.disk).spool.complete(&batch);
+                    lock(&shared.disk).complete(&batch);
                     self.note_catalog(&batch, &reply);
                 }
                 Outcome::Rejected => {
-                    lock(&shared.disk).spool.complete(&batch);
+                    lock(&shared.disk).complete(&batch);
                     shared.drops.add(DROP_REJECTED, batch.items.len() as u64);
                 }
                 Outcome::Halted | Outcome::Retry => return,
@@ -270,8 +278,11 @@ impl Worker {
             match self.post(routes::FORGET, &body, false) {
                 Outcome::Delivered(_) | Outcome::Rejected => {
                     let mut identity = lock(&self.shared.identity);
-                    identity.pending_forget.retain(|pending| *pending != install_id);
-                    identity.save(&self.shared.dir);
+                    let updated =
+                        Identity::update(&self.shared.dir, &identity, |saved| saved.pending_forget.retain(|pending| *pending != install_id));
+                    // Only the list is taken over here. A new install id is noticed on the next tick,
+                    // which also clears this session's data.
+                    identity.pending_forget = updated.pending_forget;
                 }
                 Outcome::Halted | Outcome::Retry => return false,
             }
@@ -288,7 +299,7 @@ impl Worker {
         let reasons = self.shared.drops.take();
         if !reasons.is_empty() {
             let item = self.shared.item(ItemBody::Drops(Drops { reasons: reasons.clone() }));
-            if !self.shared.store(None, CAT_META, &item, false) {
+            if !self.shared.store(CAT_META, &item, false) {
                 self.shared.drops.merge(reasons);
             }
         }

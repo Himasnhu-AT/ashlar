@@ -47,16 +47,27 @@ Everything lives in `<host data dir>/tracer/`:
 
 | Path | Owner | Content |
 |---|---|---|
-| `install.json` | pipeline | `{"install_id": "…", "created": ms}` |
+| `install.json` | pipeline | `{"install_id": "…", "created": ms, "pending_forget": ["…"]}`. `pending_forget` lists earlier install ids whose forget request has not been delivered yet (at most 16); it is absent when empty. |
+| `install.lock` | pipeline | Empty. Locked for the moment it takes to change `install.json`. |
 | `consent.json` | pipeline | `{"crash": bool, "performance": bool, "usage": bool, "notice_shown": bool}` |
 | `selection.json` | pipeline | Catalog hash, listened categories and events, enabled signals for the last run. Also the catalog hashes the server has acknowledged, per app version. |
-| `session.json` | pipeline | Marker for the running session: envelope header, start time, last heartbeat totals, `panicked` flag. Removed on clean shutdown. |
-| `spool/<session_id>/header.json` | pipeline | The envelope header for that session (app, install id, device). |
-| `spool/<session_id>/<seq>.jsonl` | pipeline | Items, one JSON object per line, in segments. |
-| `breadcrumbs.jsonl` | signals | Recent log lines, rewritten periodically. |
+| `spool/<session_id>/lock` | pipeline | Empty. The process that runs the session holds an exclusive advisory lock on it for its whole life. |
+| `spool/<session_id>/header.json` | pipeline | The envelope header for that session (app, install id, device), plus `created`, which orders sessions. |
+| `spool/<session_id>/session.json` | pipeline | Marker for the running session: envelope header, start time, time of the last rewrite, last heartbeat totals, error count, `panicked` flag. Removed on clean shutdown. |
+| `spool/<session_id>/<seq>.jsonl` | pipeline | Items in segments, one per line: a consent-category byte (`c`, `p`, `u`, or `-` for none) followed by the item as JSON. |
+| `spool/<session_id>/breadcrumbs.jsonl` | signals | Recent log lines of that session, rewritten periodically. |
 | `outbox.jsonl` | pipeline | Inspect mode only: a capped mirror of every item that was accepted for sending. |
 
 Files are written to a temporary name and renamed. A file that fails to parse is treated as absent, never as an error.
+
+**Several processes, one directory.** A host's GUI, command-line tool and child processes may all run on the same data directory at once, so every session folder has exactly one owner:
+
+- A running process owns `spool/<its session id>/`. It creates the folder at `init`, takes the lock, and appends only there. The operating system releases the lock when the process ends, however it ends.
+- A folder whose lock is held belongs to a live process and is left completely alone by everyone else: not sent, not evicted, not purged, not deleted.
+- A folder whose lock can be taken is an *orphan*. The process that takes the lock adopts it and keeps the lock until the folder is gone, so no two processes work on the same orphan. Orphans are looked for at startup, before every send, and every `flush_interval`.
+- An orphan recorded under an install id other than the current one was forgotten by the user and is deleted unsent. A folder with neither header nor marker is deleted once it is a minute old (younger, it may belong to a process that is still starting). A scan never creates a lock file in a folder younger than that, since the folder may be one its owner is deleting at that moment.
+- `install.json`, `consent.json`, `selection.json` and `outbox.jsonl` are shared. Processes that start together on a fresh directory agree on the install id: the file is created with create-if-absent, and the losers read what the winner wrote. The worker re-reads `consent.json` and `install.json` on every tick, so a consent change or a `forget` in one process reaches the others within a tick. Changes to `install.json` are read-modify-write under `install.lock`; changes to `consent.json` start from the file's current content, without a lock.
+- Where the filesystem does not support locks (`try_lock` fails with an error other than "would block"), a folder counts as an orphan only when nothing in it has been written for 24 hours, and no unclean exit is ever reported from it: its marker is discarded and its items are sent. A running session rewrites its marker every `heartbeat_interval`, which keeps its folder fresh.
 
 ### 3.3 Consent and kill switches
 
@@ -65,7 +76,7 @@ Files are written to a temporary name and renamed. A file that fails to parse is
 - `Sink::allows(signal)` is true only when the host enabled the signal, the kill switches are off, and the category is allowed.
 - `set_consent(category, false)` takes effect at once and also deletes that category's unsent items from the spool.
 - `notice_pending()` is true until `notice_shown()`; the SDK records normally in the meantime (opt-out model).
-- `forget()` deletes the spool, breadcrumbs and outbox, sends a `ForgetRequest` for the old install id (best effort, retried on next launch if it fails), and creates a new install id.
+- `forget()` deletes this process's unsent items, every orphan, its breadcrumbs and the outbox, sends a `ForgetRequest` for the old install id (best effort, retried on next launch if it fails), and creates a new install id. Other running processes of the host see the new id on their next tick and do the same to their own session folder; items they had queued under the old id are discarded.
 
 ### 3.4 Identity and ids
 
@@ -74,11 +85,13 @@ Install, session and item ids are 16 random bytes from `getrandom`, as 32 lower-
 ### 3.5 Session
 
 - One session per process run. `session_start` is submitted during `init`.
-- The worker emits `session_heartbeat` every `heartbeat_interval` with running totals, and rewrites `session.json`.
+- The worker emits `session_heartbeat` every `heartbeat_interval` with running totals, and rewrites the marker, `spool/<session_id>/session.json`. A heartbeat is never written after the session's end.
 - Time accounting uses a monotonic clock, sampled once a second by the worker: a second counts as *focused* if the host last said `set_focused(true)` (hosts that never call it count as focused), as *active* if focused and `note_input()` was called within `idle_after`, otherwise *idle*. `note_input` and `set_focused` are single atomic stores.
-- Clean shutdown (last `Tracer` clone dropped) submits `session_end` and removes `session.json`. Status is `crashed` if a panic was seen and the thread dropping the tracer is panicking, otherwise `exited`. `errors` counts handled errors and survived panics.
-- On startup, a leftover `session.json` means the previous run ended uncleanly. The pipeline submits, under the **previous** session's header: a `session_end` with status `crashed` if its `panicked` flag was set, else `abnormal`, with the last saved totals; and, when not panicked, a `crash` of kind `unclean_exit` carrying `signals::take_saved_breadcrumbs`.
+- Clean shutdown (last `Tracer` clone dropped) writes `session_end` on the calling thread, removes the marker, tries one final send, and releases the session folder. If everything was sent the folder is deleted; otherwise it stays, without a marker, as an orphan that the next process to look simply sends. Status is `crashed` if a panic was seen and the thread dropping the tracer is panicking, otherwise `exited`. `errors` counts handled errors and survived panics.
+- An orphan (§3.2) that still has its marker belonged to a process that ended uncleanly. The process that adopts it writes into that folder, under **that** session's header: a `session_end` with status `crashed` if the marker's `panicked` flag was set, else `abnormal`, with the last saved totals; and, when not panicked, a `crash` of kind `unclean_exit` carrying `signals::take_saved_breadcrumbs(<that folder>)`. Both carry the time of the marker's last rewrite. It then removes the marker and sends the folder's items like any other.
+- An unclean end is reported once: only the lock holder reports, and the marker is removed after the report is on disk. The ids of the two items are derived from the session id, so if the adopter itself dies between those two steps and the report is written again, the server stores it once.
 - Short-lived processes (`ProcessKind::Cli`, `Child`) behave the same; they should call `flush_blocking` before exit.
+- `Sink::session_summary()` gives the local report the install id, session id, start time, running totals and error count.
 
 ### 3.6 Event catalog
 
@@ -106,16 +119,16 @@ tracer_sdk::events! {
 ### 3.7 Queue, spool and sending
 
 - `submit` does `try_send` on a bounded channel of `queue_capacity`. When full it drops the item and counts `queue_full`. It never blocks.
-- One worker thread drains the queue, appends items to the current session's spool segment, and ticks once a second (session accounting, `Signals::tick`).
-- `submit_now` serialises the item and appends it to the spool on the calling thread, without going through the queue. It is used from the panic hook, so it must not panic and must tolerate a poisoned lock.
-- The spool is capped by `spool_max_bytes` and `spool_max_age`; the oldest segments go first and are counted as `spool_evicted`.
-- The worker sends when `batch_items` are waiting or `flush_interval` has passed, and once at startup for anything left from earlier runs. One request per session directory, at most `MAX_ENVELOPE_BYTES` after serialisation; larger backlogs are split.
+- One worker thread drains the queue, appends items to its own session's spool segment, and ticks every `tick_interval` (1 s by default): session accounting, re-reading the shared consent and install files, `Signals::tick`. Every other interval is effectively rounded up to a multiple of the tick.
+- `submit_now` serialises the item and appends it to the spool on the calling thread, without going through the queue. It is used from the panic hook, so it must not panic, must tolerate a poisoned lock, and gives up (counting `spool_busy`) rather than wait on a lock the panicking thread may itself hold.
+- The spool is capped by `spool_max_bytes` and `spool_max_age`, across all session folders: the folders of other live processes count towards the size, as of the last look at them. To make room a process evicts the oldest segments it may touch (adopted orphans first, oldest session first, then its own oldest) and never anything of another live process; if that is not enough, the new item is dropped. Evicted and expired items are counted as `spool_evicted`.
+- The worker sends when `batch_items` are waiting or `flush_interval` has passed, and once at startup for anything earlier runs left. It sends the orphans it has adopted, oldest session first, then its own session. One request per session folder, at most `MAX_ENVELOPE_BYTES` after serialisation; larger backlogs are split. What a request carried is deleted when the server has answered for it, and an orphan's folder is deleted when it is empty.
 - Bodies are gzip-compressed JSON.
-- Reply handling follows the table in `docs/wire-format.md`. Retries use exponential backoff with jitter, from 5 s up to 15 min, and honour `Retry-After`.
-- Drop counts are sent as a `drops` item with the next batch.
-- With no endpoint configured the SDK still spools (within the caps) and inspect mode still works, but nothing is sent.
-- `flush_blocking(timeout)` asks the worker to drain and send now and waits for it. `shutdown` does the same with `shutdown_timeout`, then stops the worker.
-- The built-in transport is `ureq` 3 with rustls, behind the `http` feature, with connect and overall timeouts. Hosts and tests can supply their own `Transport`.
+- Reply handling follows the table in `docs/wire-format.md`. Retries use exponential backoff with jitter, from `retry_min` (5 s) doubling up to `retry_max` (15 min), each wait a random point in the upper half of its step. A `Retry-After` given in seconds is honoured, up to a day; an explicit flush skips the backoff but never the server's `Retry-After`.
+- Drop counts are sent as a `drops` item with the next batch, while at least one consent category is allowed. The reasons are: `queue_full`, `spool_evicted`, `spool_busy`, `item_too_large`, `io_error`, `server_rejected` (a batch the server refused with 400, 413 or 422), `invalid_id`, `prop_dropped`, `tick_panicked`, and from the signal modules `breadcrumbs_write`.
+- With no endpoint configured the SDK still spools (within the caps), still adopts orphans, and inspect mode still works, but nothing is sent. This holds even when the host supplies its own `Transport`.
+- `flush_blocking(timeout)` asks the worker to drain and send now and waits for it. It is true when this process has nothing left that it could send. `shutdown` does the same with `shutdown_timeout`, then stops the worker.
+- The built-in transport is `ureq` 3 with rustls, behind the `http` feature, with connect and overall timeouts and redirects off. Hosts and tests can supply their own `Transport`.
 
 ### 3.8 Signals
 
@@ -137,7 +150,7 @@ Known limit for 0.1: a backtrace from a release build stripped of symbols contai
 | Thread | Does |
 |---|---|
 | Host threads | Call `Tracer` methods; each is an atomic store, a short lock, or a `try_send`. |
-| `tracer-worker` | Drains the queue, writes the spool, ticks, sends. The only thread that touches the network. |
+| `tracer-worker` | Drains the queue, writes the spool, ticks, adopts orphaned session folders, sends. The only thread that touches the network. |
 | `tracer-watchdog` | Hang detection only. Started when the `Hang` signal is enabled. |
 
 ## 4. Server
