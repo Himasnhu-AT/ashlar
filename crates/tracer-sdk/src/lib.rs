@@ -18,7 +18,7 @@ mod sink;
 pub mod transport;
 
 pub use catalog::{Event, EventCategory, Prop};
-pub use client::{Builder, Tracer};
+pub use client::{Builder, Tracer, TurnGuard};
 pub use config::{Config, LoggerMode};
 pub use signals::rt::{Counter, Gauge};
 pub use tracer_proto as proto;

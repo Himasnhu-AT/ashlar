@@ -54,6 +54,14 @@ impl Ring {
         lock(&self.inner, blocking).map(|inner| inner.items.iter().cloned().collect()).unwrap_or_default()
     }
 
+    /// Empties the ring. Nothing is left to save either: the caller deletes the saved file.
+    pub(super) fn clear(&self) {
+        if let Some(mut inner) = lock(&self.inner, true) {
+            inner.items.clear();
+            inner.dirty = false;
+        }
+    }
+
     /// The ring if it changed since the last call, marking it saved.
     fn take_dirty(&self) -> Option<Vec<Breadcrumb>> {
         let mut inner = lock(&self.inner, true)?;
@@ -122,7 +130,10 @@ impl log::Log for SignalLogger {
         {
             inner.log(record);
         }
-        self.capture(record);
+        // The SDK's own few lines are for the host's log only. Kept as breadcrumbs they would be sent.
+        if record.target() != crate::sink::LOG_TARGET {
+            self.capture(record);
+        }
     }
 
     fn flush(&self) {
@@ -233,6 +244,44 @@ mod tests {
         assert_eq!(seen, vec![("error", "e"), ("warn", "w")]);
         assert_eq!(crumbs[0].target, "a");
         assert!(crumbs[0].ts > 0);
+    }
+
+    #[test]
+    fn the_sdks_own_log_lines_are_forwarded_but_never_kept() {
+        let fixture = Fixture::new(|config| config.signals = vec![Signal::Logs]);
+        let forwarded = Arc::new(StdMutex::new(Vec::new()));
+        let logger = fixture.signals.logger(Some(Box::new(Collect(forwarded.clone(), log::LevelFilter::Trace))));
+        logger.log(
+            &log::Record::builder().level(log::Level::Warn).target(crate::sink::LOG_TARGET).args(format_args!("not sent until the notice")).build(),
+        );
+        logger.log(&log::Record::builder().level(log::Level::Warn).target("host").args(format_args!("a host line")).build());
+        let kept: Vec<String> = fixture.signals.shared.ring.snapshot(true).into_iter().map(|crumb| crumb.message).collect();
+        assert_eq!(kept, vec!["a host line".to_owned()]);
+        assert_eq!(forwarded.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn forget_empties_what_is_kept_in_memory() {
+        let fixture = Fixture::new(|config| config.signals = vec![Signal::Logs, Signal::Perf]);
+        let logger = fixture.signals.logger(None);
+        logger.log(&log::Record::builder().level(log::Level::Warn).target("host").args(format_args!("before the forget")).build());
+        fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(1)));
+        assert!(fixture.dir.path().join(FILE_NAME).exists());
+        let shared = &fixture.signals.shared;
+        *shared.last_crash.lock().unwrap() = Some(tracer_proto::Crash::default());
+        shared.perf.lock().unwrap().last = Some(tracer_proto::Perf::default());
+
+        fixture.signals.forget();
+        assert!(shared.ring.snapshot(true).is_empty());
+        assert!(shared.last_crash.lock().unwrap().is_none());
+        assert!(shared.last_perf().is_none());
+        // A crash after the forget carries nothing from before it.
+        let crash = shared.crash_base(tracer_proto::CrashKind::Handled, true);
+        assert!(crash.breadcrumbs.is_empty() && crash.perf.is_none());
+        // And the emptied ring is not written back out as if it had changed.
+        std::fs::remove_file(fixture.dir.path().join(FILE_NAME)).unwrap();
+        fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(2)));
+        assert!(!fixture.dir.path().join(FILE_NAME).exists());
     }
 
     #[test]

@@ -40,6 +40,27 @@ pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Longest single wait on a condition variable. Waits are taken in steps of at most this, so that no
+/// platform is ever handed a timeout it cannot represent.
+const WAIT_STEP: Duration = Duration::from_secs(60 * 60);
+
+/// A point in time `wait` from now, or `None` when that is further away than the clock can express,
+/// which callers treat as "no deadline". `Instant + Duration` panics in that case.
+pub(super) fn deadline_in(wait: Duration) -> Option<std::time::Instant> {
+    std::time::Instant::now().checked_add(wait)
+}
+
+/// How long to wait next for something due by `deadline`: `None` when the deadline has passed.
+pub(super) fn wait_step(deadline: Option<std::time::Instant>) -> Option<Duration> {
+    match deadline {
+        None => Some(WAIT_STEP),
+        Some(deadline) => {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            (!left.is_zero()).then_some(left.min(WAIT_STEP))
+        }
+    }
+}
+
 /// Locks a mutex, carrying on with the data when another thread panicked while holding it.
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -86,27 +107,6 @@ pub(crate) mod testing {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-
-    /// For a test that panics on purpose. The panic hook is process-wide, and tests elsewhere in this
-    /// crate replace it while they run, so a deliberate panic here would run through whatever hook one
-    /// of them has installed at that moment. Such a test therefore runs its body in a process of its
-    /// own: called in the test run, this starts that process for the test called `name` (its full
-    /// path) and returns true, and the caller returns; called in that process, it returns false.
-    pub(crate) fn runs_in_own_process(name: &str) -> bool {
-        const MARKER: &str = "TRACER_TEST_OWN_PROCESS";
-        if std::env::var_os(MARKER).is_some() {
-            return false;
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--test-threads=1"])
-            .env(MARKER, "1")
-            .output()
-            .unwrap();
-        let report = String::from_utf8_lossy(&output.stdout);
-        // "1 passed" guards against a mistyped name, which would run nothing and still succeed.
-        assert!(output.status.success() && report.contains("1 passed"), "{name} in its own process:\n{report}");
-        true
-    }
 }
 
 #[cfg(test)]
@@ -125,6 +125,16 @@ mod tests {
     }
 
     #[test]
+    fn deadlines_too_far_away_to_express_mean_no_deadline() {
+        assert_eq!(deadline_in(Duration::MAX), None);
+        assert_eq!(wait_step(None), Some(WAIT_STEP));
+        assert_eq!(wait_step(deadline_in(Duration::ZERO)), None);
+        let soon = wait_step(deadline_in(Duration::from_secs(5))).unwrap();
+        assert!(soon <= Duration::from_secs(5) && soon > Duration::from_secs(4));
+        assert_eq!(wait_step(deadline_in(Duration::from_secs(1_000_000))), Some(WAIT_STEP));
+    }
+
+    #[test]
     fn malformed_file_reads_as_absent() {
         let dir = TempDir::new("files");
         let path = dir.path().join("value.json");
@@ -135,9 +145,6 @@ mod tests {
 
     #[test]
     fn soft_lock_survives_poison_and_gives_up_when_held() {
-        if super::testing::runs_in_own_process("pipeline::files::tests::soft_lock_survives_poison_and_gives_up_when_held") {
-            return;
-        }
         let mutex = std::sync::Arc::new(Mutex::new(5));
         let held = lock(&mutex);
         assert!(lock_soft(&mutex).is_none());

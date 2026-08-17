@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use tracer_proto::{Catalog, CatalogEvent, ConsentCategory, Crash, CrashKind, Item, ItemBody, Perf, SessionStatus, Signal};
 
-use super::files::testing::{TempDir, runs_in_own_process};
+use super::files::testing::TempDir;
 use super::files::{lock, read_json, write_json};
 use super::identity::derived_id;
 use super::session::{Marker, SESSION_FILE};
@@ -127,7 +127,9 @@ fn an_unclean_session_is_reported_with_ids_derived_from_its_session_id() {
 #[test]
 fn the_session_summary_names_the_install_the_session_and_its_totals() {
     let dir = TempDir::new("pipeline");
-    let pipeline = idle(&config(dir.path()));
+    let mut config = config(dir.path());
+    config.tick_interval = Duration::from_secs(3600);
+    let pipeline = idle(&config);
     pipeline.count_error();
     pipeline.shared.sample(pipeline.shared.started + Duration::from_secs(90));
     let summary = pipeline.session_summary();
@@ -191,9 +193,6 @@ fn submit_now_lands_on_disk_without_the_worker() {
 
 #[test]
 fn submit_now_tolerates_a_poisoned_lock() {
-    if runs_in_own_process("pipeline::tests::submit_now_tolerates_a_poisoned_lock") {
-        return;
-    }
     let dir = TempDir::new("pipeline");
     let pipeline = idle(&config(dir.path()));
     let poisoner = pipeline.clone();
@@ -244,6 +243,8 @@ fn session_time_is_focused_active_or_idle() {
     let dir = TempDir::new("pipeline");
     let mut config = config(dir.path());
     config.idle_after = Duration::from_secs(120);
+    // A long tick, so that the steps of this test are not taken for the machine having slept.
+    config.tick_interval = Duration::from_secs(3600);
     let pipeline = idle(&config);
     let start = pipeline.shared.started;
     let at = |seconds: u64| start + Duration::from_secs(seconds);
@@ -287,12 +288,13 @@ fn shutdown_writes_the_session_end_and_removes_the_marker() {
 
 #[test]
 fn a_session_that_ends_while_panicking_is_crashed() {
-    if runs_in_own_process("pipeline::tests::a_session_that_ends_while_panicking_is_crashed") {
-        return;
-    }
     let dir = TempDir::new("pipeline");
     let pipeline = idle(&config(dir.path()));
-    pipeline.mark_panicked();
+    // What the panic hook does for each panic: one the host caught earlier, then the one that ends it.
+    for _ in 0..2 {
+        pipeline.count_error();
+        pipeline.mark_panicked();
+    }
     struct EndOnDrop(Arc<Pipeline>);
     impl Drop for EndOnDrop {
         fn drop(&mut self) {
@@ -306,7 +308,8 @@ fn a_session_that_ends_while_panicking_is_crashed() {
     })
     .join();
     let lines = spooled(dir.path());
-    assert!(matches!(&lines.last().unwrap().2.body, ItemBody::SessionEnd(end) if end.status == SessionStatus::Crashed));
+    // `crashed` already says the last panic was not survived, so `errors` holds only the one that was.
+    assert!(matches!(&lines.last().unwrap().2.body, ItemBody::SessionEnd(end) if end.status == SessionStatus::Crashed && end.errors == 1));
 }
 
 #[test]
@@ -341,6 +344,10 @@ fn the_kill_switch_records_nothing_and_creates_nothing() {
     pipeline.count_drop("anything");
     pipeline.mark_panicked();
     pipeline.forget();
+    // What a host does at every start, kill switch or not, must leave no trace either.
+    pipeline.set_consent(ConsentCategory::Usage, false);
+    assert!(!pipeline.consent(ConsentCategory::Usage));
+    pipeline.notice_shown();
     assert!(pipeline.flush_blocking(Duration::from_millis(10)));
     assert!(!pipeline.notice_pending());
     assert_eq!(pipeline.install_id(), "");
@@ -381,4 +388,327 @@ fn an_unusable_folder_switches_the_pipeline_off() {
     assert!(pipeline.flush_blocking(Duration::from_millis(10)));
     pipeline.shutdown();
     assert_eq!(std::fs::read(&blocker).unwrap(), b"x");
+}
+
+/// Regression tests for the faults found in review.
+mod review {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use tracer_proto::routes;
+
+    use super::*;
+    use crate::transport::{Reply, Request, Transport, TransportError};
+
+    /// Answers ingest with 200 and forget with whatever status it is set to (0 = network error).
+    #[derive(Clone, Default)]
+    struct Server(Arc<Mutex<ServerState>>);
+
+    #[derive(Default)]
+    struct ServerState {
+        forget_status: u16,
+        /// Path and status of every request.
+        seen: Vec<(String, u16)>,
+        /// Every ingest body, unpacked, one after the other.
+        ingested: Vec<u8>,
+    }
+
+    impl Server {
+        fn answering_forget_with(status: u16) -> Self {
+            let server = Self::default();
+            server.set_forget(status);
+            server
+        }
+
+        fn set_forget(&self, status: u16) {
+            self.0.lock().unwrap().forget_status = status;
+        }
+
+        /// Everything that was sent for ingest, as text.
+        fn ingested(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap().ingested).into_owned()
+        }
+
+        fn count(&self, path: &str, status: u16) -> usize {
+            self.0.lock().unwrap().seen.iter().filter(|seen| seen.0 == path && seen.1 == status).count()
+        }
+    }
+
+    impl Transport for Server {
+        fn send(&mut self, request: &Request<'_>) -> Result<Reply, TransportError> {
+            let mut state = self.0.lock().unwrap();
+            let status = if request.path == routes::FORGET { state.forget_status } else { 200 };
+            state.seen.push((request.path.to_owned(), status));
+            if request.path == routes::INGEST {
+                use std::io::Read;
+                let _ = flate2::read::GzDecoder::new(request.body).read_to_end(&mut state.ingested);
+            }
+            if status == 0 {
+                return Err(TransportError::Network("down".to_owned()));
+            }
+            Ok(Reply { status, body: br#"{"accepted":1}"#.to_vec(), retry_after: None })
+        }
+    }
+
+    fn sending(dir: &Path, server: &Server, edit: impl FnOnce(&mut Config)) -> Arc<Pipeline> {
+        let mut config = config(dir);
+        config.endpoint = Some("https://telemetry.example.com".to_owned());
+        config.tick_interval = Duration::from_millis(5);
+        config.flush_interval = Duration::from_millis(20);
+        config.retry_min = Duration::from_millis(20);
+        config.retry_max = Duration::from_millis(80);
+        config.send_before_notice = true;
+        edit(&mut config);
+        Pipeline::start_with(&config, Some(Box::new(server.clone())), false, true)
+    }
+
+    fn worker_is_alive(pipeline: &Pipeline) -> bool {
+        lock(&pipeline.worker).as_ref().is_some_and(|handle| !handle.is_finished())
+    }
+
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    #[test]
+    fn a_flush_with_an_endless_timeout_does_not_panic() {
+        let dir = TempDir::new("review");
+        let pipeline = Pipeline::start_with(&config(dir.path()), None, false, true);
+        assert!(pipeline.flush_blocking(Duration::MAX));
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn an_endless_shutdown_timeout_does_not_panic_in_the_destructor() {
+        let dir = TempDir::new("review");
+        let mut config = config(dir.path());
+        config.shutdown_timeout = Duration::MAX;
+        let pipeline = Pipeline::start_with(&config, None, false, true);
+        pipeline.shutdown();
+        assert!(!worker_is_alive(&pipeline));
+    }
+
+    #[test]
+    fn endless_intervals_do_not_kill_the_worker() {
+        let dir = TempDir::new("review");
+        let server = Server::answering_forget_with(200);
+        let pipeline = sending(dir.path(), &server, |config| {
+            config.tick_interval = Duration::MAX;
+            config.flush_interval = Duration::MAX;
+            config.heartbeat_interval = Duration::MAX;
+            config.idle_after = Duration::MAX;
+            config.retry_min = Duration::MAX;
+            config.retry_max = Duration::MAX;
+            config.spool_max_age = Duration::MAX;
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(worker_is_alive(&pipeline), "the worker thread died at its first tick");
+        pipeline.flush_blocking(Duration::from_secs(10));
+        assert!(worker_is_alive(&pipeline));
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn a_failed_send_with_the_longest_backoff_does_not_kill_the_worker() {
+        let dir = TempDir::new("review");
+        let server = Server::answering_forget_with(0);
+        let pipeline = sending(dir.path(), &server, |config| {
+            config.retry_min = Duration::MAX;
+            config.retry_max = Duration::MAX;
+        });
+        pipeline.forget();
+        pipeline.flush_blocking(Duration::from_secs(10));
+        pipeline.flush_blocking(Duration::from_secs(10));
+        assert!(worker_is_alive(&pipeline), "the worker thread died");
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn two_unclean_sessions_found_at_one_start_are_both_reported() {
+        let dir = TempDir::new("review");
+        // Two processes that had nothing unsent (session signal off) and were killed: marker, no segments.
+        let mut quiet = config(dir.path());
+        quiet.signals = vec![Signal::Crash];
+        let (first, second) = (idle(&quiet), idle(&quiet));
+        let gone = [first.session_id(), second.session_id()];
+        drop((first, second));
+        let _third = idle(&quiet);
+        let mut reported: Vec<String> = spooled(dir.path())
+            .into_iter()
+            .filter(|(_, _, item)| matches!(&item.body, ItemBody::Crash(crash) if crash.kind == CrashKind::UncleanExit))
+            .map(|(session, _, _)| session)
+            .collect();
+        reported.sort();
+        let mut expected = gone.to_vec();
+        expected.sort();
+        assert_eq!(reported, expected);
+    }
+
+    #[test]
+    fn forget_and_flush_at_the_same_time_do_not_deadlock() {
+        let dir = TempDir::new("review");
+        let server = Server::answering_forget_with(200);
+        let pipeline = sending(dir.path(), &server, |config| config.signals = vec![Signal::Crash]);
+        let progress = Arc::new(AtomicU64::new(0));
+        let threads: Vec<_> = ["forget", "flush"]
+            .into_iter()
+            .map(|role| {
+                let (pipeline, progress) = (pipeline.clone(), progress.clone());
+                std::thread::spawn(move || {
+                    for _ in 0..1500 {
+                        if role == "forget" {
+                            pipeline.forget();
+                        } else {
+                            pipeline.flush_blocking(Duration::from_secs(2));
+                        }
+                        progress.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            })
+            .collect();
+        let (mut last, mut stalled) = (0, 0);
+        while threads.iter().any(|thread| !thread.is_finished()) {
+            std::thread::sleep(Duration::from_millis(250));
+            let now = progress.load(Ordering::Relaxed);
+            stalled = if now == last { stalled + 1 } else { 0 };
+            last = now;
+            assert!(stalled < 40, "no progress for 10 s after {now} calls: forget() and the worker are deadlocked");
+        }
+        pipeline.shutdown();
+    }
+
+    /// Makes a folder read-only or writable again. False when a read-only folder can still be written,
+    /// as it can with rights that ignore the mode; the fault cannot be staged then.
+    #[cfg(unix)]
+    fn read_only(dir: &Path, on: bool) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(if on { 0o555 } else { 0o755 })).unwrap();
+        !on || std::fs::write(dir.join("probe"), b"").is_err()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_opt_out_holds_when_the_consent_file_cannot_be_written() {
+        let dir = TempDir::new("review");
+        let pipeline = idle(&config(dir.path()));
+        pipeline.notice_shown();
+        let sdk = dir.path().join(SDK_DIR);
+        if !read_only(&sdk, true) {
+            read_only(&sdk, false);
+            return;
+        }
+        pipeline.set_consent(ConsentCategory::Usage, false);
+        assert!(!pipeline.consent(ConsentCategory::Usage));
+        for _ in 0..3 {
+            pipeline.shared.sync_shared_files();
+            assert!(!pipeline.consent(ConsentCategory::Usage), "an opt-out must not come back on");
+        }
+        // Once the file can be written again, the choice is saved without being made again.
+        read_only(&sdk, false);
+        pipeline.shared.sync_shared_files();
+        assert!(!pipeline.consent(ConsentCategory::Usage));
+        assert!(std::fs::read_to_string(sdk.join("consent.json")).unwrap().contains(r#""usage":false"#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_forget_holds_when_the_install_file_cannot_be_written() {
+        let dir = TempDir::new("review");
+        let pipeline = idle(&config(dir.path()));
+        let before = pipeline.install_id();
+        let sdk = dir.path().join(SDK_DIR);
+        if !read_only(&sdk, true) {
+            read_only(&sdk, false);
+            return;
+        }
+        pipeline.forget();
+        let rotated = pipeline.install_id();
+        assert_ne!(rotated, before);
+        for _ in 0..3 {
+            pipeline.shared.sync_shared_files();
+            assert_eq!(pipeline.install_id(), rotated, "the forgotten install id must not come back");
+        }
+        assert_eq!(lock(&pipeline.shared.identity).pending_forget, vec![before.clone()], "the forget request must not be lost");
+        read_only(&sdk, false);
+        pipeline.shared.sync_shared_files();
+        let saved = std::fs::read_to_string(sdk.join("install.json")).unwrap();
+        assert!(saved.contains(&rotated) && saved.contains(&before), "{saved}");
+        assert_eq!(pipeline.install_id(), rotated);
+    }
+
+    #[test]
+    fn a_forget_request_that_keeps_failing_does_not_hold_up_ingest() {
+        for failing in [500, 0, 429] {
+            let dir = TempDir::new("review");
+            let server = Server::answering_forget_with(failing);
+            let pipeline = sending(dir.path(), &server, |_| {});
+            let old = pipeline.install_id();
+            pipeline.forget();
+            pipeline.submit(Signal::Perf, ItemBody::Perf(Perf::default()));
+            // The forget is still owed, so the flush is not clean; but the item is gone from the spool.
+            assert!(!pipeline.flush_blocking(Duration::from_secs(10)), "{failing}");
+            assert!(spooled(dir.path()).is_empty(), "{failing}: ingest was held up by the failing forget request");
+            assert!(server.count(routes::INGEST, 200) >= 1);
+            assert_eq!(lock(&pipeline.shared.identity).pending_forget, vec![old.clone()], "{failing}");
+            // It is tried again later, with backoff, and goes through once the server answers.
+            server.set_forget(200);
+            assert!(wait_until(|| pipeline.flush_blocking(Duration::from_secs(10))), "{failing}");
+            assert!(lock(&pipeline.shared.identity).pending_forget.is_empty());
+            pipeline.shutdown();
+        }
+    }
+
+    #[test]
+    fn a_forget_request_the_server_will_never_accept_is_given_up_and_counted() {
+        let dir = TempDir::new("review");
+        let server = Server::answering_forget_with(404);
+        let pipeline = sending(dir.path(), &server, |_| {});
+        pipeline.forget();
+        assert!(pipeline.flush_blocking(Duration::from_secs(10)));
+        assert!(lock(&pipeline.shared.identity).pending_forget.is_empty());
+        assert_eq!(server.count(routes::FORGET, 404), 1);
+        // The count leaves with the very batch that follows the refusal.
+        assert!(pipeline.flush_blocking(Duration::from_secs(10)));
+        assert!(server.ingested().contains(r#""reasons":{"forget_rejected":1}"#), "{}", server.ingested());
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn an_unknown_key_on_forget_stops_sending_and_keeps_the_request() {
+        let dir = TempDir::new("review");
+        let server = Server::answering_forget_with(401);
+        let pipeline = sending(dir.path(), &server, |_| {});
+        pipeline.forget();
+        assert!(!pipeline.flush_blocking(Duration::from_secs(10)));
+        assert!(!pipeline.flush_blocking(Duration::from_secs(10)));
+        assert_eq!(server.count(routes::FORGET, 401), 1);
+        assert_eq!(lock(&pipeline.shared.identity).pending_forget.len(), 1);
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn reading_the_install_id_does_not_wait_for_the_install_record() {
+        let dir = TempDir::new("review");
+        let pipeline = idle(&config(dir.path()));
+        let expected = pipeline.install_id();
+        // The worker holds this while it reads and writes the install file.
+        let held = lock(&pipeline.shared.identity);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let reader = pipeline.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send((reader.install_id(), reader.session_summary()));
+        });
+        let answer = receiver.recv_timeout(Duration::from_secs(5));
+        drop(held);
+        let (install_id, summary) = answer.expect("install_id() waited on the install record");
+        assert_eq!(install_id, expected);
+        assert!(summary.contains(&expected));
+    }
 }

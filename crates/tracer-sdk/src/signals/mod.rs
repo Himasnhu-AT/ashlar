@@ -193,6 +193,29 @@ impl Signals {
         self.shared.hang.beat(self.shared.epoch);
     }
 
+    /// One atomic update. See `hang` for the rule.
+    pub(crate) fn begin_turn(&self) {
+        self.shared.hang.begin_turn(self.shared.epoch);
+    }
+
+    /// One atomic update.
+    pub(crate) fn end_turn(&self) {
+        self.shared.hang.end_turn();
+    }
+
+    /// Drops everything kept in memory that was gathered before a `forget`: recent log lines, the last
+    /// crash and the last performance window. Otherwise they would leave with the next crash, under the
+    /// new install id.
+    pub(crate) fn forget(&self) {
+        self.shared.ring.clear();
+        if let Some(mut crash) = lock(&self.shared.last_crash, true) {
+            *crash = None;
+        }
+        if let Some(mut window) = lock(&self.shared.perf, true) {
+            window.last = None;
+        }
+    }
+
     pub(crate) fn pause_hang_detection(&self) {
         self.shared.hang.pause();
     }

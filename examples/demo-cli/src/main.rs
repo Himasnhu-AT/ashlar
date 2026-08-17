@@ -43,6 +43,7 @@ options:
   --no-crash            switch the crash category off after start
   --no-perf             switch the performance category off after start
   --wrap-logger         keep the host's own logger and wrap it, instead of LoggerMode::Install
+  --first-run           do not acknowledge the first-run notice: record, but send nothing
   --listen A,B         listen to these categories only (default: all)
   --tick-ms N           worker tick (default: SDK default)
   --heartbeat-ms N      session heartbeat interval
@@ -65,6 +66,7 @@ struct Args {
     process: Option<ProcessKind>,
     off: Vec<ConsentCategory>,
     wrap_logger: bool,
+    first_run: bool,
     listen: Option<Vec<String>>,
     tick: Option<Duration>,
     heartbeat: Option<Duration>,
@@ -102,6 +104,7 @@ fn parse(raw: Vec<String>) -> Result<Args, String> {
             "--no-crash" => args.off.push(ConsentCategory::Crash),
             "--no-perf" => args.off.push(ConsentCategory::Performance),
             "--wrap-logger" => args.wrap_logger = true,
+            "--first-run" => args.first_run = true,
             "--listen" => args.listen = Some(value(&flag)?.split(',').filter(|name| !name.is_empty()).map(str::to_owned).collect()),
             "--tick-ms" => args.tick = Some(millis(value(&flag)?)?),
             "--heartbeat-ms" => args.heartbeat = Some(millis(value(&flag)?)?),
@@ -148,11 +151,11 @@ fn category_named(name: &str) -> Option<Category> {
     Category::ALL.iter().copied().find(|category| category.name() == name)
 }
 
-/// What a host does once at startup: catalog, listening, intervals, logger.
+/// What a host does once at startup: listening, intervals, logger. Listening declares the events; there
+/// is no separate step for that.
 fn start(args: &Args) -> Result<Tracer, String> {
     let mut builder = Tracer::builder(&args.key, "demo", &args.version)
         .data_dir(&args.data_dir)
-        .catalog::<DemoEvent>()
         .logger(if args.wrap_logger { LoggerMode::None } else { LoggerMode::Install })
         .process(args.process.unwrap_or(ProcessKind::Gui));
     if let Some(endpoint) = &args.endpoint {
@@ -195,24 +198,34 @@ fn start(args: &Args) -> Result<Tracer, String> {
     for category in &args.off {
         tracer.set_consent(*category, false);
     }
+    // A windowed host calls this when the user closes its first-run notice; until then the SDK records
+    // but sends nothing. This demo has no window, so it stands in for the user: the choices above are
+    // "made in the notice", and then the notice is closed. `--first-run` leaves it open.
+    if !args.first_run {
+        tracer.notice_shown();
+    }
     Ok(tracer)
 }
 
-/// Keeps the "main loop" alive for `total`, beating the hang watchdog like a GUI would.
+/// Keeps the "main loop" alive for `total`, like an event loop would: short turns of work, each marked
+/// for the hang watchdog, with a wait for the next event in between. The wait is outside the turn, so it
+/// is never taken for a hang however long it lasts.
 fn run_loop(tracer: &Tracer, total: Duration) {
     let started = Instant::now();
     while started.elapsed() < total {
-        tracer.heartbeat();
-        tracer.note_input();
+        {
+            let _turn = tracer.turn();
+            tracer.note_input();
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
 }
 
 fn some_work(tracer: &Tracer) {
+    let _turn = tracer.turn();
     tracer.first_frame();
     tracer.track(DemoEvent::FileOpen);
     log::info!("opened a document");
-    tracer.heartbeat();
 }
 
 fn normal(tracer: &Tracer, args: &Args) {
@@ -253,15 +266,19 @@ fn crash_on_purpose() -> ! {
 fn hang(tracer: &Tracer, args: &Args) {
     some_work(tracer);
     for _ in 0..5 {
-        tracer.heartbeat();
+        drop(tracer.turn());
         std::thread::sleep(Duration::from_millis(30));
     }
     let threshold = args.hang.unwrap_or(Duration::from_secs(2));
     log::info!("blocking the main loop");
-    std::thread::sleep(threshold * 3);
-    tracer.heartbeat();
-    std::thread::sleep(Duration::from_millis(100));
-    tracer.heartbeat();
+    {
+        // One turn that takes three times the threshold: the watchdog reports it, once.
+        let _turn = tracer.turn();
+        std::thread::sleep(threshold * 3);
+    }
+    // Waiting for the next event, however long, is not a hang.
+    std::thread::sleep(threshold * 2);
+    drop(tracer.turn());
 }
 
 fn child(tracer: &Tracer, args: &Args, raw: &[String]) -> Result<(), String> {

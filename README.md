@@ -33,13 +33,16 @@ tracer_sdk::events! {
 let tracer = tracer_sdk::Tracer::builder("app-write-key", "my-app", env!("CARGO_PKG_VERSION"))
     .data_dir(my_data_dir)
     .endpoint("https://telemetry.example.com")
-    .catalog::<AppEvent>()
     .listen(Category::File)
     .init();
 
+// Nothing is sent until the user has seen your first-run notice.
+tracer.notice_shown();
+
+// Once per turn of the main loop:
+let _turn = tracer.turn();      // a turn that takes too long is reported as a hang
 tracer.track(AppEvent::FileOpen);
 tracer.frame(frame_duration);   // once per frame
-tracer.heartbeat();             // once per main-loop turn
 ```
 
 ## Documentation

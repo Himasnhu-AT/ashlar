@@ -42,6 +42,9 @@ pub(super) struct Consent {
     /// Held while the file is read into memory or changed and saved, so that a refresh cannot put back
     /// what a change on another thread has just replaced.
     file: Mutex<()>,
+    /// A choice made in this process has not reached the file yet, because saving failed. Until it has,
+    /// memory is the authority: the file is not read, and every refresh tries the save again.
+    unsaved: AtomicBool,
 }
 
 impl Consent {
@@ -49,7 +52,13 @@ impl Consent {
     pub(super) fn load(dir: &Path) -> Self {
         let path = dir.join(CONSENT_FILE);
         let file = read_json::<ConsentFile>(&path).unwrap_or(ConsentFile { crash: true, performance: true, usage: true, notice_shown: false });
-        Self { bits: AtomicU8::new(file.bits()), notice_shown: AtomicBool::new(file.notice_shown), path, file: Mutex::new(()) }
+        Self {
+            bits: AtomicU8::new(file.bits()),
+            notice_shown: AtomicBool::new(file.notice_shown),
+            path,
+            file: Mutex::new(()),
+            unsaved: AtomicBool::new(false),
+        }
     }
 
     /// Takes over what the file says now, if it can be read. Returns the categories that were allowed
@@ -59,7 +68,13 @@ impl Consent {
         self.read_file()
     }
 
+    /// Reads the file into memory, unless memory holds a choice the file does not have yet; then the
+    /// save is tried again instead. A file that could not be written must never undo an opt-out.
     fn read_file(&self) -> Vec<ConsentCategory> {
+        if self.unsaved.load(Ordering::Relaxed) {
+            self.save();
+            return Vec::new();
+        }
         let Some(file) = read_json::<ConsentFile>(&self.path) else { return Vec::new() };
         let before = self.bits.swap(file.bits(), Ordering::Relaxed);
         if file.notice_shown {
@@ -75,6 +90,16 @@ impl Consent {
     /// True when at least one category is allowed.
     pub(super) fn any(&self) -> bool {
         self.bits.load(Ordering::Relaxed) != 0
+    }
+
+    /// Changes one category for this process only, writing nothing. For a process the kill switch has
+    /// switched off, which must leave no trace on disk.
+    pub(super) fn set_in_memory(&self, category: ConsentCategory, allowed: bool) {
+        if allowed {
+            self.bits.fetch_or(bit(category), Ordering::Relaxed);
+        } else {
+            self.bits.fetch_and(!bit(category), Ordering::Relaxed);
+        }
     }
 
     /// Changes one category and saves the file.
@@ -102,6 +127,11 @@ impl Consent {
     }
 
     fn save(&self) {
+        let saved = self.write_file();
+        self.unsaved.store(!saved, Ordering::Relaxed);
+    }
+
+    fn write_file(&self) -> bool {
         if let Some(parent) = self.path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -111,7 +141,7 @@ impl Consent {
             usage: self.get(ConsentCategory::Usage),
             notice_shown: self.notice_shown(),
         };
-        write_json(&self.path, &file);
+        write_json(&self.path, &file)
     }
 }
 

@@ -2,6 +2,17 @@
 
 Newest first. One entry per checkpoint.
 
+## 2026-08-15 — Review fixes (SDK)
+
+- Public API added: `Tracer::begin_turn()`, `Tracer::end_turn()` and `Tracer::turn() -> TurnGuard` drive the hang watchdog by turns of the main loop, which works for loops that run only on input; `heartbeat()` stays for continuous loops. `Builder::send_before_notice(bool)` and `Config::send_before_notice`.
+- Behaviour change: nothing is sent until `Tracer::notice_shown()` has been called once, unless `send_before_notice(true)` is set.
+- Behaviour change: `Builder::listen`, `listen_events` and `listen_all` declare the catalog themselves; `catalog()` now adds to the catalog instead of replacing it.
+- `EventCategory` gained an associated const `EVENTS` with an empty default; the `events!` macro fills it in.
+- `Sink`: no method changed. A `LOG_TARGET` constant sits beside it for the SDK's own log lines. The panic hook now calls `Sink::count_error`.
+- `Signals`: added `forget()`, `begin_turn()` and `end_turn()`.
+- `crash.fatal` is now `true` for `child_exit` (and was already for `unclean_exit`); a `panic` stays `false` at capture and is for the server to mark.
+- Nine review findings and six lower-confidence notes fixed; see `docs/architecture.md` §3.3, §3.5, §3.7 and §3.8 for the rules they changed.
+
 ## 2026-08-15 — Checkpoint 1: SDK, server and dashboard (M1–M4)
 
 - SDK pipeline and signals built in parallel against the `Sink` seam and merged.

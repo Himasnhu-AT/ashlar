@@ -78,6 +78,10 @@ fn on_panic(weak: &Weak<Shared>, info: &PanicHookInfo<'_>) {
 
     shared.remember_crash(&crash, false);
     shared.sink.submit_now(Signal::Crash, ItemBody::Crash(crash));
+    // Counted now, as an error the session saw: whether the process survives it cannot be known here.
+    // If it does not, the pipeline takes the one that ended the session off again. Counted before the
+    // marker is written, so that the marker has it.
+    shared.sink.count_error();
     shared.sink.mark_panicked();
 }
 
@@ -101,6 +105,9 @@ pub(super) fn report_child_exit(shared: &Shared, program: &'static str, status: 
         return;
     }
     let mut crash = shared.crash_base(CrashKind::ChildExit, true);
+    // The child could not continue; that much is known. A panic's `fatal` is left false at capture,
+    // because the hook cannot know whether the host catches it.
+    crash.fatal = true;
     crash.exit_code = status.code();
     crash.signal = signal_of(&status);
     crash.context = Some(program.to_owned());
@@ -193,6 +200,8 @@ mod tests {
 
         assert!(previous_ran.load(Ordering::SeqCst), "the previous hook must still run");
         assert!(fixture.sink.panicked.load(Ordering::SeqCst), "mark_panicked must be called");
+        // The thread's panic was survived by the process, so it is one of the session's errors.
+        assert!(fixture.sink.errors.load(Ordering::SeqCst) >= 1, "a panic must be counted as an error");
         let items: Vec<_> = fixture
             .sink
             .items
@@ -399,6 +408,7 @@ mod tests {
         let all = crashes(&fixture);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].kind, CrashKind::ChildExit);
+        assert!(all[0].fatal, "a child that exited unsuccessfully could not continue");
         assert_eq!(all[0].exit_code, Some(3));
         assert_eq!(all[0].signal, None);
         assert_eq!(all[0].context.as_deref(), Some("exporter"));
