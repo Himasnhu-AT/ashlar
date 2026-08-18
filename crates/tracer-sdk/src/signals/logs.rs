@@ -94,11 +94,21 @@ impl SignalLogger {
         }
         let crumb = Breadcrumb {
             ts: now_ms(),
-            level: record.level().as_str().to_ascii_lowercase(),
+            level: level_name(record.level()).to_owned(),
             target: shared.scrubber.apply(record.target(), MAX_LABEL),
             message: shared.scrubber.apply(&record.args().to_string(), MAX_LOG_LINE),
         };
         shared.ring.push(crumb);
+    }
+}
+
+fn level_name(level: log::Level) -> &'static str {
+    match level {
+        log::Level::Error => "error",
+        log::Level::Warn => "warn",
+        log::Level::Info => "info",
+        log::Level::Debug => "debug",
+        log::Level::Trace => "trace",
     }
 }
 
@@ -180,11 +190,19 @@ pub(super) fn remove_saved(shared: &Shared) {
 }
 
 /// Reads and deletes the file saved by the previous run. Any problem with it gives an empty list.
+#[cfg(test)]
 pub(super) fn take_saved(dir: &Path) -> Vec<Breadcrumb> {
+    let crumbs = read_saved(dir);
+    let _ = std::fs::remove_file(path_in(dir));
+    crumbs
+}
+
+/// Reads the file a run saved, leaving it in place. Any problem with it gives an empty list. A link is
+/// not followed and an oversized file is not read: the folder may have been tampered with.
+pub(super) fn read_saved(dir: &Path) -> Vec<Breadcrumb> {
     let path = path_in(dir);
-    let too_big = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > MAX_SAVED_BYTES);
-    let text = if too_big { None } else { std::fs::read_to_string(&path).ok() };
-    let _ = std::fs::remove_file(&path);
+    let plain = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file() && meta.len() <= MAX_SAVED_BYTES);
+    let text = if plain { std::fs::read_to_string(&path).ok() } else { None };
     let Some(text) = text else { return Vec::new() };
     let mut crumbs = Vec::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
@@ -282,6 +300,21 @@ mod tests {
         std::fs::remove_file(fixture.dir.path().join(FILE_NAME)).unwrap();
         fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(2)));
         assert!(!fixture.dir.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn a_save_that_fails_is_counted_and_tried_again_only_when_something_changes() {
+        let fixture = Fixture::new(|config| config.signals = vec![Signal::Logs]);
+        let logger = fixture.signals.logger(None);
+        emit(&*logger, log::Level::Warn, "host", "first");
+        // A folder where the file should be: the save cannot go through.
+        std::fs::create_dir_all(fixture.dir.path().join(FILE_NAME).join("in the way")).unwrap();
+        fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(1)));
+        fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(2)));
+        assert_eq!(*fixture.sink.drops.lock().unwrap(), vec!["breadcrumbs_write"]);
+        // The lines are still in memory, and a later crash still gets them.
+        assert_eq!(fixture.signals.shared.ring.snapshot(true).len(), 1);
+        assert!(read_saved(fixture.dir.path()).is_empty(), "a folder is not read as saved lines");
     }
 
     #[test]

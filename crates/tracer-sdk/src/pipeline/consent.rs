@@ -45,12 +45,17 @@ pub(super) struct Consent {
     /// A choice made in this process has not reached the file yet, because saving failed. Until it has,
     /// memory is the authority: the file is not read, and every refresh tries the save again.
     unsaved: AtomicBool,
+    /// The file was written and has not been flushed to the disk yet.
+    unsynced: AtomicBool,
+    /// The file has existed at some point in this run, so if it disappears it is put back.
+    persisted: AtomicBool,
 }
 
 impl Consent {
     /// Loads the saved choices, defaulting to everything allowed. Writes nothing.
     pub(super) fn load(dir: &Path) -> Self {
         let path = dir.join(CONSENT_FILE);
+        let path_exists = path.is_file();
         let file = read_json::<ConsentFile>(&path).unwrap_or(ConsentFile { crash: true, performance: true, usage: true, notice_shown: false });
         Self {
             bits: AtomicU8::new(file.bits()),
@@ -58,6 +63,8 @@ impl Consent {
             path,
             file: Mutex::new(()),
             unsaved: AtomicBool::new(false),
+            unsynced: AtomicBool::new(false),
+            persisted: AtomicBool::new(path_exists),
         }
     }
 
@@ -75,7 +82,15 @@ impl Consent {
             self.save();
             return Vec::new();
         }
-        let Some(file) = read_json::<ConsentFile>(&self.path) else { return Vec::new() };
+        let Some(file) = read_json::<ConsentFile>(&self.path) else {
+            // The file this process has read or written before is gone or unreadable. Left like that,
+            // the next launch would start from the defaults and forget an opt-out; write it again.
+            if self.persisted.load(Ordering::Relaxed) {
+                self.save();
+            }
+            return Vec::new();
+        };
+        self.persisted.store(true, Ordering::Relaxed);
         let before = self.bits.swap(file.bits(), Ordering::Relaxed);
         if file.notice_shown {
             self.notice_shown.store(true, Ordering::Relaxed);
@@ -129,6 +144,17 @@ impl Consent {
     fn save(&self) {
         let saved = self.write_file();
         self.unsaved.store(!saved, Ordering::Relaxed);
+        if saved {
+            self.unsynced.store(true, Ordering::Relaxed);
+            self.persisted.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Makes the last save durable. Called by the worker, so that no host thread waits for the disk.
+    pub(super) fn sync(&self) {
+        if self.unsynced.swap(false, Ordering::Relaxed) {
+            super::files::sync_file(&self.path);
+        }
     }
 
     fn write_file(&self) -> bool {

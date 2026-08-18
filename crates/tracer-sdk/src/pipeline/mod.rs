@@ -36,12 +36,12 @@ use tracer_proto::{
 
 use self::consent::Consent;
 use self::files::{deadline_in, lock, lock_soft, now_ms, read_json, wait_step, write_json};
-use self::identity::{Identity, derived_id, new_id};
+use self::identity::{Identity, derived_id, new_id, next_item_id};
 use self::inspect::Outbox;
 use self::sender::{Message, Worker};
 use self::session::{Marker, SELECTION_FILE, SESSION_FILE, Selection, SessionClock, catalog_hash};
 use self::spool::{DROP_IO, Header, MAX_LINE_BYTES, SPOOL_DIR, Spool, category_code};
-use self::usage::{DROP_PROP, Listening, build_event};
+use self::usage::{DROP_PROP, Listening};
 use crate::config::Config;
 use crate::signals::{self, Signals};
 use crate::sink::{LOG_TARGET, Sink};
@@ -64,17 +64,30 @@ const MAX_RETRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MAX_TICKS_PER_SAMPLE: u32 = 5;
 const MIN_SAMPLE_CAP: Duration = Duration::from_secs(60);
 
+/// Most properties of one event that are copied into the queue. More than the wire allows, so that the
+/// worker still sees and counts the ones over the limit, and few enough to bound the copy.
+const MAX_QUEUED_PROPS: usize = 64;
+
 const DROP_QUEUE_FULL: &str = "queue_full";
 const DROP_BUSY: &str = "spool_busy";
 
 /// What the SDK threw away since the last report, by reason.
 #[derive(Debug, Default)]
-pub(crate) struct DropCounts(Mutex<BTreeMap<String, u64>>);
+pub(crate) struct DropCounts {
+    counts: Mutex<BTreeMap<String, u64>>,
+    /// The one reason a host thread counts on its hot path. Kept apart so that a full queue costs the
+    /// host an atomic add and never a lock the worker might be holding.
+    queue_full: AtomicU64,
+}
 
 impl DropCounts {
+    fn add_queue_full(&self) {
+        self.queue_full.fetch_add(1, Ordering::Relaxed);
+    }
+
     fn add(&self, reason: &str, count: u64) {
         if count > 0 {
-            let mut counts = lock(&self.0);
+            let mut counts = lock(&self.counts);
             match counts.get_mut(reason) {
                 Some(total) => *total = total.saturating_add(count),
                 None => {
@@ -92,7 +105,8 @@ impl DropCounts {
 
     /// Returns the counts and resets them.
     fn take(&self) -> BTreeMap<String, u64> {
-        std::mem::take(&mut *lock(&self.0))
+        self.add(DROP_QUEUE_FULL, self.queue_full.swap(0, Ordering::Relaxed));
+        std::mem::take(&mut *lock(&self.counts))
     }
 }
 
@@ -122,6 +136,7 @@ struct Timing {
     retry_max: Duration,
     shutdown: Duration,
     batch_items: u64,
+    queue_capacity: usize,
 }
 
 /// State shared by host threads and the worker.
@@ -145,6 +160,8 @@ struct Shared {
     /// The install record in memory has not reached the file, because saving failed. Until it has, the
     /// file is not believed, and every tick tries the save again.
     identity_unsaved: AtomicBool,
+    /// The install file was written and has not been flushed to the disk yet.
+    identity_unsynced: AtomicBool,
     /// Install ids this process has rotated away from. A file that still names one of them is behind.
     retired: Mutex<Vec<String>>,
     /// Nothing is sent until the user has seen the host's notice.
@@ -193,7 +210,7 @@ impl Shared {
     }
 
     fn item(&self, body: ItemBody) -> Item {
-        Item { id: new_id(), ts: now_ms(), body }
+        Item { id: next_item_id(), ts: now_ms(), body }
     }
 
     /// Writes one item to this session's folder in the spool, on the calling thread. With `soft`, gives
@@ -207,6 +224,16 @@ impl Shared {
     /// the old install id cannot land under the new header.
     fn store_queued(&self, epoch: u64, category: u8, item: &Item) -> bool {
         self.store_if(category, item, false, || epoch == self.epoch.load(Ordering::Relaxed) && self.category_allowed(category))
+    }
+
+    /// Stores an item without counting it as dropped if that fails. For the `drops` item only.
+    fn store_uncounted(&self, category: u8, item: &Item) -> bool {
+        let Ok(json) = serde_json::to_string(item) else { return false };
+        let stored = lock(&self.disk).try_append(category, &json, &self.drops).is_ok();
+        if stored {
+            self.unsent.fetch_add(1, Ordering::Relaxed);
+        }
+        stored
     }
 
     /// True while sending waits for the user to have seen the host's notice.
@@ -283,10 +310,17 @@ impl Shared {
         }
         let install_id = lock(&self.identity).install_id.clone();
         let mut spool = lock(&self.disk);
-        for unclean in spool.adopt_orphans(&install_id) {
-            let breadcrumbs = signals::take_saved_breadcrumbs(&unclean.dir);
+        if spool.restore_own_dir() {
+            // The session folder was deleted under the running session. It is back; so must the marker be.
+            drop(spool);
+            self.write_marker(false);
+            spool = lock(&self.disk);
+        }
+        for unclean in spool.adopt_orphans(&install_id, &self.drops) {
+            let breadcrumbs = signals::saved_breadcrumbs(&unclean.dir);
             let previous = unclean.marker;
-            let ts = if previous.updated == 0 { previous.started } else { previous.updated };
+            // The time of the last sign of life, but never later than now: a marker can say anything.
+            let ts = (if previous.updated == 0 { previous.started } else { previous.updated }).min(now_ms());
             let mut items = Vec::new();
             if self.permitted(Signal::Session) {
                 let status = if previous.panicked { SessionStatus::Crashed } else { SessionStatus::Abnormal };
@@ -314,8 +348,21 @@ impl Shared {
             if spool.add_recovery(&unclean.session_id, &lines) {
                 self.unsent.fetch_add(lines.len() as u64, Ordering::Relaxed);
             }
+            // Only now that the report is on disk and the marker is gone.
+            let _ = std::fs::remove_file(unclean.dir.join(BREADCRUMBS_FILE));
         }
         spool.expire(SystemTime::now(), &self.drops);
+    }
+
+    /// Makes the small state files durable, if they changed since the last call. They are written by
+    /// temp file and rename without waiting for the disk, because that happens on host threads; this is
+    /// the worker catching up, within a tick. Until then a power loss could bring back an older consent
+    /// choice or install id.
+    fn sync_state_files(&self) {
+        self.consent.sync();
+        if self.identity_unsynced.swap(false, Ordering::Relaxed) {
+            files::sync_file(&self.dir.join(identity::INSTALL_FILE));
+        }
     }
 
     /// Takes over what other processes of the host wrote to the shared files: a consent change, or a new
@@ -330,9 +377,16 @@ impl Shared {
             self.change_identity(&mut identity, |_| {});
             return;
         }
-        if let Some(saved) = Identity::load(&self.dir)
-            && saved != *identity
-        {
+        let Some(saved) = Identity::load(&self.dir) else {
+            // The install file is gone or unreadable while the session runs. Left like that, the next
+            // launch would take a new install id; put the record back.
+            if !identity.install_id.is_empty() {
+                self.identity_unsaved.store(true, Ordering::Relaxed);
+                self.change_identity(&mut identity, |_| {});
+            }
+            return;
+        };
+        if saved != *identity {
             if lock(&self.retired).contains(&saved.install_id) {
                 // The file names an id this process has already rotated away from: it is behind, and
                 // must not bring the forgotten id back. Put the current record in its place.
@@ -362,6 +416,7 @@ impl Shared {
         let retired = lock(&self.retired).clone();
         let (next, saved) = Identity::update(&self.dir, identity, |file| !unsaved && !retired.contains(&file.install_id), change);
         self.identity_unsaved.store(!saved, Ordering::Relaxed);
+        self.identity_unsynced.store(saved, Ordering::Relaxed);
         let changed = next.install_id != identity.install_id;
         self.set_identity(identity, next);
         changed
@@ -452,6 +507,8 @@ impl Pipeline {
         let dir = config.data_dir.join(SDK_DIR);
         let mut usable = !killed && std::fs::create_dir_all(&dir).is_ok();
         let identity = if usable { Identity::load_or_create(&dir) } else { Identity::load(&dir).unwrap_or_default() };
+        // If the record could not be written, it is kept in memory and the worker goes on trying.
+        let identity_unsaved = usable && Identity::load(&dir).as_ref() != Some(&identity);
         let now = Instant::now();
         let started_ms = now_ms();
         let session_id = new_id();
@@ -504,6 +561,7 @@ impl Pipeline {
                 retry_max: config.retry_max.max(config.retry_min).clamp(Duration::from_millis(1), MAX_RETRY),
                 shutdown: config.shutdown_timeout,
                 batch_items: u64::try_from(config.batch_items.max(1)).unwrap_or(u64::MAX),
+                queue_capacity: config.queue_capacity.max(1),
             },
             off: AtomicBool::new(!usable),
             closed: AtomicBool::new(false),
@@ -511,7 +569,8 @@ impl Pipeline {
             consent: Consent::load(&dir),
             install_id: Mutex::new(identity.install_id.clone()),
             identity: Mutex::new(identity),
-            identity_unsaved: AtomicBool::new(false),
+            identity_unsaved: AtomicBool::new(identity_unsaved),
+            identity_unsynced: AtomicBool::new(usable),
             retired: Mutex::new(Vec::new()),
             hold_until_notice: !config.send_before_notice,
             session_id,
@@ -542,7 +601,12 @@ impl Pipeline {
                 log::warn!(target: LOG_TARGET, "categories are listened to but no events were declared; declared events will not be recorded");
             }
             shared.write_marker(false);
-            shared.maintain();
+            // Looking through what earlier runs left behind can take a while when there is a lot of it,
+            // and `init` is on the host's startup path: the worker does it, first thing. Only a pipeline
+            // without a worker, as some tests build, does it here.
+            if !spawn_worker {
+                shared.maintain();
+            }
             let mut catalog_item = None;
             if shared.permitted(Signal::Session) {
                 let mut catalog = carry_catalog.then(|| config.catalog.clone());
@@ -579,12 +643,26 @@ impl Pipeline {
         if !self.allows(Signal::Usage) || !self.shared.listening.wants(name, category, dynamic) {
             return;
         }
-        match build_event(name, category, dynamic, props) {
-            Ok((event, dropped_props)) => {
-                self.shared.drops.add(DROP_PROP, dropped_props);
-                self.submit(Signal::Usage, ItemBody::Event(event));
+        // The host thread only hands over what it was given: fixed strings and a few plain values.
+        // Checking the limits, building the wire event, giving it an id and writing it out all happen on
+        // the worker. Without properties this allocates nothing.
+        let props = match props.split_at_checked(MAX_QUEUED_PROPS) {
+            Some((kept, over)) => {
+                self.shared.drops.add(DROP_PROP, over.len() as u64);
+                kept
             }
-            Err(reason) => self.shared.drops.add(reason, 1),
+            None => props,
+        };
+        let message = Message::Event {
+            epoch: self.shared.epoch.load(Ordering::Relaxed),
+            ts: now_ms(),
+            name,
+            category,
+            dynamic,
+            props: (!props.is_empty()).then(|| props.into()),
+        };
+        if self.queue.try_send(message).is_err() {
+            self.shared.drops.add_queue_full();
         }
     }
 
@@ -746,11 +824,12 @@ impl Sink for Pipeline {
         }
         let message = Message::Item {
             epoch: self.shared.epoch.load(Ordering::Relaxed),
+            ts: now_ms(),
             category: category_code(signal.consent()),
-            item: Box::new(self.shared.item(body)),
+            body: Box::new(body),
         };
         if self.queue.try_send(message).is_err() {
-            self.shared.drops.add(DROP_QUEUE_FULL, 1);
+            self.shared.drops.add_queue_full();
         }
     }
 

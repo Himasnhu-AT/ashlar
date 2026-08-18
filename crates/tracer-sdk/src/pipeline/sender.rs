@@ -14,9 +14,10 @@ use tracer_proto::{
 
 use super::Shared;
 use super::files::{lock, now_ms, write_json};
-use super::identity::random_u64;
+use super::identity::{next_item_id, random_u64};
 use super::session::SELECTION_FILE;
 use super::spool::{Batch, CAT_META, Header, category_code};
+use super::usage::{DROP_PROP, build_event};
 use crate::sink::LOG_TARGET;
 use crate::transport::{Request, Transport};
 
@@ -35,12 +36,23 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const DRAIN_STEP: usize = 256;
 
 pub(super) enum Message {
-    Item {
-        /// The value of the forget counter when the item was queued.
+    /// A usage event exactly as the host thread was given it. The worker checks it and builds the item.
+    Event {
+        /// The value of the forget counter when it was queued.
         epoch: u64,
+        ts: UnixMs,
+        name: &'static str,
+        category: &'static str,
+        dynamic: bool,
+        props: Option<Box<[(&'static str, crate::Prop)]>>,
+    },
+    /// Anything else, from the signal modules.
+    Item {
+        epoch: u64,
+        ts: UnixMs,
         category: u8,
         /// Boxed so that a queue slot stays small.
-        item: Box<Item>,
+        body: Box<ItemBody>,
     },
     /// Nothing to store; the control state changed.
     Wake,
@@ -110,6 +122,8 @@ impl Worker {
     pub(super) fn run(mut self) {
         // `timing.tick` is clamped when it is built, so adding it to the clock cannot overflow.
         let mut next_tick = Instant::now() + self.shared.timing.tick;
+        // What earlier runs left behind is looked through here, not in `init`.
+        self.upkeep(Instant::now());
         loop {
             let (flush_requested, stop, purge) = {
                 let mut control = lock(&self.shared.control);
@@ -129,6 +143,11 @@ impl Worker {
             }
             if stop || flush_requested > self.flush_done {
                 self.drain_queue();
+                if stop {
+                    // Whether or not anything can be sent now, the counts of what was dropped go into
+                    // the spool, so that they are not lost with the process.
+                    self.store_drop_counts();
+                }
                 self.note_held();
                 self.send_cycle(true);
                 let clean = self.nothing_left();
@@ -167,8 +186,21 @@ impl Worker {
     }
 
     fn handle(&mut self, message: Message) {
-        if let Message::Item { epoch, category, item } = message {
-            self.shared.store_queued(epoch, category, &item);
+        match message {
+            Message::Event { epoch, ts, name, category, dynamic, props } => {
+                match build_event(name, category, dynamic, props.as_deref().unwrap_or_default()) {
+                    Ok((event, dropped_props)) => {
+                        self.shared.drops.add(DROP_PROP, dropped_props);
+                        let item = Item { id: next_item_id(), ts, body: ItemBody::Event(event) };
+                        self.shared.store_queued(epoch, category_code(Signal::Usage.consent()), &item);
+                    }
+                    Err(reason) => self.shared.drops.add(reason, 1),
+                }
+            }
+            Message::Item { epoch, ts, category, body } => {
+                self.shared.store_queued(epoch, category, &Item { id: next_item_id(), ts, body: *body });
+            }
+            Message::Wake => {}
         }
     }
 
@@ -189,15 +221,21 @@ impl Worker {
         self.shared.maintain();
     }
 
-    /// Stores everything that is queued right now.
+    /// Stores everything that is queued right now: at most a queue's worth. Without the bound, host
+    /// threads that keep the queue full would keep the worker here for ever, and it would never send,
+    /// tick or answer the flush it is draining for.
     fn drain_queue(&mut self) {
-        while let Ok(message) = self.queue.try_recv() {
-            self.handle(message);
+        for _ in 0..self.shared.timing.queue_capacity {
+            match self.queue.try_recv() {
+                Ok(message) => self.handle(message),
+                Err(_) => break,
+            }
         }
     }
 
     fn tick(&mut self, now: Instant) {
         let shared = self.shared.clone();
+        shared.sync_state_files();
         shared.sync_shared_files();
         shared.sample(now);
         if now.saturating_duration_since(self.last_heartbeat) >= shared.timing.heartbeat {
@@ -357,7 +395,9 @@ impl Worker {
         let reasons = self.shared.drops.take();
         if !reasons.is_empty() {
             let item = self.shared.item(ItemBody::Drops(Drops { reasons: reasons.clone() }));
-            if !self.shared.store(CAT_META, &item, false) {
+            if !self.shared.store_uncounted(CAT_META, &item) {
+                // Kept for the next pass, exactly as they were: failing to store the counts is not
+                // itself counted, or an unwritable disk would count one more loss on every pass.
                 self.shared.drops.merge(reasons);
             }
         }
@@ -482,7 +522,7 @@ fn envelope_json(header: &Header, sent_at: UnixMs, items: &[String]) -> Option<V
 fn gzip(bytes: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
 
-    let mut encoder = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4 + 64), flate2::Compression::default());
+    let mut encoder = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 4 + 64), flate2::Compression::fast());
     encoder.write_all(bytes).ok()?;
     encoder.finish().ok()
 }

@@ -1,17 +1,52 @@
 //! Performance windows: frame-time histogram, startup time, process CPU and memory, and the host's
 //! counters and gauges, closed every `perf_window` and submitted as one `perf` item.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tracer_proto::{FrameStats, ItemBody, Perf, Signal};
+use tracer_proto::{FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
 
 use super::{Shared, lock, sys};
 
-/// What has accumulated since the window opened. Held behind a lock for the length of an update only.
+/// The frame-time histogram of the open window, as plain atomics: recording a frame is three atomic
+/// operations, takes no lock, and so can never wait behind the worker or behind another thread that is
+/// recording.
+#[derive(Default)]
+pub(crate) struct Frames {
+    buckets: [AtomicU64; FRAME_BUCKETS],
+    sum_us: AtomicU64,
+    max_us: AtomicU32,
+}
+
+impl Frames {
+    fn record(&self, us: u32) {
+        if let Some(bucket) = self.buckets.get(FrameStats::bucket_index(us)) {
+            bucket.fetch_add(1, Ordering::Relaxed);
+        }
+        self.sum_us.fetch_add(u64::from(us), Ordering::Relaxed);
+        self.max_us.fetch_max(us, Ordering::Relaxed);
+    }
+
+    /// Takes what has been recorded and starts again from nothing. The count and the slow and frozen
+    /// counts are worked out from the buckets, whose bounds include both thresholds, so the three always
+    /// agree with the histogram. A frame recorded at this very moment lands in this window or the next.
+    fn take(&self) -> FrameStats {
+        let buckets: Vec<u64> = self.buckets.iter().map(|bucket| bucket.swap(0, Ordering::Relaxed)).collect();
+        let above = |threshold: u32| buckets.iter().skip(FrameStats::bucket_index(threshold) + 1).sum();
+        FrameStats {
+            count: buckets.iter().sum(),
+            sum_us: self.sum_us.swap(0, Ordering::Relaxed),
+            max_us: self.max_us.swap(0, Ordering::Relaxed),
+            slow: above(SLOW_FRAME_US),
+            frozen: above(FROZEN_FRAME_US),
+            buckets,
+        }
+    }
+}
+
+/// What else has accumulated since the window opened. Held behind a lock for the length of an update only.
 pub(crate) struct Window {
     start: Instant,
-    frames: FrameStats,
     startup_ms: Option<u32>,
     cpu_sum: f64,
     cpu_samples: u32,
@@ -24,17 +59,7 @@ pub(crate) struct Window {
 
 impl Window {
     pub(super) fn new(start: Instant) -> Self {
-        Self {
-            start,
-            frames: FrameStats::default(),
-            startup_ms: None,
-            cpu_sum: 0.0,
-            cpu_samples: 0,
-            rss_bytes: None,
-            rss_peak_bytes: 0,
-            last_sample: None,
-            last: None,
-        }
+        Self { start, startup_ms: None, cpu_sum: 0.0, cpu_samples: 0, rss_bytes: None, rss_peak_bytes: 0, last_sample: None, last: None }
     }
 }
 
@@ -47,10 +72,7 @@ impl Shared {
         if !self.allowed(Signal::Perf) {
             return;
         }
-        let us = u32::try_from(duration.as_micros()).unwrap_or(u32::MAX);
-        if let Some(mut window) = lock(&self.perf, true) {
-            window.frames.record(us);
-        }
+        self.frames.record(u32::try_from(duration.as_micros()).unwrap_or(u32::MAX));
     }
 
     /// Records the time since start once. Later calls do nothing.
@@ -104,7 +126,7 @@ impl Shared {
             }
             let (counters, gauges) = self.registry.drain();
             window.start = now;
-            let frames = std::mem::take(&mut window.frames);
+            let frames = self.frames.take();
             let startup_ms = window.startup_ms.take();
             let cpu_pct = (window.cpu_samples > 0).then(|| (window.cpu_sum / f64::from(window.cpu_samples)) as f32);
             let rss_bytes = window.rss_bytes.take();

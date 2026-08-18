@@ -712,3 +712,142 @@ mod review {
         assert!(summary.contains(&expected));
     }
 }
+
+/// Time misbehaving, and the documented limits at and just past their edge.
+mod time_and_limits {
+    use super::super::files::testing::CLOCK_SKEW_MS;
+    use super::*;
+
+    const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+    fn totals_tuple(totals: tracer_proto::SessionTotals) -> (u64, u64, u64, u64) {
+        (totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s)
+    }
+
+    #[test]
+    fn the_wall_clock_jumping_about_leaves_session_time_untouched() {
+        let dir = TempDir::new("time");
+        let mut config = config(dir.path());
+        config.tick_interval = Duration::from_secs(3600);
+        let pipeline = idle(&config);
+        let start = pipeline.shared.started;
+        let mut previous = (0, 0, 0, 0);
+        // Forwards a day, back two, forwards a year, back to where it was: session time comes from the
+        // monotonic clock and only ever grows, by exactly what really passed.
+        for (step, skew) in [(1u64, DAY_MS), (2, -DAY_MS), (3, 365 * DAY_MS), (4, 0), (5, i64::MIN), (6, i64::MAX)] {
+            CLOCK_SKEW_MS.with(|cell| cell.set(skew));
+            pipeline.submit_now(Signal::Crash, crash());
+            pipeline.shared.write_marker(false);
+            let now = totals_tuple(pipeline.shared.sample(start + Duration::from_secs(step * 100)));
+            assert_eq!(now.0, step * 100, "skew {skew}");
+            assert!(now.0 >= previous.0 && now.1 >= previous.1 && now.2 >= previous.2 && now.3 >= previous.3, "totals went backwards at skew {skew}");
+            previous = now;
+        }
+        CLOCK_SKEW_MS.with(|cell| cell.set(0));
+        // The items carry whatever the wall clock said, including nonsense; none of that broke anything.
+        let stamps: Vec<u64> = spooled(dir.path()).into_iter().filter(|(_, category, _)| *category == b'c').map(|(_, _, item)| item.ts).collect();
+        assert_eq!(stamps.len(), 6);
+        assert!(stamps[0] > stamps[1] && stamps[2] > stamps[0], "{stamps:?}");
+        assert!(stamps[4] == 0 && stamps[5] > 1 << 62, "{stamps:?}");
+        pipeline.shutdown();
+    }
+
+    #[test]
+    fn a_marker_written_under_a_clock_far_ahead_is_reported_dated_now() {
+        let dir = TempDir::new("time");
+        let config = config(dir.path());
+        let first = idle(&config);
+        CLOCK_SKEW_MS.with(|cell| cell.set(400 * DAY_MS));
+        first.shared.write_marker(false);
+        CLOCK_SKEW_MS.with(|cell| cell.set(0));
+        let gone = first.session_id();
+        drop(first);
+        let before = super::super::files::now_ms();
+        let _next = idle(&config);
+        let reports: Vec<Item> = spooled(dir.path())
+            .into_iter()
+            .filter(|(session, _, item)| *session == gone && !matches!(item.body, ItemBody::SessionStart(_)))
+            .map(|(_, _, item)| item)
+            .collect();
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|item| item.ts >= before && item.ts <= super::super::files::now_ms()), "{reports:?}");
+    }
+
+    #[test]
+    fn a_tick_delayed_by_minutes_adds_at_most_its_cap() {
+        let dir = TempDir::new("time");
+        let mut config = config(dir.path());
+        config.tick_interval = Duration::from_secs(1);
+        let pipeline = idle(&config);
+        let start = pipeline.shared.started;
+        pipeline.note_input();
+        assert_eq!(totals_tuple(pipeline.shared.sample(start + Duration::from_secs(1))), (1, 1, 1, 0));
+        // The process was suspended for an hour, or the machine slept and its clock kept counting.
+        let after = totals_tuple(pipeline.shared.sample(start + Duration::from_secs(3601)));
+        assert_eq!(after, (61, 61, 1, 60), "one tick may add a minute at most, and long after the last input it is idle time");
+        assert_eq!(totals_tuple(pipeline.shared.sample(start + Duration::from_secs(3602))).0, 62);
+        // A sample from before the last one changes nothing.
+        assert_eq!(totals_tuple(pipeline.shared.sample(start)).0, 62);
+    }
+
+    #[test]
+    fn the_queue_holds_exactly_its_capacity() {
+        for capacity in [1usize, 2, 7] {
+            let dir = TempDir::new("limits");
+            let mut config = config(dir.path());
+            config.queue_capacity = capacity;
+            let pipeline = idle(&config);
+            for _ in 0..capacity {
+                pipeline.track("file.open", "file", false, &[]);
+            }
+            assert!(pipeline.shared.drops.take().is_empty(), "capacity {capacity}: an item within the capacity was dropped");
+            pipeline.track("file.open", "file", false, &[]);
+            assert_eq!(pipeline.shared.drops.take().get(DROP_QUEUE_FULL), Some(&1), "capacity {capacity}");
+        }
+        // A capacity of zero is taken as one rather than as a queue that accepts nothing or blocks.
+        let dir = TempDir::new("limits");
+        let mut config = config(dir.path());
+        config.queue_capacity = 0;
+        let pipeline = idle(&config);
+        pipeline.track("file.open", "file", false, &[]);
+        pipeline.track("file.open", "file", false, &[]);
+        assert_eq!(pipeline.shared.drops.take().get(DROP_QUEUE_FULL), Some(&1));
+    }
+
+    #[test]
+    fn more_properties_than_the_queue_copies_are_counted_on_the_host_thread() {
+        let dir = TempDir::new("limits");
+        let pipeline = idle(&config(dir.path()));
+        let many: Vec<(&'static str, crate::Prop)> = (0..super::super::MAX_QUEUED_PROPS + 3).map(|_| ("key", crate::Prop::Int(1))).collect();
+        pipeline.track("file.open", "file", false, &many);
+        assert_eq!(pipeline.shared.drops.take().get("prop_dropped"), Some(&3));
+        pipeline.track("file.open", "file", false, &many[..super::super::MAX_QUEUED_PROPS]);
+        assert!(pipeline.shared.drops.take().is_empty());
+    }
+
+    #[test]
+    fn an_unclean_report_too_big_for_one_line_goes_without_its_log_lines() {
+        let dir = TempDir::new("limits");
+        let config = config(dir.path());
+        let first = idle(&config);
+        let gone = first.session_id();
+        // More saved log lines than fit in one spool line.
+        let crumb =
+            serde_json::to_string(&tracer_proto::Breadcrumb { ts: 1, level: "warn".to_owned(), target: "host".to_owned(), message: "x".repeat(500) })
+                .unwrap();
+        std::fs::write(first.session_dir().join("breadcrumbs.jsonl"), format!("{crumb}\n").repeat(600)).unwrap();
+        drop(first);
+        let _next = idle(&config);
+        let crashes: Vec<Crash> = spooled(dir.path())
+            .into_iter()
+            .filter_map(|(session, _, item)| match item.body {
+                ItemBody::Crash(crash) if session == gone => Some(crash),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(crashes.len(), 1);
+        assert_eq!(crashes[0].kind, CrashKind::UncleanExit);
+        assert!(crashes[0].breadcrumbs.is_empty(), "the report must fit, so the log lines are left out");
+        assert!(!dir.path().join(SDK_DIR).join(SPOOL_DIR).join(&gone).join("breadcrumbs.jsonl").exists());
+    }
+}

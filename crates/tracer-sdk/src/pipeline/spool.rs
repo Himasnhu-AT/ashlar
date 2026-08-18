@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tracer_proto::{AppInfo, ConsentCategory, Device, Item, ItemBody, UnixMs};
 
 use super::DropCounts;
-use super::files::{read_json, write_atomic};
+use super::files::{read_json, read_own_file, write_atomic};
 use super::inspect::Outbox;
 use super::session::{Marker, SESSION_FILE};
 
@@ -37,6 +37,10 @@ pub(super) const MAX_LINE_BYTES: u64 = 256 * 1024;
 
 /// Largest segment before a new one is started.
 const MAX_SEGMENT_BYTES: u64 = 256 * 1024;
+
+/// Largest segment file that is read. The SDK writes none bigger than a few hundred kilobytes; one that
+/// is, is not its own work, and is dropped unread rather than loaded into memory.
+const MAX_READ_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A folder with neither header nor marker that was touched this recently may belong to a process that
 /// is still starting, so it is not cleaned up yet.
@@ -132,7 +136,12 @@ impl SessionDir {
         self.segments.remove(position);
         let path = self.segment_path(seq);
         if let Some(drops) = drops {
-            count_evicted(&std::fs::read(&path).unwrap_or_default(), drops);
+            match read_own_file(&path, MAX_READ_SEGMENT_BYTES) {
+                Ok(Some(bytes)) => count_evicted(&bytes, drops),
+                // Not a segment of ours: nothing in it can be counted as items.
+                Ok(None) => drops.add(DROP_DAMAGED, 1),
+                Err(_) => {}
+            }
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -143,7 +152,7 @@ impl SessionDir {
             let path = self.segment_path(seq);
             // A segment that cannot be read right now is left as it is; what is sent from it later is
             // filtered by consent again.
-            let Ok(text) = std::fs::read(&path) else { continue };
+            let Ok(Some(text)) = read_own_file(&path, MAX_READ_SEGMENT_BYTES) else { continue };
             let mut kept = Vec::with_capacity(text.len());
             for line in text.split_inclusive(|byte| *byte == b'\n').filter(|line| line.ends_with(b"\n") && line.first() != Some(&category)) {
                 kept.extend_from_slice(line);
@@ -216,6 +225,12 @@ pub(super) struct Spool {
     /// Bytes in the folders of other running processes, as of the last scan. They count towards the cap
     /// but are never touched.
     live_bytes: u64,
+    /// Segment files thrown away at adoption because they were not the SDK's work. Counted as damaged by
+    /// [`Spool::adopt_orphans`].
+    discarded: u64,
+    /// Bytes in the adopted orphans. Kept up to date by [`Spool::recount`] whenever they change, so that
+    /// an append does not have to add them all up again.
+    orphan_bytes: u64,
     /// False where file locks do not work; see [`UNLOCKED_ORPHAN_AGE`].
     locking: bool,
     outbox: Option<Outbox>,
@@ -234,6 +249,8 @@ impl Spool {
             open: None,
             orphans: Vec::new(),
             live_bytes: 0,
+            orphan_bytes: 0,
+            discarded: 0,
             locking: true,
             outbox,
         }
@@ -284,6 +301,28 @@ impl Spool {
         self.own.as_ref().map(|own| &own.header)
     }
 
+    /// Puts the own session folder back if it has been deleted while the session runs: folder, lock and
+    /// header. What was in it is gone, and so is anything appended between the deletion and this call,
+    /// which nothing can count. True when the folder had to be restored.
+    pub(super) fn restore_own_dir(&mut self) -> bool {
+        let Some(own) = &mut self.own else { return false };
+        if own.dir.is_dir() {
+            return false;
+        }
+        self.open = None;
+        own.segments.clear();
+        own.unlock();
+        if std::fs::create_dir_all(&own.dir).is_ok() {
+            // Nobody else can hold the lock of a folder that did not exist a moment ago.
+            own.lock = open_lock_file(&own.dir).ok().filter(|file| file.try_lock().is_ok());
+            if let Ok(json) = serde_json::to_vec(&own.header) {
+                let _ = write_atomic(&own.dir.join(HEADER_FILE), &json);
+            }
+        }
+        own.measure_overhead();
+        true
+    }
+
     /// Changes the install id of the own session and rewrites its header file.
     pub(super) fn set_install_id(&mut self, install_id: &str) {
         if let Some(own) = &mut self.own {
@@ -310,35 +349,53 @@ impl Spool {
     /// Bytes the whole spool holds on disk, as far as this process knows: its own folder, the orphans it
     /// adopted, and the folders of other running processes as of the last scan.
     pub(super) fn total_bytes(&self) -> u64 {
-        self.own.as_ref().map_or(0, SessionDir::bytes) + self.orphans.iter().map(SessionDir::bytes).sum::<u64>() + self.live_bytes
+        self.own.as_ref().map_or(0, SessionDir::bytes) + self.orphan_bytes + self.live_bytes
+    }
+
+    fn recount(&mut self) {
+        self.orphan_bytes = self.orphans.iter().map(SessionDir::bytes).sum();
     }
 
     /// Appends one item to the own session, making room by evicting the oldest segments this process may
     /// touch. Returns false, having counted the drop, when the item could not be stored.
     pub(super) fn append(&mut self, category: u8, json: &str, drops: &DropCounts) -> bool {
+        // After the session has ended there is nowhere to put it, and nothing to count either.
         if self.own.is_none() {
             return false;
         }
+        match self.try_append(category, json, drops) {
+            Ok(()) => true,
+            Err(reason) => {
+                drops.add(reason, 1);
+                false
+            }
+        }
+    }
+
+    /// As [`Spool::append`], but an item that cannot be stored is not counted: the reason is returned
+    /// instead. What had to be evicted to make room is counted either way. For the `drops` item, whose
+    /// own loss must not be added to the very counts it failed to store.
+    pub(super) fn try_append(&mut self, category: u8, json: &str, drops: &DropCounts) -> Result<(), &'static str> {
+        if self.own.is_none() {
+            return Err(DROP_IO);
+        }
         let line_bytes = json.len() as u64 + 2;
         if line_bytes > MAX_LINE_BYTES {
-            drops.add(DROP_TOO_LARGE, 1);
-            return false;
+            return Err(DROP_TOO_LARGE);
         }
         while self.total_bytes() + line_bytes > self.max_bytes {
             if !self.evict_oldest(drops) {
-                drops.add(DROP_EVICTED, 1);
-                return false;
+                return Err(DROP_EVICTED);
             }
         }
         if !self.write_line(category, json) {
             self.open = None;
-            drops.add(DROP_IO, 1);
-            return false;
+            return Err(DROP_IO);
         }
         if let Some(outbox) = &mut self.outbox {
             outbox.push(json);
         }
-        true
+        Ok(())
     }
 
     fn write_line(&mut self, category: u8, json: &str) -> bool {
@@ -393,8 +450,10 @@ impl Spool {
     /// Looks at every other session folder. Those whose owner is gone are adopted; those returned left a
     /// marker and must be answered with [`Spool::add_recovery`] before the spool lock is released.
     /// Folders recorded under another install id were forgotten by the user and are deleted.
-    pub(super) fn adopt_orphans(&mut self, install_id: &str) -> Vec<Unclean> {
-        self.scan(Some(install_id))
+    pub(super) fn adopt_orphans(&mut self, install_id: &str, drops: &DropCounts) -> Vec<Unclean> {
+        let unclean = self.scan(Some(install_id));
+        drops.add(DROP_DAMAGED, std::mem::take(&mut self.discarded));
+        unclean
     }
 
     /// `install_id` of `None` deletes every folder whose owner is gone instead of adopting it.
@@ -404,7 +463,10 @@ impl Spool {
         let own_dir = self.own.as_ref().map(|own| own.dir.clone());
         for entry in std::fs::read_dir(&self.root).into_iter().flatten().flatten() {
             let dir = entry.path();
-            if !dir.is_dir() || Some(&dir) == own_dir.as_ref() || self.orphans.iter().any(|orphan| orphan.dir == dir) {
+            // Only real folders are session folders. A symbolic link is never followed: whatever it
+            // points at is outside the spool and none of the SDK's business.
+            let is_folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if !is_folder || Some(&dir) == own_dir.as_ref() || self.orphans.iter().any(|orphan| orphan.dir == dir) {
                 continue;
             }
             let (bytes, newest) = folder_stats(&dir);
@@ -448,7 +510,17 @@ impl Spool {
                 }
                 continue;
             };
-            let (segments, next_seq) = index_segments(&dir);
+            let (mut segments, next_seq) = index_segments(&dir);
+            // A segment far bigger than any the SDK writes is not its work. It goes at once, unread: left
+            // in place it would count towards the cap and push real items out before it was looked at.
+            segments.retain(|segment| {
+                let oversized = segment.bytes > MAX_READ_SEGMENT_BYTES;
+                if oversized {
+                    let _ = std::fs::remove_file(dir.join(segment_name(segment.seq)));
+                    self.discarded += 1;
+                }
+                !oversized
+            });
             let mut orphan = SessionDir { dir: dir.clone(), header, lock, overhead: 0, next_seq, segments, awaiting_report: false };
             let reportable = orphan.lock.is_some();
             if orphan.header.install_id != install_id || (orphan.segments.is_empty() && !(marker.is_some() && reportable)) {
@@ -474,6 +546,7 @@ impl Spool {
         if let Some(own) = &mut self.own {
             own.measure_overhead();
         }
+        self.recount();
         unclean
     }
 
@@ -591,6 +664,7 @@ impl Spool {
     pub(super) fn release(&mut self) {
         self.open = None;
         self.orphans.clear();
+        self.recount();
         if let Some(own) = self.own.take()
             && own.segments.is_empty()
         {
@@ -605,6 +679,7 @@ impl Spool {
         for orphan in empty {
             orphan.remove();
         }
+        self.recount();
     }
 
     #[cfg(test)]
@@ -630,6 +705,8 @@ fn index_segments(dir: &Path) -> (Vec<Segment>, u64) {
         let file = entry.path();
         let seq = file.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.parse::<u64>().ok());
         let is_segment = file.extension().is_some_and(|extension| extension == SEGMENT_EXTENSION);
+        // A segment is a regular file. A link with a segment's name is left alone and never read.
+        let is_segment = is_segment && entry.file_type().is_ok_and(|kind| kind.is_file());
         if let (Some(seq), true, Ok(metadata)) = (seq, is_segment, entry.metadata()) {
             next_seq = next_seq.max(seq + 1);
             if metadata.len() > 0 {
@@ -670,8 +747,14 @@ fn read_batch(session: &SessionDir, budget: u64, allowed: &dyn Fn(u8) -> bool) -
         if !batch.segments.is_empty() && used + segment.bytes > budget {
             break;
         }
-        let bytes = match std::fs::read(session.segment_path(segment.seq)) {
-            Ok(bytes) => bytes,
+        let bytes = match read_own_file(&session.segment_path(segment.seq), MAX_READ_SEGMENT_BYTES) {
+            Ok(Some(bytes)) => bytes,
+            // Far too big, or no longer a plain file: not something the SDK wrote. It goes with the
+            // batch, unread, and is counted.
+            Ok(None) => {
+                batch.damaged += 1;
+                Vec::new()
+            }
             // Gone from disk: taking it into the batch takes it out of the index.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(_) => continue,
@@ -857,7 +940,7 @@ mod tests {
 
         let drops = DropCounts::default();
         let mut next = running(dir.path(), "next", 3, 1 << 20);
-        assert!(next.adopt_orphans(INSTALL).is_empty(), "a clean end leaves no marker");
+        assert!(next.adopt_orphans(INSTALL, &DropCounts::default()).is_empty(), "a clean end leaves no marker");
         next.append(b'u', &item(9), &drops);
         assert_eq!(next.total_bytes(), disk_bytes(dir.path()));
         let sent = drain(&mut next);
@@ -875,7 +958,7 @@ mod tests {
         ended(dir.path(), "newer", 20, 2..3);
         ended(dir.path(), "older", 10, 1..2);
         let mut spool = running(dir.path(), "now", 30, 1 << 20);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         spool.append(b'u', &item(3), &DropCounts::default());
         let sent = drain(&mut spool);
         assert_eq!(sent.iter().map(|(session, _)| session.as_str()).collect::<Vec<_>>(), vec!["older", "newer", "now"]);
@@ -895,7 +978,7 @@ mod tests {
         let before = disk_bytes(&first_dir);
 
         let mut second = running(dir.path(), "second", 2, 8 * 1024);
-        assert!(second.adopt_orphans(INSTALL).is_empty());
+        assert!(second.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
         // Its data is not sent, purged, expired or wiped by anyone else.
         assert!(second.next_batch(u64::MAX, &all).is_none());
         second.purge(b'u');
@@ -923,23 +1006,23 @@ mod tests {
         let mut first = running(dir.path(), "first", 2, 1 << 20);
         let mut second = running(dir.path(), "second", 3, 1 << 20);
 
-        let unclean = first.adopt_orphans(INSTALL);
+        let unclean = first.adopt_orphans(INSTALL, &DropCounts::default());
         assert_eq!(unclean.len(), 1);
         assert_eq!((unclean[0].session_id.as_str(), unclean[0].marker.updated, unclean[0].marker.panicked), ("gone", 6, false));
         assert_eq!(unclean[0].dir, first.session_dir("gone"));
         // The first process holds it now, so to the second it is a folder with a live owner.
-        assert!(second.adopt_orphans(INSTALL).is_empty());
+        assert!(second.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
         assert!(second.next_batch(u64::MAX, &all).is_none());
 
         assert!(first.add_recovery("gone", &[(b'u', item(90)), (b'c', item(91))]));
         assert!(!first.session_dir("gone").join(SESSION_FILE).exists());
-        assert!(first.adopt_orphans(INSTALL).is_empty());
+        assert!(first.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
         assert_eq!(first.total_bytes(), disk_bytes(dir.path()));
         let sent = drain(&mut first);
         assert!(sent.iter().all(|(session, _)| session == "gone"));
         assert_eq!(items_of(&sent), vec![item(0), item(1), item(2), item(90), item(91)]);
         assert!(!first.session_dir("gone").exists());
-        assert!(second.adopt_orphans(INSTALL).is_empty());
+        assert!(second.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
     }
 
     #[test]
@@ -948,14 +1031,14 @@ mod tests {
         killed(dir.path(), "gone", 1, 0..2, true);
         {
             let mut first = running(dir.path(), "first", 2, 1 << 20);
-            let unclean = first.adopt_orphans(INSTALL);
+            let unclean = first.adopt_orphans(INSTALL, &DropCounts::default());
             assert!(unclean[0].marker.panicked);
             first.add_recovery("gone", &[(b'u', item(90))]);
             first.release();
         }
         let mut second = running(dir.path(), "second", 3, 1 << 20);
         // The marker is gone, so there is nothing to report again: only data to send.
-        assert!(second.adopt_orphans(INSTALL).is_empty());
+        assert!(second.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
         assert_eq!(items_of(&drain(&mut second)), vec![item(0), item(1), item(90)]);
     }
 
@@ -965,7 +1048,7 @@ mod tests {
         killed(dir.path(), "quiet", 1, 0..0, false);
         killed(dir.path(), "silent", 2, 0..0, false);
         let mut spool = running(dir.path(), "now", 3, 1 << 20);
-        let mut found: Vec<String> = spool.adopt_orphans(INSTALL).into_iter().map(|unclean| unclean.session_id).collect();
+        let mut found: Vec<String> = spool.adopt_orphans(INSTALL, &DropCounts::default()).into_iter().map(|unclean| unclean.session_id).collect();
         found.sort();
         assert_eq!(found, vec!["quiet".to_owned(), "silent".to_owned()]);
         assert!(spool.add_recovery("quiet", &[(b'c', item(7))]));
@@ -981,7 +1064,7 @@ mod tests {
         killed(dir.path(), "gone", 1, 0..3, false);
         ended(dir.path(), "ended", 2, 3..5);
         let mut spool = running(dir.path(), "now", 3, 1 << 20);
-        assert!(spool.adopt_orphans("another-install-id").is_empty());
+        assert!(spool.adopt_orphans("another-install-id", &DropCounts::default()).is_empty());
         assert!(spool.is_empty());
         assert!(!spool.session_dir("gone").exists() && !spool.session_dir("ended").exists());
     }
@@ -992,7 +1075,7 @@ mod tests {
         let starting = dir.path().join(SPOOL_DIR).join("starting");
         std::fs::create_dir_all(&starting).unwrap();
         let mut spool = running(dir.path(), "now", 1, 1 << 20);
-        assert!(spool.adopt_orphans(INSTALL).is_empty());
+        assert!(spool.adopt_orphans(INSTALL, &DropCounts::default()).is_empty());
         assert!(starting.exists());
         // The scan let go of the lock, so the process that is starting can take it.
         let mut late = Spool::new(dir.path(), 1 << 20, DAY, None);
@@ -1002,7 +1085,7 @@ mod tests {
         std::fs::create_dir_all(&stale).unwrap();
         let old = SystemTime::now() - Duration::from_secs(3600);
         File::open(&stale).unwrap().set_modified(old).unwrap();
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         assert!(!stale.exists());
     }
 
@@ -1013,7 +1096,7 @@ mod tests {
         let cap = 6 * 1024;
         ended(dir.path(), "a", 1, 0..20);
         let mut spool = running(dir.path(), "b", 2, cap);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         let total = 400;
         for number in 20..total {
             assert!(spool.append(b'u', &item(number), &drops));
@@ -1092,7 +1175,7 @@ mod tests {
         }
         ended(dir.path(), "only_usage", 2, 99..100);
         let mut spool = running(dir.path(), "b", 3, 1 << 20);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         for number in 15..30 {
             spool.append(b"ucp"[number % 3], &item(number), &drops);
         }
@@ -1122,7 +1205,7 @@ mod tests {
         let mut file = OpenOptions::new().append(true).open(segment).unwrap();
         file.write_all(br#"u{"id":"torn","ts"#).unwrap();
         let mut spool = running(dir.path(), "b", 2, 1 << 20);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         assert_eq!(items_of(&drain(&mut spool)), vec![item(0)]);
     }
 
@@ -1135,7 +1218,7 @@ mod tests {
         // The process died in the middle of an append, inside a two-byte character.
         OpenOptions::new().append(true).open(&segment).unwrap().write_all(b"c{\"id\":\"x\",\"message\":\"caf\xC3").unwrap();
         let mut spool = running(dir.path(), "b", 2, 1 << 20);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         let batch = spool.next_batch(u64::MAX, &all).unwrap();
         assert_eq!(batch.items, (0..3).map(item).collect::<Vec<_>>());
         assert_eq!(batch.damaged, 1);
@@ -1175,7 +1258,7 @@ mod tests {
         ended(dir.path(), "a", 1, 0..3);
         let segment = dir.path().join(SPOOL_DIR).join("a").join(segment_name(0));
         let mut spool = running(dir.path(), "b", 2, 1 << 20);
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         spool.append(b'u', &item(9), &drops);
         std::fs::set_permissions(&segment, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::read(&segment).is_ok() {
@@ -1201,7 +1284,7 @@ mod tests {
         killed(dir.path(), "first", 1, 0..0, false);
         killed(dir.path(), "second", 2, 0..0, false);
         let mut spool = running(dir.path(), "now", 3, 1 << 20);
-        let mut unclean = spool.adopt_orphans(INSTALL);
+        let mut unclean = spool.adopt_orphans(INSTALL, &DropCounts::default());
         unclean.sort_by(|a, b| a.session_id.cmp(&b.session_id));
         assert_eq!(unclean.len(), 2);
         // Answering one must leave the other, marker and saved files and all, for its own answer.
@@ -1214,13 +1297,78 @@ mod tests {
     }
 
     #[test]
+    fn the_byte_cap_is_met_exactly_and_never_passed() {
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        // Find the overhead of an empty session folder, then set the cap to hold exactly three lines.
+        let line = item(0).len() as u64 + 2;
+        let overhead = running(dir.path(), "probe", 1, 1 << 20).total_bytes();
+        std::fs::remove_dir_all(dir.path().join(SPOOL_DIR)).unwrap();
+        let cap = overhead + 3 * line;
+        let mut spool = running(dir.path(), "probe", 1, cap);
+        for number in 0..3 {
+            assert!(spool.append(b'u', &item(number), &drops));
+        }
+        assert_eq!(spool.total_bytes(), cap, "three lines fill the cap to the byte");
+        assert!(drops.take().is_empty(), "nothing is evicted at the cap");
+        // One more line does not fit: the oldest segment, which holds all three, makes room for it.
+        assert!(spool.append(b'u', &item(3), &drops));
+        assert!(spool.total_bytes() <= cap);
+        assert_eq!(drops.take().get(DROP_EVICTED), Some(&3));
+        assert_eq!(items_of(&drain(&mut spool)), vec![item(3)]);
+        // A line of exactly the largest size is accepted where there is room; one byte more is not.
+        let mut roomy = running(dir.path(), "roomy", 2, 1 << 20);
+        assert!(roomy.append(b'c', &"x".repeat(MAX_LINE_BYTES as usize - 2), &drops));
+        assert!(!roomy.append(b'c', &"x".repeat(MAX_LINE_BYTES as usize - 1), &drops));
+        assert_eq!(drops.take().get(DROP_TOO_LARGE), Some(&1));
+    }
+
+    #[test]
+    fn a_batch_takes_segments_up_to_its_budget_to_the_byte() {
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        let mut spool = running(dir.path(), "a", 1, 1 << 20);
+        // Three sealed segments of one line each.
+        for number in 0..3 {
+            spool.append(b'u', &item(number), &drops);
+            spool.open = None;
+        }
+        let line = item(0).len() as u64 + 2;
+        let sizes = |budget: u64, spool: &mut Spool| spool.next_batch(budget, &all).unwrap().segments.len();
+        assert_eq!(sizes(2 * line, &mut spool), 2, "exactly two fit");
+        assert_eq!(sizes(2 * line - 1, &mut spool), 1, "one byte short of two");
+        assert_eq!(sizes(3 * line, &mut spool), 3);
+        assert_eq!(sizes(0, &mut spool), 1, "a batch always takes at least one segment, or nothing would ever leave");
+    }
+
+    #[test]
+    fn a_segment_expires_only_once_it_is_older_than_the_limit() {
+        let dir = TempDir::new("spool");
+        let drops = DropCounts::default();
+        let mut spool = Spool::new(dir.path(), 1 << 20, Duration::from_secs(100), None);
+        assert!(spool.open_own(header("a", 1)));
+        spool.append(b'u', &item(0), &drops);
+        let written = std::fs::metadata(spool.session_dir("a").join(segment_name(0))).unwrap().modified().unwrap();
+        spool.expire(written + Duration::from_secs(100), &drops);
+        assert!(!spool.is_empty(), "exactly as old as the limit is still kept");
+        spool.expire(written + Duration::from_secs(100) + Duration::from_millis(1), &drops);
+        assert!(spool.is_empty());
+        // A clock that has gone backwards, or a limit longer than time itself, expires nothing.
+        spool.append(b'u', &item(1), &drops);
+        spool.expire(SystemTime::UNIX_EPOCH, &drops);
+        let mut endless = Spool::new(dir.path(), 1 << 20, Duration::MAX, None);
+        endless.expire(SystemTime::now(), &drops);
+        assert!(!spool.is_empty());
+    }
+
+    #[test]
     fn old_segments_expire_and_are_counted() {
         let dir = TempDir::new("spool");
         let drops = DropCounts::default();
         ended(dir.path(), "a", 1, 0..2);
         let mut spool = Spool::new(dir.path(), 1 << 20, Duration::from_secs(60), None);
         assert!(spool.open_own(header("b", 2)));
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         for number in 2..5 {
             spool.append(b'u', &item(number), &drops);
         }
@@ -1245,7 +1393,7 @@ mod tests {
         assert!(spool.open_own(header("now", 3)));
         // One orphan is already adopted, the other has not been looked at yet.
         std::fs::rename(spool.session_dir("gone"), dir.path().join("aside")).unwrap();
-        spool.adopt_orphans(INSTALL);
+        spool.adopt_orphans(INSTALL, &DropCounts::default());
         std::fs::rename(dir.path().join("aside"), spool.session_dir("gone")).unwrap();
         spool.append(b'u', &item(4), &drops);
         spool.wipe();
@@ -1281,7 +1429,7 @@ mod tests {
         File::open(&silent).unwrap().set_modified(long_ago).unwrap();
 
         let mut spool = running(dir.path(), "now", 3, 1 << 20).without_locking();
-        assert!(spool.adopt_orphans(INSTALL).is_empty(), "silence is not proof of an unclean end");
+        assert!(spool.adopt_orphans(INSTALL, &DropCounts::default()).is_empty(), "silence is not proof of an unclean end");
         assert!(!silent.join(SESSION_FILE).exists());
         assert_eq!(drain(&mut spool), vec![("silent".to_owned(), item(2)), ("silent".to_owned(), item(3))]);
         // The recent one may belong to a running process, so it is untouched, marker and all.
