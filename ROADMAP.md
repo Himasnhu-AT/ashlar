@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status, 2026-08-15:** SDK, server and dashboard are built and tested separately. End-to-end tests, demo hosts, guides and a review pass are in progress. Not yet released.
+**Status, 2026-08-15:** release candidate. SDK, server, dashboard, demo hosts and guides are built; the SDK is tested end to end against the real server; a bug review of the SDK and a security review of the server are done and their findings fixed. Not yet published. See `TODO.md` for what is still unverified.
 
 ## Version 0.1
 
@@ -11,9 +11,9 @@
 | M2 | SDK signals: panic hook, handled errors, unclean exit, child exit, hang watchdog, frame and system metrics, breadcrumbs, local report | Done |
 | M3 | Server core: ingest, write keys, rate limits, dedup, SQLite store, rollups, retention, admin commands | Done |
 | M4 | Dashboard and reports: overview, crashes, performance, usage, per-release report export | Done |
-| M5 | Demo hosts and end-to-end tests | In progress |
-| M6 | Guides and packaging: integration guide, self-hosting guide, container image, CI | In progress |
-| M7 | Hardening and 0.1.0 release | In progress |
+| M5 | Demo hosts and end-to-end tests | Done |
+| M6 | Guides and packaging: integration guide, self-hosting guide, container image, CI | Done |
+| M7 | Hardening and 0.1.0 release | Release candidate; publishing waits for a go-ahead |
 
 ## Later
 

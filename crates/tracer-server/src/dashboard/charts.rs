@@ -12,7 +12,7 @@ use maud::{Markup, html};
 
 const W: f64 = 640.0;
 const H: f64 = 240.0;
-const LEFT: f64 = 58.0;
+const LEFT: f64 = 76.0;
 const RIGHT: f64 = 14.0;
 const TOP: f64 = 12.0;
 const BOTTOM: f64 = 46.0;

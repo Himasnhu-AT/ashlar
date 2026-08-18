@@ -2,6 +2,19 @@
 
 Newest first. One entry per checkpoint.
 
+## 2026-08-15 — Checkpoint 2: end to end, reviews, release candidate (M5–M7)
+
+- Demo command-line host and 15 end-to-end scenarios against the real server; all pass. A windowed demo compiles but has not been run.
+- Integration and self-hosting guides; container image, compose file and CI workflow written (not yet built or run).
+- End-to-end tests found two bugs, both fixed: a session row was created for users who had switched usage off, and no crash was ever marked fatal.
+- Server security review: no markup injection, SQL injection, login bypass, CSRF or cross-app leak. Fixed: catalog replacement that made real events get dropped, one client starving an app's rate limit, unbounded growth, a counter overflow, login limiter and proxy-header weaknesses, missing connection timeouts.
+- Design change: the server no longer rejects events for being undeclared. The catalog is client input, so it must never cause data loss; undeclared events are stored with a flag and shown separately.
+- Design change: on a first run nothing is sent until the host calls `notice_shown()`; `Builder::send_before_notice` lifts this.
+- API additions: `Tracer::begin_turn`, `end_turn`, `turn`; `Builder::send_before_notice`. `listen` calls now declare the catalog themselves.
+- New server settings: `TRACER_KEY_RATE_PER_MIN`, `TRACER_MAX_DB_MB`; login cookies are `Secure` by default.
+- Schema: `0003_hardening` adds the `declared` flag and per-hash catalogs.
+- Live check: ran the server locally, seeded it with the demo host (sessions, a panic, an abort, a hang, a child exit), and read every dashboard page in a browser. Bulk seeding from one address hit the rate limit; the data stayed in the spool and arrived on later launches, as designed.
+
 ## 2026-08-15 — Review fixes (SDK)
 
 - Public API added: `Tracer::begin_turn()`, `Tracer::end_turn()` and `Tracer::turn() -> TurnGuard` drive the hang watchdog by turns of the main loop, which works for loops that run only on input; `heartbeat()` stays for continuous loops. `Builder::send_before_notice(bool)` and `Config::send_before_notice`.
