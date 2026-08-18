@@ -3,7 +3,8 @@
 ashlar is a Rust library for building fast desktop and web apps: documents and undo, commands,
 background jobs, files and settings, native OS features, UI components (egui), and a runtime that
 gives every app crash safety, telemetry and agent control (control port, MCP, CLI) for free.
-Domain kits (`kits/*`, e.g. the timeline) are built *with* it. The plan is `../FRAMEWORK-PLAN.md`.
+Domain widgets (a timeline, a CAD canvas…) are app-specific and stay in the apps; ashlar only
+provides the general building blocks they are made from. The plan is `../FRAMEWORK-PLAN.md`.
 
 ## 0. Never crash
 No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/`unimplemented!` outside tests (denied in

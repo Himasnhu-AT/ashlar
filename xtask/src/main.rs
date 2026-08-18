@@ -4,7 +4,7 @@
 use std::process::{Command, ExitCode};
 
 /// Layer of each workspace crate. A crate may depend only on crates of a lower layer.
-/// 0–1 core (headless, wasm-clean) · 2–4 services · 5 ui · 6 runtime and kits · 7 umbrella · 8 examples.
+/// 0–1 core (headless, wasm-clean) · 2–4 services · 5 ui · 6 runtime · 7 umbrella · 8 examples.
 /// Nothing below 5 may depend on a UI crate.
 const LAYERS: &[(&str, u8)] = &[
     ("ashlar-command", 0),
@@ -18,7 +18,6 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-print", 2),
     ("ashlar-ui", 5),
     ("ashlar-app", 6),
-    ("ashlar-timeline", 6),
     ("ashlar", 7),
     ("ashlar-example-gallery", 8),
     ("ashlar-example-notes", 8),

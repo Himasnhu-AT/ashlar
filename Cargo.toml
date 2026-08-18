@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "kits/*", "examples/*", "xtask"]
+members = ["crates/*", "examples/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,7 +21,6 @@ ashlar-cli = { path = "crates/cli" }
 ashlar-ui = { path = "crates/ui" }
 ashlar-print = { path = "crates/print" }
 ashlar-app = { path = "crates/app" }
-ashlar-timeline = { path = "kits/timeline" }
 # foundation
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
