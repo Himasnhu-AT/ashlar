@@ -1,0 +1,18 @@
+[package]
+name = "ashlar"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Build fast desktop and web apps in Rust: store, commands, UI, native, agent control"
+
+[lints]
+workspace = true
+
+[dependencies]
+ashlar-command = { workspace = true }
+ashlar-store = { workspace = true }
+ashlar-jobs = { workspace = true }
+ashlar-fs = { workspace = true }
+ashlar-ui = { workspace = true }
+ashlar-app = { workspace = true }

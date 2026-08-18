@@ -1,0 +1,18 @@
+[package]
+name = "ashlar-mcp"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "MCP server generated from the command registry (stdio), headless or bridged"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+ashlar-command = { workspace = true }
+ashlar-control = { workspace = true }

@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "kits/*", "examples/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[workspace.dependencies]
+# internal
+ashlar = { path = "crates/ashlar" }
+ashlar-store = { path = "crates/store" }
+ashlar-command = { path = "crates/command" }
+ashlar-jobs = { path = "crates/jobs" }
+ashlar-fs = { path = "crates/fs" }
+ashlar-native = { path = "crates/native" }
+ashlar-control = { path = "crates/control" }
+ashlar-mcp = { path = "crates/mcp" }
+ashlar-cli = { path = "crates/cli" }
+ashlar-ui = { path = "crates/ui" }
+ashlar-print = { path = "crates/print" }
+ashlar-app = { path = "crates/app" }
+ashlar-timeline = { path = "kits/timeline" }
+# foundation
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+log = "0.4"
+# ui
+egui = { version = "0.36", default-features = false }
+eframe = { version = "0.36", default-features = false }
+egui_kittest = { version = "0.36" }
+rfd = "0.17"
+muda = "0.21"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# never crash: one place for every crate (tests are exempted by clippy.toml)
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+dbg_macro = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[profile.release]
+debug = "line-tables-only"

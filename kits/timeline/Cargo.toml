@@ -1,0 +1,14 @@
+[package]
+name = "ashlar-timeline"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Timeline kit: time axis, ruler, playhead, tracks, lanes, waveform; emits edit intents"
+
+[lints]
+workspace = true
+
+[dependencies]
+egui = { workspace = true }
+ashlar-ui = { workspace = true }

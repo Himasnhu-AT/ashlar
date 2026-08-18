@@ -1,0 +1,14 @@
+[package]
+name = "ashlar-native"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets"
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+thiserror = { workspace = true }

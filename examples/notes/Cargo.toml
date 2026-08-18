@@ -1,0 +1,11 @@
+[package]
+name = "ashlar-example-notes"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ashlar = { workspace = true }

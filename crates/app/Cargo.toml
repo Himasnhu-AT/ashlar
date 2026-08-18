@@ -1,0 +1,20 @@
+[package]
+name = "ashlar-app"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "ashlar runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control"
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+egui = { workspace = true }
+ashlar-command = { workspace = true }
+ashlar-store = { workspace = true }
+ashlar-jobs = { workspace = true }
+ashlar-fs = { workspace = true }
+ashlar-ui = { workspace = true }
+ashlar-control = { workspace = true }

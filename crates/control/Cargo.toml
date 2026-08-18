@@ -1,0 +1,17 @@
+[package]
+name = "ashlar-control"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Agent control port: hardened JSON-lines server, client, standard method set"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+ashlar-command = { workspace = true }

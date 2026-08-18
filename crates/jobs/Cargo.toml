@@ -1,0 +1,13 @@
+[package]
+name = "ashlar-jobs"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Background jobs: progress, cancel, panic isolation, apply-on-UI-thread"
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
