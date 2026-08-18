@@ -35,8 +35,9 @@ fn main() -> ExitCode {
         "msrv" => &[("msrv", msrv)],
         "demo" => &[("demo", demo)],
         "stress" => &[("stress", stress)],
+        "load" => &[("load", load)],
         _ => {
-            eprintln!("usage: cargo xtask <ci|fmt|names|clippy|test|wasm|msrv|demo>");
+            eprintln!("usage: cargo xtask <ci|fmt|names|clippy|test|wasm|msrv|demo|stress|load>");
             return ExitCode::FAILURE;
         }
     };
@@ -124,6 +125,18 @@ fn msrv() -> bool {
 
 /// Checks and lints the windowed demo, which lives outside the workspace because its GUI toolkit has a
 /// very large dependency tree. Not part of `ci`. It compiles the demo; it does not run it.
+/// A short standard load profile against a spawned release server: max throughput, then a fixed 500/s.
+/// Heavier profiles (soak, overload, the large read-path database) are `loadgen` commands; see
+/// `docs/self-hosting.md`, "Capacity and tuning".
+fn load() -> bool {
+    let run = |extra: &[&str]| {
+        let mut args = vec!["run", "-q", "--release", "-p", "loadgen", "--", "run", "--spawn", "--concurrency", "64", "--duration", "10"];
+        args.extend_from_slice(extra);
+        cargo(&args)
+    };
+    cargo(&["build", "--release", "-p", "tracer-server", "-p", "loadgen"]) && run(&[]) && run(&["--rate", "500"])
+}
+
 fn demo() -> bool {
     cargo(&["check", "--manifest-path", "examples/demo-gui/Cargo.toml", "--locked"])
         && cargo(&["clippy", "--manifest-path", "examples/demo-gui/Cargo.toml", "--locked", "--", "-D", "warnings"])

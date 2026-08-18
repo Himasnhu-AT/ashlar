@@ -178,8 +178,17 @@ pub async fn serve_with(
     Ok(())
 }
 
-/// Resolves when the process receives ctrl-c.
+/// Resolves when the process is asked to stop: ctrl-c (SIGINT) or, on Unix, SIGTERM, which is what
+/// `docker stop`, systemd and `kill` send.
 pub async fn ctrl_c() {
+    #[cfg(unix)]
+    if let Ok(mut terminate) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+        return;
+    }
     if tokio::signal::ctrl_c().await.is_err() {
         // Signal handling is unavailable: never shut down on our own.
         std::future::pending::<()>().await;
@@ -218,6 +227,12 @@ fn failure(status: StatusCode, message: &str) -> Response {
 }
 
 fn storage_failure(error: &StoreError) -> Response {
+    if matches!(error, StoreError::Busy) {
+        // Shed load: the client keeps its data and retries after the delay.
+        let mut response = failure(StatusCode::SERVICE_UNAVAILABLE, "busy");
+        response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(1u64));
+        return response;
+    }
     // The error text may name tables or values, so it goes to the log only.
     log::error!("{error}");
     failure(StatusCode::INTERNAL_SERVER_ERROR, "storage error")
@@ -325,7 +340,7 @@ async fn ingest_handler(State(state): State<AppState>, request: Request) -> Resp
         Ok(prepared) => prepared,
         Err(error) => return failure(StatusCode::BAD_REQUEST, &error.to_string()),
     };
-    match blocking(&state.store, move |store| store.ingest(app.id, &prepared)).await {
+    match blocking(&state.store, move |store| store.ingest_owned(app.id, prepared)).await {
         Ok(response) => json(StatusCode::OK, &response),
         Err(error) => storage_failure(&error),
     }
@@ -463,6 +478,16 @@ mod tests {
         assert_eq!(client_ip(&headers, Some(peer), true), "9.9.9.9".parse::<IpAddr>().unwrap());
         headers.append("x-forwarded-for", HeaderValue::from_static("not an address"));
         assert_eq!(client_ip(&headers, Some(peer), true), peer.ip());
+    }
+
+    #[test]
+    fn a_full_write_queue_answers_503_with_retry_after_and_other_failures_500() {
+        let busy = storage_failure(&StoreError::Busy);
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy.headers().get(header::RETRY_AFTER).and_then(|v| v.to_str().ok()), Some("1"));
+        let broken = storage_failure(&StoreError::Backend("disk I/O error".into()));
+        assert_eq!(broken.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(broken.headers().get(header::RETRY_AFTER).is_none());
     }
 
     #[test]

@@ -20,6 +20,9 @@ pub enum StoreError {
     Conflict(String),
     #[error("storage failure: {0}")]
     Backend(String),
+    /// The write queue is full; the caller should answer 503 with `Retry-After` and let the client retry.
+    #[error("the write queue is full")]
+    Busy,
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -78,6 +81,9 @@ pub trait Store: Send + Sync + 'static {
 
     /// Stores a whole prepared envelope in one transaction and reports the counts.
     fn ingest(&self, app_id: i64, batch: &Prepared) -> StoreResult<IngestResponse>;
+    /// Like [`Store::ingest`], taking the batch by value so a backend that queues writes (group commit) needs
+    /// no copy. Fails with [`StoreError::Busy`] when the queue is full.
+    fn ingest_owned(&self, app_id: i64, batch: Prepared) -> StoreResult<IngestResponse>;
     /// Deletes everything stored for one install of one app. Returns the number of rows removed.
     fn forget(&self, app_id: i64, install_id: &str) -> StoreResult<u64>;
 
@@ -86,6 +92,9 @@ pub trait Store: Send + Sync + 'static {
     /// Recomputes the `daily_*` rollups (except drops) for days `from_day..=to_day` (days since the epoch)
     /// by delete and insert, one app per transaction.
     fn rollup(&self, from_day: i64, to_day: i64) -> StoreResult<()>;
+    /// Recomputes the rollups of the days that received data since they were last rolled up, oldest first,
+    /// ignoring days before `oldest_day`. Returns how many (app, day) pairs were recomputed.
+    fn rollup_dirty(&self, oldest_day: i64) -> StoreResult<u64>;
     /// Deletes raw rows older than `retention_days` whole days before `now`. Rollups are kept.
     fn prune(&self, now: i64, retention_days: u32) -> StoreResult<PruneStats>;
     /// Marks sessions still `ok` whose last item is older than `older_than` as `abnormal`.

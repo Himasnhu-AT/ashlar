@@ -62,14 +62,32 @@ pub fn active_installs_by_day(conn: &Connection, app_id: i64, from: i64, to: i64
         "SELECT day, count(DISTINCT install_id) FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND version = ?4
          GROUP BY day ORDER BY day LIMIT ?5"
     } else {
-        "SELECT day, count(*) FROM daily_installs WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND ?4 IS NULL
-         GROUP BY day ORDER BY day LIMIT ?5"
+        "SELECT day, dau FROM daily_active WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND ?4 IS NULL ORDER BY day LIMIT ?5"
     };
     let mut stmt = conn.prepare_cached(sql)?;
     stmt.query_map(params![app_id, from, to, version, MAX_DAYS], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
 }
 
 pub fn active_installs_between(conn: &Connection, app_id: i64, from: i64, to: i64, version: Option<&str>) -> rusqlite::Result<i64> {
+    // Daily, weekly and monthly actives ending on `to` are stored by the rollup.
+    if version.is_none() {
+        let column = match to - from {
+            0 => Some("dau"),
+            6 => Some("wau"),
+            29 => Some("mau"),
+            _ => None,
+        };
+        if let Some(column) = column {
+            let stored: Option<i64> = conn
+                .prepare_cached(&format!("SELECT {column} FROM daily_active WHERE app_id = ?1 AND day = ?2"))?
+                .query_row(params![app_id, to], |row| row.get(0))
+                .optional()?;
+            // A negative figure means the rollup did not compute it for that (older) day.
+            if let Some(stored) = stored.filter(|stored| *stored >= 0) {
+                return Ok(stored);
+            }
+        }
+    }
     let sql = if version.is_some() {
         "SELECT count(DISTINCT install_id) FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 AND version = ?4"
     } else {
@@ -78,10 +96,9 @@ pub fn active_installs_between(conn: &Connection, app_id: i64, from: i64, to: i6
     conn.prepare_cached(sql)?.query_row(params![app_id, from, to, version], |row| row.get(0))
 }
 
-const ISSUE_SELECT: &str = "SELECT i.id, i.kind, i.title, i.first_seen, i.last_seen, i.first_version, i.last_version, i.count, i.status,
+const ISSUE_COLUMNS: &str = "i.id, i.kind, i.title, i.first_seen, i.last_seen, i.first_version, i.last_version, i.count, i.status,
         (SELECT count(DISTINCT c.install_id) FROM crashes c WHERE c.issue_id = i.id),
-        (SELECT group_concat(DISTINCT c.version) FROM crashes c WHERE c.issue_id = i.id)
-     FROM issues i";
+        (SELECT group_concat(DISTINCT c.version) FROM crashes c WHERE c.issue_id = i.id)";
 
 fn issue_row(row: &Row<'_>) -> rusqlite::Result<IssueRow> {
     let versions: Option<String> = row.get(10)?;
@@ -105,18 +122,22 @@ pub fn list_issues(conn: &Connection, app_id: i64, filter: &IssueFilter<'_>, lim
         IssueSort::Recent => "i.last_seen DESC, i.id DESC",
         IssueSort::Count => "i.count DESC, i.last_seen DESC, i.id DESC",
     };
+    // The per-issue counts are correlated subqueries over `crashes`; they must run only for the rows that are
+    // returned, so the filtering, ordering and limit happen in an inner query first.
     let sql = format!(
-        "{ISSUE_SELECT}
-         WHERE i.app_id = ?1 AND (?2 IS NULL OR i.kind = ?2) AND (?3 IS NULL OR i.status = ?3) AND i.last_seen >= ?4
-           AND (?5 IS NULL OR EXISTS (SELECT 1 FROM crashes c WHERE c.issue_id = i.id AND c.version = ?5))
-         ORDER BY {order} LIMIT ?6"
+        "SELECT {ISSUE_COLUMNS} FROM (
+             SELECT * FROM issues i
+             WHERE i.app_id = ?1 AND (?2 IS NULL OR i.kind = ?2) AND (?3 IS NULL OR i.status = ?3) AND i.last_seen >= ?4
+               AND (?5 IS NULL OR EXISTS (SELECT 1 FROM crashes c WHERE c.issue_id = i.id AND c.version = ?5))
+             ORDER BY {order} LIMIT ?6) AS i
+         ORDER BY {order}"
     );
     let mut stmt = conn.prepare_cached(&sql)?;
     stmt.query_map(params![app_id, filter.kind, filter.status, filter.since_ms, filter.version, limit.clamp(1, 500)], issue_row)?.collect()
 }
 
 pub fn get_issue(conn: &Connection, app_id: i64, id: i64) -> rusqlite::Result<Option<IssueRow>> {
-    let sql = format!("{ISSUE_SELECT} WHERE i.app_id = ?1 AND i.id = ?2 LIMIT 1");
+    let sql = format!("SELECT {ISSUE_COLUMNS} FROM issues i WHERE i.app_id = ?1 AND i.id = ?2 LIMIT 1");
     conn.prepare_cached(&sql)?.query_row(params![app_id, id], issue_row).optional()
 }
 

@@ -177,7 +177,7 @@ fn validate_slug(slug: &str) -> Result<(), CliError> {
 fn serve(config: &Config) -> Result<(), CliError> {
     let store = open_store(config)?;
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(async {
+    let result = runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind(config.bind).await?;
         log::info!("tracer-server {} listening on {}", env!("CARGO_PKG_VERSION"), listener.local_addr()?);
         if let Some(warning) = bind_warning(config) {
@@ -191,7 +191,11 @@ fn serve(config: &Config) -> Result<(), CliError> {
         }
         log::info!("shut down");
         result.map_err(CliError::from)
-    })
+    });
+    // A retention run in progress sits on a blocking thread and can take minutes; it is safe to abandon
+    // (every chunk is its own transaction), so do not wait for it past a few seconds.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+    result
 }
 
 /// A warning for a server reachable beyond this machine that does not read client addresses from a proxy.
