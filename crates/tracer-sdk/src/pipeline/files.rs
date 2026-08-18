@@ -13,7 +13,10 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Wall-clock time in Unix milliseconds. Only for timestamps; durations use `Instant`.
 pub(super) fn now_ms() -> UnixMs {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0)
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)).unwrap_or(0);
+    #[cfg(test)]
+    let now = now.saturating_add_signed(testing::CLOCK_SKEW_MS.with(std::cell::Cell::get));
+    now
 }
 
 /// Writes to a temporary name in the same folder, then renames over `path`.
@@ -30,13 +33,44 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     renamed
 }
 
+/// Waits for a file, and the folder entry that names it, to be on the disk. Best effort.
+pub(super) fn sync_file(path: &Path) {
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.sync_all();
+    }
+    #[cfg(unix)]
+    if let Some(Ok(folder)) = path.parent().map(std::fs::File::open) {
+        let _ = folder.sync_all();
+    }
+}
+
 pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> bool {
     serde_json::to_vec(value).is_ok_and(|bytes| write_atomic(path, &bytes).is_ok())
 }
 
+/// Largest state file that is read. The SDK's own are a few hundred bytes; anything bigger is not one.
+const MAX_STATE_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Reads a file the SDK wrote itself: at most `limit` bytes of a regular file. A symbolic link is not
+/// followed, so nothing planted in the SDK's folder can make it read, and then send, a file from
+/// somewhere else; and a file grown huge cannot make it allocate without bound. `Ok(None)` means the file
+/// is there but is not one of ours: a link, a folder, or too big.
+pub(super) fn read_own_file(path: &Path, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Ok(None);
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    // The size is checked again while reading, in case the file grows between the two.
+    std::fs::File::open(path)?.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
+}
+
 /// Reads and parses a file. A missing or malformed file is `None`, never an error.
 pub(super) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = read_own_file(path, MAX_STATE_FILE_BYTES).ok()??;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -85,6 +119,12 @@ pub(crate) mod testing {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        /// Added to the wall clock as this thread sees it, to stage the user or the network changing
+        /// the system time. Monotonic time is not affected, as it is not in reality.
+        pub(crate) static CLOCK_SKEW_MS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    }
 
     /// A folder under the system temporary directory, removed on drop.
     pub(crate) struct TempDir(PathBuf);

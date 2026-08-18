@@ -34,6 +34,7 @@ fn main() -> ExitCode {
         "wasm" => &[("wasm", wasm)],
         "msrv" => &[("msrv", msrv)],
         "demo" => &[("demo", demo)],
+        "stress" => &[("stress", stress)],
         _ => {
             eprintln!("usage: cargo xtask <ci|fmt|names|clippy|test|wasm|msrv|demo>");
             return ExitCode::FAILURE;
@@ -64,6 +65,44 @@ fn clippy() -> bool {
 
 fn test() -> bool {
     cargo(&["test", "--workspace", "--all-features"])
+}
+
+/// Runs the SDK's benchmarks and heavy stress tests (`crates/tracer-sdk/tests/stress.rs`) in a release
+/// build and prints their tables. Each runs in a process of its own, so that one cannot disturb another's
+/// measurements. Not part of `ci`: it takes several minutes. `TRACER_STRESS_RUNS`, `TRACER_STRESS_SEED`,
+/// `TRACER_STRESS_CALLS`, `TRACER_STRESS_IDLE_SECS` and `TRACER_STRESS_MEMORY_SECS` shorten or vary it.
+fn stress() -> bool {
+    const TESTS: &[&str] = &[
+        "bench_host_thread_calls",
+        "bench_worst_single_call",
+        "bench_init_and_shutdown",
+        "bench_worker_throughput",
+        "bench_worker_throughput_with_many_adopted_folders",
+        "bench_gzip_levels",
+        "bench_idle_and_steady_cpu",
+        "bench_memory_stays_flat_with_the_server_unreachable",
+        "stress_flood_with_exact_accounting",
+        "stress_flood_with_consent_and_forget",
+        "stress_many_processes_on_one_data_directory",
+        "stress_a_thousand_starts_and_stops_leak_nothing",
+    ];
+    TESTS.iter().all(|name| {
+        cargo(&[
+            "test",
+            "--quiet",
+            "-p",
+            "tracer-sdk",
+            "--release",
+            "--test",
+            "stress",
+            "--",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+            "--exact",
+            name,
+        ])
+    })
 }
 
 /// The wire types and the SDK must keep building for the web target, where the SDK is a no-op.

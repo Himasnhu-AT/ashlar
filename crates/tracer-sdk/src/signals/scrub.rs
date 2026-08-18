@@ -48,6 +48,15 @@ pub(crate) fn scrub(text: &str, home: Option<&str>, user: Option<&str>, limit: u
     // Work on a bounded prefix so a huge input does not make this expensive. The cut is far enough past
     // `limit` that the final truncation always lands inside text that was fully scrubbed.
     let bounded = cut(text, limit.saturating_mul(4).saturating_add(256));
+    // Everything that is replaced is part of a path, and a path has a separator in it. Most log lines
+    // have none, and for those there is nothing to do but cut to length: one allocation instead of five.
+    if !bounded.contains(['/', '\\']) {
+        return truncate(bounded, limit);
+    }
+    scrub_paths(bounded, home, user, limit)
+}
+
+fn scrub_paths(bounded: &str, home: Option<&str>, user: Option<&str>, limit: usize) -> String {
     let mut out = bounded.to_owned();
     if let Some(home) = home.map(trim_separators).filter(|home| !home.is_empty()) {
         out = replace_home(&out, home);
@@ -199,6 +208,51 @@ fn replace_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_without_a_path_separator_takes_the_short_way_to_the_same_result() {
+        // The short way only cuts to length. It is right as long as the full scrub would have changed
+        // nothing, which holds because everything it replaces is a path segment.
+        let words = ["alice", "Alice", "home", "Users", "~", "C:", "é", "名", "🦀", " ", "-", ".", ":", "alice.smith", "x"];
+        let mut state = 0x1234_5678_u64;
+        let mut next = move |bound: usize| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize % bound
+        };
+        for _ in 0..20_000 {
+            let text: String = (0..next(12)).map(|_| words[next(words.len())]).collect();
+            for limit in [0, 1, 2, 3, 4, 5, 7, 16, 512] {
+                let home = [None, Some("/home/alice"), Some("/Users/alice/"), Some("C:\\Users\\alice")][next(4)];
+                let user = [None, Some("alice"), Some(" alice ")][next(3)];
+                let bounded = cut(&text, limit * 4 + 256);
+                let short = scrub(&text, home, user, limit);
+                assert_eq!(short, scrub_paths(bounded, home, user, limit), "{text:?} home {home:?} user {user:?} limit {limit}");
+                assert!(short.len() <= limit, "{short:?} is longer than {limit}");
+            }
+        }
+    }
+
+    #[test]
+    fn cutting_never_splits_a_character_at_any_limit() {
+        for text in ["ééééééééé", "名前名前名前", "🦀🦀🦀🦀", "a🦀é名b", "/Users/alice/名前/🦀.txt and /home/alice/é"]
+        {
+            for limit in 0..=text.len() + 4 {
+                let cut_text = truncate(text, limit);
+                assert!(cut_text.len() <= limit, "{text:?} at {limit}: {cut_text:?}");
+                assert!(text.starts_with(cut_text.trim_end_matches("...")) || cut_text.is_empty(), "{text:?} at {limit}: {cut_text:?}");
+                let scrubbed = scrub(text, Some("/Users/alice"), Some("alice"), limit);
+                assert!(scrubbed.len() <= limit && !scrubbed.contains("alice"), "{text:?} at {limit}: {scrubbed:?}");
+            }
+        }
+        // Exactly at the limit nothing is cut; one byte over, the ellipsis appears.
+        for (limit, label) in [(MAX_MESSAGE, "message"), (MAX_BACKTRACE, "backtrace"), (MAX_LOG_LINE, "log line"), (MAX_LABEL, "label")] {
+            let exact = "é".repeat(limit / 2);
+            assert_eq!(scrub(&exact, None, None, limit), exact, "{label}");
+            let over = format!("{exact}é");
+            let cut_text = scrub(&over, None, None, limit);
+            assert!(cut_text.len() <= limit && cut_text.ends_with("...") && cut_text.is_char_boundary(cut_text.len() - 3), "{label}");
+        }
+    }
 
     const BIG: usize = 10_000;
 

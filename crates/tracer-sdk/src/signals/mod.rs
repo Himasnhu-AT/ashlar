@@ -51,6 +51,7 @@ pub(crate) struct Shared {
     /// Reference point for monotonic timestamps; also "process start" for the startup time.
     pub epoch: Instant,
     pub perf: Mutex<perf::Window>,
+    pub frames: perf::Frames,
     pub first_frame_seen: AtomicBool,
     pub sampler: sys::Sampler,
     pub registry: rt::Registry,
@@ -78,6 +79,7 @@ impl Shared {
             scrubber: scrub::Scrubber::from_env(),
             epoch,
             perf: Mutex::new(perf::Window::new(epoch)),
+            frames: perf::Frames::default(),
             first_frame_seen: AtomicBool::new(false),
             sampler: sys::Sampler::new(),
             registry: rt::Registry::default(),
@@ -257,8 +259,10 @@ impl Drop for Signals {
     }
 }
 
-/// Breadcrumbs the previous run saved before it ended, oldest first. Removes them from disk.
-/// Called by the pipeline at startup when it finds that the previous run ended uncleanly.
-pub(crate) fn take_saved_breadcrumbs(dir: &Path) -> Vec<Breadcrumb> {
-    logs::take_saved(dir)
+/// Breadcrumbs a run saved in its session folder before it ended, oldest first. Called by the pipeline
+/// when it finds that the run ended uncleanly. The file is left where it is: it goes with the folder, once
+/// the report that carries these lines is safely on disk. Deleting it here would lose the lines if the
+/// process reporting them died at the wrong moment.
+pub(crate) fn saved_breadcrumbs(dir: &Path) -> Vec<Breadcrumb> {
+    logs::read_saved(dir)
 }

@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -18,6 +19,14 @@ const INSTALL_LOCK_FILE: &str = "install.lock";
 
 /// How often to look again at a file another process is in the middle of creating or changing.
 const BUSY_ATTEMPTS: u32 = 200;
+
+/// A file that exists but cannot be read is only waited for if it was written this recently: then another
+/// process may be in the middle of creating it. Older than this, it is damaged and is replaced at once,
+/// so that a damaged file never holds up the host's startup.
+const BEING_WRITTEN: Duration = Duration::from_secs(2);
+
+/// Longest wait, in attempts of a millisecond, for a file another process is creating.
+const CREATE_ATTEMPTS: u32 = 20;
 
 /// Most old install ids kept waiting for a forget request to get through.
 const MAX_PENDING_FORGET: usize = 16;
@@ -46,7 +55,7 @@ impl Identity {
     /// the others read what it wrote.
     pub(super) fn load_or_create(dir: &Path) -> Self {
         let path = dir.join(INSTALL_FILE);
-        for _ in 0..BUSY_ATTEMPTS {
+        for _ in 0..CREATE_ATTEMPTS {
             if let Some(identity) = Self::load(dir) {
                 return identity;
             }
@@ -59,8 +68,11 @@ impl Identity {
                     }
                     break;
                 }
-                // Another process is writing it right now, or it is damaged; look again shortly.
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => std::thread::sleep(Duration::from_millis(2)),
+                // Another process is writing it right now: look again in a moment.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && being_written(&path) => {
+                    std::thread::sleep(Duration::from_millis(1))
+                }
+                // It is damaged, or is not a file at all.
                 Err(_) => break,
             }
         }
@@ -101,6 +113,12 @@ impl Identity {
         }
         old
     }
+}
+
+fn being_written(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else { return false };
+    let age = metadata.modified().ok().and_then(|modified| modified.elapsed().ok());
+    metadata.is_file() && age.is_none_or(|age| age < BEING_WRITTEN)
 }
 
 /// Takes the lock on `install.lock`, waiting a short while for another process to let go. `None` when it
@@ -144,6 +162,22 @@ pub(super) fn new_id() -> String {
 pub(super) fn random_u64() -> u64 {
     let [a, b, c, d, e, f, g, h, ..] = random_bytes();
     u64::from_le_bytes([a, b, c, d, e, f, g, h])
+}
+
+/// A new item id. Unique, but not drawn from the system's random source each time: that is a system call,
+/// and the worker makes ids by the hundred thousand. The first half is random and fixed for the process;
+/// the second half is a counter run through a mixing function that maps every count to a different value.
+/// Install and session ids, which identify something, still come from [`new_id`].
+pub(super) fn next_item_id() -> String {
+    static KEYS: OnceLock<(u64, u64)> = OnceLock::new();
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let (prefix, key) = *KEYS.get_or_init(|| (random_u64(), random_u64()));
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut bytes = [0u8; 16];
+    for (slot, byte) in bytes.iter_mut().zip(prefix.to_le_bytes().into_iter().chain(mix(count ^ key).to_le_bytes())) {
+        *slot = byte;
+    }
+    hex(&bytes)
 }
 
 fn random_bytes() -> [u8; 16] {
@@ -209,6 +243,17 @@ mod tests {
         let ids: HashSet<String> = (0..500).map(|_| new_id()).collect();
         assert_eq!(ids.len(), 500);
         assert!(ids.iter().all(|id| is_id(id)));
+    }
+
+    #[test]
+    fn item_ids_are_distinct_across_threads_and_share_the_process_prefix() {
+        let threads: Vec<_> = (0..8).map(|_| std::thread::spawn(|| (0..5_000).map(|_| next_item_id()).collect::<Vec<_>>())).collect();
+        let ids: Vec<String> = threads.into_iter().flat_map(|thread| thread.join().unwrap()).collect();
+        assert!(ids.iter().all(|id| is_id(id)));
+        assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len());
+        assert_eq!(ids.iter().map(|id| &id[..16]).collect::<HashSet<_>>().len(), 1);
+        // The second half does not look like a counter.
+        assert_ne!(&ids[0][16..30], &ids[1][16..30]);
     }
 
     #[test]

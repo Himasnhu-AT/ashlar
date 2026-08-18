@@ -311,7 +311,61 @@ To test against a real server, run `tracer-server` in-process on `127.0.0.1:0` w
 
 On `wasm32` the SDK compiles but does nothing: `Builder::init` always returns a disabled tracer, so the same code path works unchanged and costs nothing. There is no data directory, no thread and no request on the web target. (`cargo xtask wasm` keeps `tracer-proto` and `tracer-sdk` building for it.)
 
-## 13. A short checklist
+## 13. Cost and limits
+
+Measured with `cargo xtask stress` (release build, a 15-core laptop, a real `Tracer` on a temporary folder and a transport that accepts at once). Run it on your own hardware; the tables it prints are the source of these numbers.
+
+**Per call on a host thread, one thread** (median, 99th percentile):
+
+| Call | Median | p99 | Allocations |
+|---|---|---|---|
+| `track`, listened to | 35 ns | 42 ns | 0 |
+| `track_with`, 4 properties | 44 ns | 60 ns | 1 |
+| `track_id` | 38 ns | 42 ns | 0 |
+| `track`, not listened to | 10 ns | 15 ns | 0 |
+| `frame` | 5 ns | 10 ns | 0 |
+| `turn()` or `begin_turn` + `end_turn` | 25 ns | 38 ns | 0 |
+| `heartbeat`, `note_input` | 20 ns | 48 ns | 0 |
+| `set_focused`, `Counter::inc`, `Gauge::set` | 1–2 ns | 2 ns | 0 |
+| a log line kept as a breadcrumb | 88 ns | 187 ns | 4 |
+| a log line below the kept level | 3 ns | 7 ns | 0 |
+| `report_handled` | 8 µs | 26 µs | many; it is an error path |
+| anything on a disabled tracer | 1–2 ns | 2 ns | 0 |
+
+The allocation counts are from reading the code, not from a counting allocator (that needs `unsafe`, which this workspace forbids).
+
+**What a host thread can wait for.** Nothing that touches the disk or the network. `track` is an atomic check, a set lookup and a `try_send` into a queue that was allocated at startup; when the queue is full the event is dropped and counted with one atomic add. `frame`, the turn calls, `note_input`, counters and gauges are atomic operations only. Over ten million calls of each, with the worker flushing every 20 ms, the longest single call was a few milliseconds, and so was the longest gap in an empty loop that only reads the clock: on a desktop operating system the scheduler can take a thread away at any point, and no library can promise otherwise. What the SDK promises is that it adds no wait of its own.
+
+Calls that do touch the disk, briefly, on the calling thread: `init`, `set_consent`, `notice_shown`, `forget`, and the panic hook. `flush_blocking` and dropping the last `Tracer` wait for the worker, up to the timeout you give and `shutdown_timeout`.
+
+**With many threads at once** the calls stay lock-free but share memory, so they slow each other down: with 8 threads calling the same thing as fast as they can, `track` is about 55 ns, `frame` about 200 ns, a kept log line about 2 µs. Counters and gauges on a realtime thread are one atomic operation on memory nothing else writes to, if you give that thread its own counter.
+
+**Startup and shutdown.** `init` returns in under 1 ms, whether the folder is empty or holds 1,000 session folders left by earlier runs or a full 8 MiB spool; dealing with those is the worker's first job (about 0.4 s of its time for the 1,000 folders). Dropping the last `Tracer` takes about 1 ms when the server answers at once or refuses at once, as long as one request when the server is slow, and never longer than `shutdown_timeout` (3 s by default).
+
+**In the background.** An idle app costs about 0.02% of one core for the worker and the watchdog together. At 120 frames a second with 50 events a second the whole process, pacing loop included, used 0.3% of one core. The worker writes about 500,000 items a second to the spool. With the server unreachable for five minutes at that load, resident memory stayed flat and the spool stayed at its cap.
+
+**Limits**, all enforced, all counted in the `drops` item when they throw something away:
+
+| Limit | Default | When it is reached |
+|---|---|---|
+| Queue between host threads and the worker | 1,024 items (`queue_capacity`) | The new item is dropped: `queue_full` |
+| Spool on disk, all sessions together | 8 MiB (`spool_max_bytes`) | The oldest segments go: `spool_evicted` |
+| Age of spooled data | 30 days (`spool_max_age`) | Older segments go: `spool_evicted` |
+| One request | 1 MiB before compression | A larger backlog is sent as several requests |
+| One item | 256 KiB | Dropped: `item_too_large`; an unclean-exit report that big goes without its log lines |
+| Properties on one event | 16 | The rest are left out: `prop_dropped` |
+| Event, category and property names | 64 bytes, lower-case `snake_case`, dots allowed | Build error for declared names; `invalid_id` or `prop_dropped` at run time |
+| String property values | 64 bytes | Left out: `prop_dropped` |
+| Panic and error messages | 2 KiB | Cut, on a character boundary |
+| Backtraces | 32 KiB | Cut |
+| Log lines kept as breadcrumbs | 100 lines of 512 bytes (`breadcrumb_capacity`) | Oldest lines go; long lines are cut |
+| Counters and gauges | 256 names in all | Further names get a handle that records nothing |
+| Forget requests still owed | 16 | The oldest is given up |
+| Inspect mirror `outbox.jsonl` | 1 MiB | The older half is discarded |
+
+**What a power loss can cost.** Spooled items are not flushed to the disk one by one, so the last seconds before a power loss can be lost; a crash of the app alone loses nothing that was already written. A consent change or a "forget me" is made durable by the worker within a tick (one second by default).
+
+## 14. A short checklist
 
 1. Add the dependency; declare the catalog with `events!`.
 2. Build the tracer once at startup, with data dir, endpoint, key, version, process kind.
