@@ -21,8 +21,14 @@ Updated 2026-08-15.
 - [x] M7 Bug review of the SDK: nine findings and six lesser notes fixed, plus a lock-order deadlock between "forget" and the worker.
 - [x] M7 Security review of the server: two high and six medium findings fixed; the two confirmed attacks were re-run against a real server and no longer work.
 - [x] M7 Dashboard checked in a real browser at desktop width with live data from the demo host.
+- [x] M8 SDK: hot path measured and cut, stress suite (`cargo xtask stress`), edge-case tests, eight bugs fixed.
+- [x] M8 Server: load generator (`cargo xtask load`), group commit, incremental rollups, fuzz, concurrency and failure tests, four bugs fixed.
 
 ## To do next
+
+- [ ] Find why ingest latency collapses at 2,000 envelopes a second once the database passes about 3 GB. Suspected: index inserts outgrowing the cache; not proven.
+- [ ] Cut ingest tail latency while retention deletes a large backlog (p99 about 300 ms against about 50 ms).
+- [ ] Repeat the load runs on Linux and on a quiet machine; all numbers so far are from one busy macOS machine.
 
 - [ ] Build and run the container image once (`deploy/Dockerfile`, `deploy/compose.yml`). Written but never built.
 - [ ] Run the windowed demo (`examples/demo-gui`). It compiles and passes lints but has never been opened.

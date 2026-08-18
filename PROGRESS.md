@@ -2,6 +2,20 @@
 
 Newest first. One entry per checkpoint.
 
+## 2026-08-18 — Checkpoint 3: tests, stress and load (M8)
+
+All numbers: release build, one 15-core macOS machine, client and server on loopback.
+
+- **Tests.** 479 tests, all passing. Line coverage 96.2% for the workspace; every SDK and wire-format file is at 96% or more, every server file at 91% or more. New server suites: fuzz (mutated envelopes, broken gzip, size caps, extreme timestamps), concurrency, boundaries, failure injection (locked database, killing the real binary under load).
+- **SDK cost.** `track` 1,669 → 35 ns median (55 ns with 8 threads), `frame` 12.3 → 4.7 ns, a kept log line 1,758 → 88 ns, start-up with 1,000 leftover session folders 197 → 0.86 ms. Idle cost 0.017% of one core. Memory flat over 5 minutes with the server unreachable. `cargo xtask stress` runs the heavy suite (about 10 minutes).
+- **Server ingest.** At 64 connections: 1,880 → about 4,200 envelopes a second (about 168,000 items), p99 about 100 ms. At a fixed 2,000 a second: p99 about 60 ms, no errors (the old server could not sustain it). At 500 a second: p99 14 to 27 ms across runs. At twice capacity the server sheds with `503` and `Retry-After`, health stays under 4 ms, and it recovers within a second. Memory stays under 55 MiB. `cargo xtask load` runs the standard profile.
+- **Server reads.** With 10 million events and 1 million sessions (2.5 GB), every dashboard and report page answers in under 20 ms warm and 290 ms cold; before, the slowest took 2.1 s. Migration `0004_scale` adds two indexes and two tables. Rollups now recompute only days that received data, which also fixes late data (more than 3 days old) never being rolled up.
+- **Bugs found and fixed, SDK:** flush never finishing under sustained load; breadcrumbs lost if the reporting process died; symlinks in the spool followed; a sparse spool file read whole into memory; the SDK folder not recreated after deletion; drop counts lost at exit; a drops item re-counting itself; a damaged install file stalling start-up.
+- **Bugs found and fixed, server:** an IPv4-mapped IPv6 address got a second rate-limit bucket; SIGTERM was not handled, so a container stop skipped graceful shutdown; shutdown could hang behind retention; a locked database cost 10 s per envelope instead of one `503`.
+- **Targets missed.** A 5-minute soak at 2,000 a second held for about 3 minutes, then latency collapsed once the database passed about 3 GB (1,000 a second held for the full 5 minutes); the cause is not proven. Ingest p99 rises to about 300 ms while retention deletes a large backlog. A hard 100 µs worst case for `track` cannot be shown on a desktop OS.
+- **Durability.** Neither the SDK spool nor the server fsyncs every write. A process crash or kill loses nothing acknowledged (tested); a power loss can lose the last moments.
+- **Decided against:** `serde_json`'s exact float round-trip. A difference in the last digit of a metric does not matter and the feature slows parsing.
+
 ## 2026-08-15 — Checkpoint 2: end to end, reviews, release candidate (M5–M7)
 
 - Demo command-line host and 15 end-to-end scenarios against the real server; all pass. A windowed demo compiles but has not been run.

@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status, 2026-08-15:** release candidate. SDK, server, dashboard, demo hosts and guides are built; the SDK is tested end to end against the real server; a bug review of the SDK and a security review of the server are done and their findings fixed. Not yet published. See `TODO.md` for what is still unverified.
+**Status, 2026-08-18:** release candidate, load-tested. SDK, server, dashboard, demo hosts and guides are built; the SDK is tested end to end against the real server; a bug review of the SDK and a security review of the server are done and their findings fixed. Not yet published. See `TODO.md` for what is still unverified.
 
 ## Version 0.1
 
@@ -14,6 +14,7 @@
 | M5 | Demo hosts and end-to-end tests | Done |
 | M6 | Guides and packaging: integration guide, self-hosting guide, container image, CI | Done |
 | M7 | Hardening and 0.1.0 release | Release candidate; publishing waits for a go-ahead |
+| M8 | Tests, stress and load: edge-case and fuzz suites, SDK hot-path and server ingest optimisation, large-database read path | Done; two load targets missed, see `PROGRESS.md` |
 
 ## Later
 
