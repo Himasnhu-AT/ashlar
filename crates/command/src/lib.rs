@@ -66,6 +66,8 @@ pub enum Params {
     None,
     Typed(Vec<ParamSpec>),
     Text(&'static str),
+    /// Typed, built in a `const`/`static` table (see [`Param`]).
+    Static(&'static [Param]),
 }
 
 /// CONTRACT: what discovery returns for one command (palette, menus, MCP tools, CLI `commands`).
@@ -100,22 +102,84 @@ pub trait Dispatch {
     fn execute(&mut self, id: &str, params: Value) -> Result<Value, CommandError>;
 }
 
+mod fuzzy;
+mod journal;
+pub mod keymap;
+mod legacy;
+mod macros;
+mod params;
+mod registry;
+pub mod shortcut;
+
+pub use fuzzy::{FuzzyMatch, fuzzy_match, fuzzy_rank};
+pub use journal::{Journal, JournalEntry};
+pub use keymap::Keymap;
+pub use legacy::accepted_params;
+pub use params::{Kind, Param, params_schema, validate_params};
+pub use registry::{Bound, MAX_DEPTH, Registry};
+
+impl CommandError {
+    /// The command the error is about.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Unknown { id } | Self::Disabled { id, .. } | Self::BadParams { id, .. } | Self::Failed { id, .. } | Self::Panicked { id } => id,
+        }
+    }
+    pub fn failed(id: impl Into<String>, msg: impl Into<String>) -> Self {
+        Self::Failed { id: id.into(), msg: msg.into() }
+    }
+    pub fn bad_params(id: impl Into<String>, msg: impl Into<String>) -> Self {
+        Self::BadParams { id: id.into(), msg: msg.into() }
+    }
+    /// Fill in the command id when the error was built without one (a host error converted with
+    /// `From`, which does not know which command it came from).
+    pub fn or_id(mut self, command: &str) -> Self {
+        let (Self::Unknown { id } | Self::Disabled { id, .. } | Self::BadParams { id, .. } | Self::Failed { id, .. } | Self::Panicked { id }) =
+            &mut self;
+        if id.is_empty() {
+            command.clone_into(id);
+        }
+        self
+    }
+}
+
+impl ParamSpec {
+    /// An optional parameter; chain [`ParamSpec::required`] and [`ParamSpec::about`].
+    pub fn new(name: impl Into<String>, kind: ParamKind) -> Self {
+        Self { name: name.into(), kind, required: false, about: String::new() }
+    }
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+    pub fn about(mut self, about: impl Into<String>) -> Self {
+        self.about = about.into();
+        self
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
-// Registry: implementation owned by the ashlar-command agent. The signatures below are the intended
-// shape; extend freely, keep `CommandSpec` constructible in a `static`/`const`-friendly way so the
-// existing `cmd!` tables port mechanically.
+// Commands of one host state
 // ---------------------------------------------------------------------------------------------
 
 /// Enabled predicate: `Err(reason)` disables with a human-readable reason.
 pub type Enabled<S> = fn(&S) -> Result<(), String>;
-/// Command body.
-pub type Run<S> = fn(&mut S, &Value) -> Result<Value, CommandError>;
+/// Command body. Returns the host's own error type (see [`Host::Error`]), so command tables written
+/// against an app's `Result` alias port unchanged.
+pub type Run<S> = fn(&mut S, &Value) -> Result<Value, <S as Host>::Error>;
 
-/// One command of host state `S`.
-pub struct CommandSpec<S> {
+/// The enabled predicate of a command that is always available.
+pub fn always<S>(_: &S) -> Result<(), String> {
+    Ok(())
+}
+
+/// One command of host state `S`. Build it with [`cmd!`]/[`query!`] (the shape of existing
+/// command tables) or with [`CommandSpec::new`] and its `const` setters.
+pub struct CommandSpec<S: Host> {
     pub id: &'static str,
     pub label: &'static str,
     pub menu: &'static [&'static str],
+    /// Portable shortcut(s): `Mod+Shift+S`, alternatives separated by ` / ` (see [`shortcut`]).
     pub shortcut: Option<&'static str>,
     pub params: Params,
     pub enabled: Enabled<S>,
@@ -124,36 +188,66 @@ pub struct CommandSpec<S> {
     pub mutates: bool,
 }
 
-/// Hooks a host gives the chokepoint (a video editor's `Session::execute` needs all of these: name
-/// resolution before, trim-playback settle before, persistence sync after, secret scrubbing).
+impl<S: Host> CommandSpec<S> {
+    /// A mutating command without menu, shortcut or parameters that is always enabled.
+    pub const fn new(id: &'static str, label: &'static str, run: Run<S>) -> Self {
+        Self { id, label, menu: &[], shortcut: None, params: Params::None, enabled: always::<S>, run, mutates: true }
+    }
+    pub const fn menu(mut self, menu: &'static [&'static str]) -> Self {
+        self.menu = menu;
+        self
+    }
+    pub const fn shortcut(mut self, shortcut: &'static str) -> Self {
+        self.shortcut = Some(shortcut);
+        self
+    }
+    pub const fn enabled(mut self, enabled: Enabled<S>) -> Self {
+        self.enabled = enabled;
+        self
+    }
+    /// A pure query / view command: not journaled.
+    pub const fn query(mut self) -> Self {
+        self.mutates = false;
+        self
+    }
+    pub fn params(mut self, params: Params) -> Self {
+        self.params = params;
+        self
+    }
+}
+
+/// The host state commands run on, and the hooks the chokepoint calls around every command.
+///
+/// [`Registry::execute`] runs, in order: lookup → [`Host::before`] (may rewrite params) → parameter
+/// validation → [`Host::enabled_for`] → the command under `catch_unwind` → [`Host::after`] →
+/// journal (mutating commands that succeeded, params passed through [`Host::scrub`]). A call that
+/// is turned away before it runs goes to [`Host::rejected`] instead of `after`.
+///
+/// `depth` is 0 for a call from outside (UI, CLI, agent) and grows by one for each command run
+/// from inside another command; hooks use it to log or sync only once per top-level call.
+///
+/// Mutable execution state (nesting depth, the journal) lives in a [`Journal`] the host owns, so
+/// one `Registry` (often a `static`) serves any number of documents/sessions.
 pub trait Host: Sized {
-    /// Rewrite params before validation (resolve names to ids…).
-    fn before(&mut self, _spec: &CommandSpec<Self>, _params: &mut Value) -> Result<(), CommandError> {
+    /// The error type command bodies return. `CommandError` itself, or the app's own error with
+    /// `From<AppError> for CommandError` (leave the `id` empty: the chokepoint fills it in).
+    type Error: Into<CommandError>;
+    /// The execution state: nesting depth and journal.
+    fn journal(&mut self) -> &mut Journal;
+    /// Rewrite params before validation (resolve names to ids, settle an ongoing gesture…).
+    fn before(&mut self, _spec: &CommandSpec<Self>, _params: &mut Value, _depth: usize) -> Result<(), CommandError> {
         Ok(())
     }
-    /// Enabled check; override when explicit targets in params change availability.
-    fn enabled_for(&self, spec: &CommandSpec<Self>, _params: &Value) -> Result<(), String> {
+    /// Enabled check for one call; override when explicit targets in params change availability
+    /// (the state may be adjusted temporarily, e.g. targets swapped in for the selection).
+    fn enabled_for(&mut self, spec: &CommandSpec<Self>, _params: &Value) -> Result<(), String> {
         (spec.enabled)(self)
     }
-    /// Called after every run (ok or err), at every nesting depth.
-    fn after(&mut self, _spec: &CommandSpec<Self>, _params: &Value, _result: &Result<Value, CommandError>) {}
+    /// Called after every run (ok, error or panic), at every nesting depth.
+    fn after(&mut self, _spec: &CommandSpec<Self>, _params: &Value, _result: &Result<Value, CommandError>, _depth: usize) {}
+    /// Called when a call is refused before running: unknown command, bad params, disabled, too
+    /// deeply nested, or an error from [`Host::before`].
+    fn rejected(&mut self, _id: &str, _error: &CommandError, _depth: usize) {}
     /// Remove secrets from params before they reach the journal.
     fn scrub(&self, _id: &str, _params: &mut Value) {}
-}
-
-/// The command table of one app.
-pub struct Registry<S: 'static> {
-    specs: Vec<CommandSpec<S>>,
-}
-
-impl<S: Host + 'static> Registry<S> {
-    pub fn new(specs: Vec<CommandSpec<S>>) -> Self {
-        Self { specs }
-    }
-    pub fn find(&self, id: &str) -> Option<&CommandSpec<S>> {
-        self.specs.iter().find(|c| c.id == id)
-    }
-    pub fn specs(&self) -> &[CommandSpec<S>] {
-        &self.specs
-    }
 }
