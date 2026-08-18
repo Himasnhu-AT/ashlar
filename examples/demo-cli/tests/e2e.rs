@@ -422,7 +422,6 @@ fn panic_is_reported_as_a_crashed_session_with_one_panic_issue() {
 }
 
 #[test]
-#[ignore = "SPEC GAP: the panic hook never sets crash.fatal, so a panic that ends the process is stored as fatal = 0"]
 fn panic_that_ends_the_process_is_fatal() {
     let server = Server::start();
     let demo = server.demo();
@@ -596,7 +595,6 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 #[test]
-#[ignore = "BUG: ingest upserts a session row (status ok, never ended) from the crash/perf envelope header even when usage is off"]
 fn switching_usage_off_stops_sessions_and_events_but_not_crashes() {
     let server = Server::start();
     let demo = server.demo();
