@@ -348,3 +348,14 @@ fn no_app_listening_fails_fast() {
     assert!(t0.elapsed() < Duration::from_secs(2));
     assert!(matches!(e, ControlError::Key(_) | ControlError::Io(_)), "{e:?}");
 }
+
+#[test]
+fn dropping_the_server_closes_open_connections() {
+    let (server, _) = boot("close", |_| {});
+    let mut c = Client::connect_with_key(server.port(), server.key()).unwrap();
+    assert_eq!(c.call("app.ping", json!({})).unwrap(), "pong");
+    let mut raw = Conn::open(server.port());
+    drop(server);
+    assert!(raw.closed());
+    assert!(c.call("app.ping", json!({})).is_err());
+}

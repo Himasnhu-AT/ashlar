@@ -12,12 +12,13 @@
 //! - the app answers within [`Config::reply_timeout`] or the client gets a `timeout` error;
 //! - hostile input never panics a thread and never reaches the app thread.
 
+use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::ControlError;
@@ -58,12 +59,21 @@ impl Config {
 /// Repaint callback: called after a request is queued for the app thread.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
-/// A running control server. Dropping it stops accepting connections and removes the key file.
+/// A running control server. Dropping it closes the port and every open connection, and removes
+/// the key file.
 pub struct Server {
     port: u16,
     key: Arc<str>,
     key_file: KeyFile,
     stop: Arc<AtomicBool>,
+    conns: Arc<Mutex<Conns>>,
+}
+
+/// The open connections (a write handle to each, to shut them down with the server).
+#[derive(Default)]
+struct Conns {
+    next: u64,
+    open: HashMap<u64, TcpStream>,
 }
 
 impl std::fmt::Debug for Server {
@@ -88,12 +98,13 @@ impl Server {
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         let ctx = Ctx { tx, wake: Arc::new(wake), key: key.clone(), config: Arc::new(config) };
-        let stop2 = stop.clone();
+        let conns = Arc::new(Mutex::new(Conns::default()));
+        let (stop2, conns2) = (stop.clone(), conns.clone());
         std::thread::Builder::new()
             .name("control-accept".into())
-            .spawn(move || accept_loop(listener, ctx, &stop2))
+            .spawn(move || accept_loop(listener, ctx, &stop2, &conns2))
             .map_err(|e| ControlError::Io(format!("cannot start the control thread: {e}")))?;
-        Ok((Server { port, key, key_file, stop }, rx))
+        Ok((Server { port, key, key_file, stop, conns }, rx))
     }
 
     pub fn port(&self) -> u16 {
@@ -113,6 +124,9 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        for s in self.conns.lock().unwrap_or_else(PoisonError::into_inner).open.values() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
         // Wake the blocking accept so the thread sees the flag and drops the listener.
         let _ = TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, self.port)), Duration::from_millis(200));
     }
@@ -126,22 +140,31 @@ struct Ctx {
     config: Arc<Config>,
 }
 
-fn accept_loop(listener: TcpListener, ctx: Ctx, stop: &AtomicBool) {
-    let open = Arc::new(AtomicUsize::new(0));
+fn accept_loop(listener: TcpListener, ctx: Ctx, stop: &AtomicBool, conns: &Arc<Mutex<Conns>>) {
     for stream in listener.incoming() {
         if stop.load(Ordering::SeqCst) {
             return;
         }
         let Ok(mut stream) = stream else { continue };
-        if open.fetch_add(1, Ordering::SeqCst) >= ctx.config.max_connections {
-            open.fetch_sub(1, Ordering::SeqCst);
+        let slot = {
+            let mut c = conns.lock().unwrap_or_else(PoisonError::into_inner);
+            match stream.try_clone() {
+                Ok(handle) if c.open.len() < ctx.config.max_connections => {
+                    let id = c.next;
+                    c.next = c.next.wrapping_add(1);
+                    c.open.insert(id, handle);
+                    Some(Slot(id, Arc::clone(conns)))
+                }
+                _ => None,
+            }
+        };
+        // The slot is given back when the guard drops: after `serve` returns, if it panics, or if
+        // the thread can't be started (the closure, and with it the guard, is dropped).
+        let Some(slot) = slot else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
             let _ = writeln!(stream, "{}", Reply::err("too many control connections").to_json(None));
             continue;
-        }
-        // The slot is given back when the guard drops: after `serve` returns, if it panics, or if
-        // the thread can't be started (the closure, and with it the guard, is dropped).
-        let slot = Slot(Arc::clone(&open));
+        };
         let ctx = ctx.clone();
         let spawned = std::thread::Builder::new().name("control-conn".into()).spawn(move || {
             let _slot = slot;
@@ -153,12 +176,12 @@ fn accept_loop(listener: TcpListener, ctx: Ctx, stop: &AtomicBool) {
     }
 }
 
-/// One counted connection; decrements the open-connection count when dropped.
-struct Slot(Arc<AtomicUsize>);
+/// One open connection; leaves the table when dropped.
+struct Slot(u64, Arc<Mutex<Conns>>);
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.1.lock().unwrap_or_else(PoisonError::into_inner).open.remove(&self.0);
     }
 }
 
