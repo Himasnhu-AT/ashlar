@@ -6,10 +6,11 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use tracer_proto::{FRAME_BUCKETS, FrameStats, IngestResponse, SessionStatus};
 
 use super::types::{
@@ -24,11 +25,17 @@ pub const MIGRATIONS: &[(&str, &str)] = &[
     ("0001_init", include_str!("../../migrations/0001_init.sql")),
     ("0002_dashboard", include_str!("../../migrations/0002_dashboard.sql")),
     ("0003_hardening", include_str!("../../migrations/0003_hardening.sql")),
+    ("0004_scale", include_str!("../../migrations/0004_scale.sql")),
 ];
 
 /// `items_seen` rows older than this many days are dropped by retention.
 const ITEMS_SEEN_DAYS: i64 = 35;
 const READER_POOL: usize = 4;
+/// Rows removed per transaction by retention, and the pause between chunks.
+const CHUNK_ROWS: i64 = 100;
+const CHUNK_PAUSE: Duration = Duration::from_millis(2);
+/// Pages given back to the file system per `incremental_vacuum` step.
+const VACUUM_PAGES: u32 = 2_000;
 /// Most distinct catalogs kept per app version, and per app.
 const MAX_CATALOGS_PER_VERSION: i64 = 8;
 const MAX_CATALOGS_PER_APP: i64 = 200;
@@ -46,20 +53,50 @@ const ROLLUP_MAX_EVENTS: i64 = 500;
 
 impl From<rusqlite::Error> for StoreError {
     fn from(error: rusqlite::Error) -> Self {
-        if let rusqlite::Error::SqliteFailure(failure, message) = &error
-            && failure.code == rusqlite::ErrorCode::ConstraintViolation
-        {
-            return StoreError::Conflict(message.clone().unwrap_or_else(|| "constraint violated".to_string()));
+        if let rusqlite::Error::SqliteFailure(failure, message) = &error {
+            match failure.code {
+                rusqlite::ErrorCode::ConstraintViolation => {
+                    return StoreError::Conflict(message.clone().unwrap_or_else(|| "constraint violated".to_string()));
+                }
+                // Another process holds the write lock for longer than the busy timeout: a retry will work.
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked => return StoreError::Busy,
+                _ => {}
+            }
         }
         StoreError::Backend(error.to_string())
     }
 }
 
+/// Requests waiting for the writer thread. A full queue answers 503 instead of letting memory grow.
+const WRITE_QUEUE: usize = 256;
+/// Most envelopes committed in one transaction.
+const MAX_GROUP: usize = 64;
+
+struct Job {
+    app_id: i64,
+    batch: Prepared,
+    reply: SyncSender<StoreResult<IngestResponse>>,
+}
+
 pub struct SqliteStore {
-    writer: Mutex<Connection>,
+    writer: Arc<Mutex<Connection>>,
     readers: Mutex<Vec<Connection>>,
     path: std::path::PathBuf,
+    jobs: SyncSender<Job>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
+
+impl Drop for SqliteStore {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// How often the checkpointer folds the write-ahead log back into the database file.
+const CHECKPOINT_EVERY: Duration = Duration::from_millis(100_000);
+/// Pages the log may reach before the writer itself checkpoints (a safety net: the checkpointer normally
+/// keeps it far smaller). 50,000 pages is about 200 MiB.
+const WAL_SAFETY_PAGES: u32 = 50_000;
 
 impl SqliteStore {
     /// Opens (creating if needed) the database at `path` and brings the schema up to date.
@@ -70,7 +107,64 @@ impl SqliteStore {
         let mut writer = Connection::open(path)?;
         configure(&writer)?;
         migrate(&mut writer)?;
-        Ok(Self { writer: Mutex::new(writer), readers: Mutex::new(Vec::new()), path: path.to_path_buf() })
+        // The writer never pays for a checkpoint inside a commit (an fsync of the database file, a fifth of its
+        // time under load): a separate thread does that. The log may grow in between.
+        writer.execute_batch(&format!("PRAGMA wal_autocheckpoint = {WAL_SAFETY_PAGES}; PRAGMA journal_size_limit = 67108864;"))?;
+        let writer = Arc::new(Mutex::new(writer));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let checkpointer = Connection::open(path)?;
+        configure(&checkpointer)?;
+        let stop_flag = Arc::clone(&stop);
+        std::thread::Builder::new()
+            .name("tracer-checkpoint".into())
+            .spawn(move || {
+                while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(CHECKPOINT_EVERY);
+                    // PASSIVE never blocks the writer or readers; it copies what it can.
+                    if let Err(error) = checkpointer.execute_batch("PRAGMA wal_checkpoint(PASSIVE);") {
+                        log::warn!("checkpoint failed: {error}");
+                    }
+                }
+            })
+            .map_err(|error| StoreError::Backend(format!("cannot start the checkpoint thread: {error}")))?;
+        let (jobs, queue) = sync_channel(WRITE_QUEUE);
+        let thread_writer = Arc::clone(&writer);
+        std::thread::Builder::new()
+            .name("tracer-writer".into())
+            .spawn(move || writer_loop(&thread_writer, &queue))
+            .map_err(|error| StoreError::Backend(format!("cannot start the writer thread: {error}")))?;
+        Ok(Self { writer, readers: Mutex::new(Vec::new()), path: path.to_path_buf(), jobs, stop })
+    }
+
+    /// A connection for building one day's rollup: the main database is only read, results are collected in an
+    /// attached in-memory database (`s`), and the writer is touched in one short transaction at the end.
+    fn rollup_connection(&self) -> StoreResult<Connection> {
+        let conn = Connection::open(&self.path)?;
+        configure(&conn)?;
+        conn.execute_batch(
+            "ATTACH DATABASE ':memory:' AS s;
+             CREATE TABLE s.x_installs (app_id INTEGER, day INTEGER, install_id TEXT PRIMARY KEY);
+             CREATE TABLE s.x_sessions AS SELECT * FROM main.daily_sessions WHERE 0;
+             CREATE TABLE s.x_events AS SELECT * FROM main.daily_events WHERE 0;",
+        )?;
+        Ok(conn)
+    }
+
+    /// Deletes in chunks of `CHUNK_ROWS`, taking the writer for one chunk at a time. `sql` takes the app id,
+    /// the cutoff and the chunk size as ?1, ?2 and ?3.
+    fn delete_chunked(&self, sql: &str, app_id: i64, cutoff: i64) -> StoreResult<u64> {
+        let mut total = 0u64;
+        loop {
+            let started = std::time::Instant::now();
+            let removed = self.write().execute(sql, params![app_id, cutoff, CHUNK_ROWS])?;
+            total += removed as u64;
+            if (removed as i64) < CHUNK_ROWS {
+                return Ok(total);
+            }
+            // Duty cycle: stay away from the lock for three times as long as the chunk held it. This lets a
+            // waiting ingest group (here, or in another process whose busy handler sleeps and retries) in.
+            std::thread::sleep((started.elapsed() * 3).max(CHUNK_PAUSE));
+        }
     }
 
     fn write(&self) -> MutexGuard<'_, Connection> {
@@ -99,6 +193,8 @@ impl SqliteStore {
 
 fn configure(conn: &Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(Duration::from_secs(5))?;
+    // The ingest path uses more distinct statements than rusqlite's default cache of 16.
+    conn.set_prepared_statement_cache_capacity(256);
     conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;")
 }
 
@@ -203,11 +299,17 @@ impl Store for SqliteStore {
     }
 
     fn ingest(&self, app_id: i64, batch: &Prepared) -> StoreResult<IngestResponse> {
-        let mut conn = self.write();
-        let tx = conn.transaction()?;
-        let response = ingest_tx(&tx, app_id, batch)?;
-        tx.commit()?;
-        Ok(response)
+        self.ingest_owned(app_id, batch.clone())
+    }
+
+    fn ingest_owned(&self, app_id: i64, batch: Prepared) -> StoreResult<IngestResponse> {
+        let (reply, answer) = sync_channel(1);
+        match self.jobs.try_send(Job { app_id, batch, reply }) {
+            Ok(()) => {}
+            Err(std::sync::mpsc::TrySendError::Full(_)) => return Err(StoreError::Busy),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return Err(StoreError::Backend("the writer thread has stopped".into())),
+        }
+        answer.recv().unwrap_or_else(|_| Err(StoreError::Backend("the writer thread stopped before answering".into())))
     }
 
     fn forget(&self, app_id: i64, install_id: &str) -> StoreResult<u64> {
@@ -230,20 +332,27 @@ impl Store for SqliteStore {
     }
 
     fn rollup(&self, from_day: i64, to_day: i64) -> StoreResult<()> {
-        // One app per transaction. Raw rows are read on a reader connection, so the writer lock is held only
-        // for the deletes and inserts of one app, and ingest for the others is never stalled for long.
+        let conn = self.rollup_connection()?;
         for app in self.list_apps()? {
-            let (keep, perf) = self.read(|conn| {
-                let keep = load_keep(conn, app.id, from_day, to_day)?;
-                let perf = load_perf(conn, app.id, from_day, to_day, &keep)?;
-                Ok((keep, perf))
-            })?;
-            let mut conn = self.write();
-            let tx = conn.transaction()?;
-            rollup_app_tx(&tx, app.id, from_day, to_day, &keep, perf)?;
-            tx.commit()?;
+            for day in from_day..=to_day {
+                rollup_day(&conn, app.id, day)?;
+            }
         }
         Ok(())
+    }
+
+    fn rollup_dirty(&self, oldest_day: i64) -> StoreResult<u64> {
+        let conn = self.rollup_connection()?;
+        // Marks for days beyond retention can never be rolled up again.
+        self.write().execute("DELETE FROM dirty_days WHERE day < ?1", [oldest_day])?;
+        let dirty: Vec<(i64, i64)> = self.read(|reader| {
+            let mut stmt = reader.prepare_cached("SELECT app_id, day FROM dirty_days WHERE day >= ?1 ORDER BY day, app_id LIMIT 1000")?;
+            stmt.query_map([oldest_day], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
+        })?;
+        for (app_id, day) in &dirty {
+            rollup_day(&conn, *app_id, *day)?;
+        }
+        Ok(dirty.len() as u64)
     }
 
     fn size_bytes(&self) -> StoreResult<u64> {
@@ -255,39 +364,85 @@ impl Store for SqliteStore {
     }
 
     fn prune(&self, now: i64, retention_days: u32) -> StoreResult<PruneStats> {
-        let mut conn = self.write();
-        let tx = conn.transaction()?;
         let cutoff_day = now.div_euclid(DAY_MS) - i64::from(retention_days);
         let cutoff_ms = cutoff_day.saturating_mul(DAY_MS);
-        let stats = PruneStats {
-            events: tx.execute("DELETE FROM events WHERE day < ?1", [cutoff_day])? as u64,
-            perf: tx.execute("DELETE FROM perf WHERE day < ?1", [cutoff_day])? as u64,
-            crashes: tx.execute("DELETE FROM crashes WHERE day < ?1", [cutoff_day])? as u64,
-            sessions: tx.execute("DELETE FROM sessions WHERE day < ?1", [cutoff_day])? as u64,
-            issues: tx.execute(
+        let mut stats = PruneStats::default();
+        // Big tables go in small chunks, each its own short transaction, so ingest is never kept waiting for
+        // long. Each statement is per app so it uses the (app, day) indexes instead of scanning the table.
+        for app in self.list_apps()? {
+            stats.events += self.delete_chunked(
+                "DELETE FROM events WHERE id IN (SELECT id FROM events WHERE app_id = ?1 AND day < ?2 LIMIT ?3)",
+                app.id,
+                cutoff_day,
+            )?;
+            stats.perf += self.delete_chunked(
+                "DELETE FROM perf WHERE id IN (SELECT id FROM perf WHERE app_id = ?1 AND day < ?2 LIMIT ?3)",
+                app.id,
+                cutoff_day,
+            )?;
+            stats.crashes += self.delete_chunked(
+                "DELETE FROM crashes WHERE id IN (SELECT id FROM crashes WHERE app_id = ?1 AND day < ?2 LIMIT ?3)",
+                app.id,
+                cutoff_day,
+            )?;
+            stats.sessions += self.delete_chunked(
+                "DELETE FROM sessions WHERE (app_id, session_id) IN (SELECT app_id, session_id FROM sessions WHERE app_id = ?1 AND day < ?2 LIMIT ?3)",
+                app.id,
+                cutoff_day,
+            )?;
+        }
+        stats.items_seen = self.delete_chunked(
+            "DELETE FROM items_seen WHERE (app_id, item_id) IN (SELECT app_id, item_id FROM items_seen WHERE received_at < ?2 AND ?1 >= 0 LIMIT ?3)",
+            0,
+            now - ITEMS_SEEN_DAYS * DAY_MS,
+        )?;
+        {
+            let mut conn = self.write();
+            let tx = conn.transaction()?;
+            stats.issues = tx.execute(
                 "DELETE FROM issues WHERE last_seen < ?1 AND NOT EXISTS (SELECT 1 FROM crashes WHERE crashes.issue_id = issues.id)",
                 [cutoff_ms],
-            )? as u64,
-            items_seen: tx.execute("DELETE FROM items_seen WHERE received_at < ?1", [now - ITEMS_SEEN_DAYS * DAY_MS])? as u64,
-            installs: tx.execute("DELETE FROM installs WHERE last_seen < ?1", [cutoff_ms])? as u64,
-        };
-        tx.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [now])?;
-        tx.execute("DELETE FROM daily_drops WHERE day < ?1", [cutoff_day])?;
-        // Catalogs not seen within retention go; a client that still needs one is asked for it again.
-        tx.execute("DELETE FROM catalogs WHERE received_at < ?1", [cutoff_ms])?;
-        tx.execute(
-            "DELETE FROM catalog_events WHERE NOT EXISTS (
-                 SELECT 1 FROM catalogs c WHERE c.app_id = catalog_events.app_id AND c.version = catalog_events.version AND c.hash = catalog_events.hash)",
-            [],
-        )?;
-        tx.commit()?;
-        // Give space back to the file system and fold the WAL into the main file.
-        conn.execute_batch("PRAGMA incremental_vacuum; PRAGMA wal_checkpoint(TRUNCATE);")?;
+            )? as u64;
+            stats.installs = tx.execute("DELETE FROM installs WHERE last_seen < ?1", [cutoff_ms])? as u64;
+            tx.execute("DELETE FROM admin_sessions WHERE expires_at < ?1", [now])?;
+            tx.execute("DELETE FROM daily_drops WHERE day < ?1", [cutoff_day])?;
+            // Catalogs not seen within retention go; a client that still needs one is asked for it again.
+            tx.execute("DELETE FROM catalogs WHERE received_at < ?1", [cutoff_ms])?;
+            tx.execute(
+                "DELETE FROM catalog_events WHERE NOT EXISTS (
+                     SELECT 1 FROM catalogs c WHERE c.app_id = catalog_events.app_id AND c.version = catalog_events.version AND c.hash = catalog_events.hash)",
+                [],
+            )?;
+            tx.commit()?;
+        }
+        // Give space back to the file system a slice at a time, then fold what the log holds into the file.
+        for _ in 0..10_000 {
+            let freed: i64 = {
+                let conn = self.write();
+                let before: i64 = conn.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+                conn.execute_batch(&format!("PRAGMA incremental_vacuum({VACUUM_PAGES});"))?;
+                before - conn.query_row::<i64, _, _>("PRAGMA freelist_count", [], |row| row.get(0))?
+            };
+            if freed < i64::from(VACUUM_PAGES) {
+                break;
+            }
+            std::thread::sleep(CHUNK_PAUSE);
+        }
+        self.write().execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
         Ok(stats)
     }
 
     fn close_stale_sessions(&self, older_than: i64) -> StoreResult<u64> {
-        let changed = self.write().execute("UPDATE sessions SET status = 'abnormal' WHERE status = 'ok' AND last_seen < ?1", [older_than])?;
+        let mut conn = self.write();
+        let tx = conn.transaction()?;
+        // The days these sessions belong to change their totals, so they need a new rollup.
+        tx.execute(
+            "INSERT INTO dirty_days (app_id, day, marked_at) SELECT DISTINCT app_id, day, ?2 FROM sessions WHERE status = 'ok' AND last_seen < ?1
+             ON CONFLICT (app_id, day) DO UPDATE SET marked_at = max(marked_at + 1, excluded.marked_at)",
+            params![older_than, crate::now_ms()],
+        )?;
+        let changed = tx.execute("UPDATE sessions SET status = 'abnormal' WHERE status = 'ok' AND last_seen < ?1", [older_than])?;
+        tx.commit()?;
         Ok(changed as u64)
     }
 
@@ -389,9 +544,76 @@ impl Store for SqliteStore {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// group commit
+
+/// The single writer. It takes whatever has queued up (up to `MAX_GROUP` envelopes), stores them in one
+/// transaction, commits once, and only then answers every caller. Under load the group grows by itself, which amortises the commit.
+fn writer_loop(conn: &Mutex<Connection>, queue: &Receiver<Job>) {
+    while let Ok(first) = queue.recv() {
+        let mut group = vec![first];
+        while group.len() < MAX_GROUP {
+            match queue.try_recv() {
+                Ok(job) => group.push(job),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        let results = commit_group(conn, &group);
+        for (job, result) in group.into_iter().zip(results) {
+            let _ = job.reply.send(result);
+        }
+    }
+}
+
+fn commit_group(conn: &Mutex<Connection>, group: &[Job]) -> Vec<StoreResult<IngestResponse>> {
+    let mut guard = conn.lock().unwrap_or_else(PoisonError::into_inner);
+    // The common case: every envelope stores cleanly and the whole group is one transaction.
+    match try_group(&mut guard, group) {
+        Ok(responses) => return responses.into_iter().map(Ok).collect(),
+        Err(error) if is_systemic(&error) => {
+            log::error!("storing a group of {} envelopes failed: {error}", group.len());
+            return group.iter().map(|_| Err(StoreError::from(clone_error(&error)))).collect();
+        }
+        Err(error) => log::warn!("a group of {} envelopes failed ({error}); storing them one by one", group.len()),
+    }
+    // Failures that say something about the database as a whole (locked, full, read-only, unreadable) hit
+    // every envelope alike: report them without trying each one again.
+    // Something failed. A savepoint per envelope would isolate it, but it costs a sub-journal write for every
+    // page touched, which is far more than the rare failure is worth; instead redo the group envelope by
+    // envelope, so one bad envelope cannot take the others down with it.
+    group.iter().map(|job| try_group(&mut guard, std::slice::from_ref(job)).map(|mut one| one.remove(0)).map_err(StoreError::from)).collect()
+}
+
+/// Errors that concern the database as a whole rather than one envelope.
+fn is_systemic(error: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode::{
+        CannotOpen, DatabaseBusy, DatabaseCorrupt, DatabaseLocked, DiskFull, NotADatabase, OutOfMemory, ReadOnly, SystemIoFailure,
+    };
+    matches!(error, rusqlite::Error::SqliteFailure(failure, _)
+        if matches!(failure.code, DatabaseBusy | DatabaseLocked | DiskFull | ReadOnly | SystemIoFailure | CannotOpen | DatabaseCorrupt | NotADatabase | OutOfMemory))
+}
+
+/// `rusqlite::Error` is not `Clone`; rebuild the part that matters so each caller gets its own copy.
+fn clone_error(error: &rusqlite::Error) -> rusqlite::Error {
+    match error {
+        rusqlite::Error::SqliteFailure(failure, message) => rusqlite::Error::SqliteFailure(*failure, message.clone()),
+        other => rusqlite::Error::InvalidParameterName(other.to_string()),
+    }
+}
+
+fn try_group(conn: &mut Connection, group: &[Job]) -> rusqlite::Result<Vec<IngestResponse>> {
+    let tx = conn.transaction()?;
+    let mut responses = Vec::with_capacity(group.len());
+    for job in group {
+        responses.push(ingest_tx(&tx, job.app_id, &job.batch)?);
+    }
+    tx.commit()?;
+    Ok(responses)
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // ingest
 
-fn ingest_tx(tx: &Transaction<'_>, app_id: i64, batch: &Prepared) -> rusqlite::Result<IngestResponse> {
+fn ingest_tx(tx: &Connection, app_id: i64, batch: &Prepared) -> rusqlite::Result<IngestResponse> {
     let device = batch.device.as_ref();
     let nonempty = |text: &str| (!text.is_empty()).then(|| text.to_string());
     let os_name = device.and_then(|d| nonempty(&d.os_name));
@@ -456,6 +678,7 @@ fn ingest_tx(tx: &Transaction<'_>, app_id: i64, batch: &Prepared) -> rusqlite::R
     }
 
     let ctx = Ctx {
+        catalog: std::cell::RefCell::new(None),
         app_id,
         batch,
         os_name: os_name.as_deref(),
@@ -464,29 +687,42 @@ fn ingest_tx(tx: &Transaction<'_>, app_id: i64, batch: &Prepared) -> rusqlite::R
         device_json: device_json.as_deref(),
     };
     let mut response = IngestResponse { rejected: batch.rejected, ..IngestResponse::default() };
+    let mut days: Vec<i64> = batch.session_span.map(|(first, _)| first.div_euclid(DAY_MS)).into_iter().collect();
     for item in &batch.items {
-        let seen: bool = tx
-            .prepare_cached("SELECT EXISTS(SELECT 1 FROM items_seen WHERE app_id = ?1 AND item_id = ?2)")?
-            .query_row(params![app_id, item.id], |row| row.get(0))?;
-        if seen {
+        // One statement both records the id and tells whether it was already there (no row changed).
+        let fresh = tx
+            .prepare_cached("INSERT INTO items_seen (app_id, item_id, received_at) VALUES (?1, ?2, ?3) ON CONFLICT (app_id, item_id) DO NOTHING")?
+            .execute(params![app_id, item.id, batch.received_at])?;
+        if fresh == 0 {
             response.duplicates += 1;
             continue;
         }
-        if store_item(tx, &ctx, item, &mut response)? {
-            tx.prepare_cached("INSERT INTO items_seen (app_id, item_id, received_at) VALUES (?1, ?2, ?3)")?.execute(params![
-                app_id,
-                item.id,
-                batch.received_at
-            ])?;
-            response.accepted += 1;
-        } else {
-            response.rejected += 1;
+        store_item(tx, &ctx, item, &mut response)?;
+        response.accepted += 1;
+        let day = item.ts.div_euclid(DAY_MS);
+        if !days.contains(&day) {
+            days.push(day);
         }
+    }
+    // Every day that received data needs its rollup recomputed (the rollup timer reads this list).
+    for day in days {
+        tx.prepare_cached(
+            "INSERT INTO dirty_days (app_id, day, marked_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (app_id, day) DO UPDATE SET marked_at = max(marked_at + 1, excluded.marked_at)",
+        )?
+        .execute(params![app_id, day, batch.received_at])?;
     }
     Ok(response)
 }
 
+/// The names of the catalogs held for the envelope's app version, loaded once per envelope.
+struct CatalogView {
+    held: bool,
+    names: std::collections::HashSet<String>,
+}
+
 struct Ctx<'a> {
+    catalog: std::cell::RefCell<Option<CatalogView>>,
     app_id: i64,
     batch: &'a Prepared,
     os_name: Option<&'a str>,
@@ -495,8 +731,8 @@ struct Ctx<'a> {
     device_json: Option<&'a str>,
 }
 
-/// Stores one item. `false` means it was refused (and its id is not recorded).
-fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response: &mut IngestResponse) -> rusqlite::Result<bool> {
+/// Stores one item.
+fn store_item(tx: &Connection, ctx: &Ctx<'_>, item: &PreparedItem, response: &mut IngestResponse) -> rusqlite::Result<()> {
     let batch = ctx.batch;
     let app_id = ctx.app_id;
     let day = item.ts.div_euclid(DAY_MS);
@@ -535,6 +771,7 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
                         for event in events {
                             insert.execute(params![app_id, batch.version, hash, event.name, event.category])?;
                         }
+                        *ctx.catalog.borrow_mut() = None;
                     }
                 }
                 (_, true) => {
@@ -591,17 +828,21 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
         PreparedBody::Event(event) => {
             // An event is never refused for being undeclared: the catalog is client input and must not be
             // able to cause data loss. It is stored with `declared = 0` and shown apart.
-            let held: bool = tx
-                .prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2)")?
-                .query_row(params![app_id, batch.version], |row| row.get(0))?;
-            let declared = if event.dynamic {
-                true
-            } else if held {
-                tx.prepare_cached("SELECT EXISTS(SELECT 1 FROM catalog_events WHERE app_id = ?1 AND version = ?2 AND name = ?3)")?
-                    .query_row(params![app_id, batch.version, event.name], |row| row.get(0))?
-            } else {
-                response.need_catalog = true;
-                true
+            if ctx.catalog.borrow().is_none() {
+                let mut names = std::collections::HashSet::new();
+                let mut stmt = tx.prepare_cached("SELECT DISTINCT name FROM catalog_events WHERE app_id = ?1 AND version = ?2")?;
+                for name in stmt.query_map(params![app_id, batch.version], |row| row.get::<_, String>(0))? {
+                    names.insert(name?);
+                }
+                *ctx.catalog.borrow_mut() = Some(CatalogView { held: !names.is_empty(), names });
+            }
+            let declared = match ctx.catalog.borrow().as_ref() {
+                _ if event.dynamic => true,
+                Some(view) if view.held => view.names.contains(&event.name),
+                _ => {
+                    response.need_catalog = true;
+                    true
+                }
             };
             let props = (!event.props.is_empty()).then(|| serde_json::to_string(&event.props).ok()).flatten();
             tx.prepare_cached(
@@ -676,10 +917,10 @@ fn store_item(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, response
             }
         }
     }
-    Ok(true)
+    Ok(())
 }
 
-fn store_crash(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, prepared: &PreparedCrash, day: i64) -> rusqlite::Result<()> {
+fn store_crash(tx: &Connection, ctx: &Ctx<'_>, item: &PreparedItem, prepared: &PreparedCrash, day: i64) -> rusqlite::Result<()> {
     let batch = ctx.batch;
     let app_id = ctx.app_id;
     let crash = &prepared.crash;
@@ -763,7 +1004,7 @@ fn store_crash(tx: &Transaction<'_>, ctx: &Ctx<'_>, item: &PreparedItem, prepare
 
 /// A session that ended `crashed` took its most recent panic with it: that crash is fatal. The client cannot
 /// know at capture time whether the host survives, so the server decides when the end arrives.
-fn mark_last_panic_fatal(tx: &Transaction<'_>, app_id: i64, session_id: &str, install_id: &str) -> rusqlite::Result<()> {
+fn mark_last_panic_fatal(tx: &Connection, app_id: i64, session_id: &str, install_id: &str) -> rusqlite::Result<()> {
     tx.prepare_cached(
         "UPDATE crashes SET fatal = 1 WHERE id = (
              SELECT id FROM crashes WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND kind = 'panic'
@@ -889,26 +1130,27 @@ fn load_perf(conn: &Connection, app_id: i64, from: i64, to: i64, keep: &Keep) ->
     Ok(groups)
 }
 
-/// Replaces one app's rollup rows for the day range. Runs in its own transaction, so the writer is held for
-/// one app at a time.
-fn rollup_app_tx(tx: &Transaction<'_>, app_id: i64, from: i64, to: i64, keep: &Keep, perf: BTreeMap<PerfKey, PerfAcc>) -> rusqlite::Result<()> {
-    for table in ["daily_installs", "daily_sessions", "daily_events", "daily_perf"] {
-        tx.execute(&format!("DELETE FROM {table} WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3"), params![app_id, from, to])?;
-    }
-    tx.execute(
-        "INSERT INTO daily_installs (app_id, day, install_id)
-         SELECT app_id, day, install_id FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
-         UNION SELECT app_id, day, install_id FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
-         UNION SELECT app_id, day, install_id FROM perf WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3",
-        params![app_id, from, to],
-    )?;
+/// Recomputes one app's rollup rows for one day. The aggregation reads raw rows without touching the writer;
+/// only the final replace of that day's rollup rows is a (short) write transaction.
+fn rollup_day(conn: &Connection, app_id: i64, day: i64) -> rusqlite::Result<()> {
+    let mark: Option<i64> =
+        conn.query_row("SELECT marked_at FROM dirty_days WHERE app_id = ?1 AND day = ?2", params![app_id, day], |row| row.get(0)).optional()?;
+    let keep = load_keep(conn, app_id, day, day)?;
+    let perf = load_perf(conn, app_id, day, day, &keep)?;
     let (versions, os, events) = (json_list(&keep.versions), json_list(&keep.os), json_list(&keep.events));
-    tx.execute(
-        "INSERT INTO daily_sessions (app_id, day, version, os_name, sessions, opens, installs, exited, crashed, abnormal, errored,
-                                     crashed_installs, duration_s, focused_s, active_s, idle_s)
+    conn.execute_batch("DELETE FROM s.x_installs; DELETE FROM s.x_sessions; DELETE FROM s.x_events;")?;
+    // Three plain selects into a table keyed by install, not one UNION: the planner turns a UNION into a merge
+    // of full scans of the per-install indexes (a minute per day on 10M events), and the day indexes are what
+    // is wanted here.
+    for source in ["sessions INDEXED BY sessions_by_day", "events INDEXED BY events_by_day", "perf INDEXED BY perf_by_day"] {
+        conn.execute(&format!("INSERT OR IGNORE INTO s.x_installs (app_id, day, install_id) SELECT app_id, day, install_id FROM {source} WHERE app_id = ?1 AND day = ?2"), params![app_id, day])?;
+    }
+    conn.execute(
+        "INSERT INTO s.x_sessions (app_id, day, version, os_name, sessions, opens, installs, exited, crashed, abnormal, errored,
+                                   crashed_installs, duration_s, focused_s, active_s, idle_s)
          SELECT app_id, day,
-                CASE WHEN version IN (SELECT value FROM json_each(?4)) THEN version ELSE 'other' END,
-                CASE WHEN COALESCE(os_name, 'unknown') IN (SELECT value FROM json_each(?5)) THEN COALESCE(os_name, 'unknown') ELSE 'other' END,
+                CASE WHEN version IN (SELECT value FROM json_each(?3)) THEN version ELSE 'other' END,
+                CASE WHEN COALESCE(os_name, 'unknown') IN (SELECT value FROM json_each(?4)) THEN COALESCE(os_name, 'unknown') ELSE 'other' END,
                 count(*),
                 sum(process = 'gui'),
                 count(DISTINCT install_id),
@@ -918,51 +1160,92 @@ fn rollup_app_tx(tx: &Transaction<'_>, app_id: i64, from: i64, to: i64, keep: &K
                 sum(errors > 0),
                 count(DISTINCT CASE WHEN status IN ('crashed', 'abnormal') THEN install_id END),
                 sum(duration_s), sum(focused_s), sum(active_s), sum(idle_s)
-         FROM sessions WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         FROM sessions WHERE app_id = ?1 AND day = ?2
          GROUP BY app_id, day, 3, 4",
-        params![app_id, from, to, versions, os],
+        params![app_id, day, versions, os],
     )?;
-    tx.execute(
-        "INSERT INTO daily_events (app_id, day, version, name, declared, category, count, installs)
+    conn.execute(
+        "INSERT INTO s.x_events (app_id, day, version, name, declared, category, count, installs)
          SELECT app_id, day,
-                CASE WHEN version IN (SELECT value FROM json_each(?4)) THEN version ELSE 'other' END,
-                CASE WHEN name IN (SELECT value FROM json_each(?5)) THEN name ELSE 'other' END,
+                CASE WHEN version IN (SELECT value FROM json_each(?3)) THEN version ELSE 'other' END,
+                CASE WHEN name IN (SELECT value FROM json_each(?4)) THEN name ELSE 'other' END,
                 declared,
-                CASE WHEN name IN (SELECT value FROM json_each(?5)) THEN min(category) ELSE 'other' END,
+                CASE WHEN name IN (SELECT value FROM json_each(?4)) THEN min(category) ELSE 'other' END,
                 count(*), count(DISTINCT install_id)
-         FROM events WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3
+         FROM events WHERE app_id = ?1 AND day = ?2
          GROUP BY app_id, day, 3, 4, declared",
-        params![app_id, from, to, versions, events],
+        params![app_id, day, versions, events],
     )?;
-    let mut insert = tx.prepare(
-        "INSERT INTO daily_perf (app_id, day, version, os_name, frame_count, frame_sum_us, frame_max_us, slow, frozen, buckets,
-                                 cpu_sum, cpu_n, rss_sum, rss_n, rss_peak_mb, startup_sum, startup_n)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+    let dau: i64 = conn.query_row("SELECT count(*) FROM s.x_installs", [], |row| row.get(0))?;
+    // Weekly and monthly actives are the distinct installs over the days before plus this day's new list.
+    let window = |back: i64| -> rusqlite::Result<i64> {
+        conn.query_row(
+            "SELECT count(*) FROM (SELECT install_id FROM main.daily_installs WHERE app_id = ?1 AND day BETWEEN ?2 AND ?3 UNION SELECT install_id FROM s.x_installs)",
+            params![app_id, day - back, day - 1],
+            |row| row.get(0),
+        )
+    };
+    // Only the newest days need them (the dashboard asks for the figures ending today), and each costs a distinct
+    // count over up to 30 days of `daily_installs`, so older days store -1 ("not computed": readers fall back).
+    let newest: bool = !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE app_id = ?1 AND day > ?2 + 1) OR EXISTS(SELECT 1 FROM events WHERE app_id = ?1 AND day > ?2 + 1)
+             OR EXISTS(SELECT 1 FROM perf WHERE app_id = ?1 AND day > ?2 + 1)",
+        params![app_id, day],
+        |row| row.get::<_, bool>(0),
     )?;
-    for ((day, version, os_name), mut acc) in perf {
-        acc.frames.buckets.resize(FRAME_BUCKETS, 0);
-        let buckets = serde_json::to_string(&acc.frames.buckets).unwrap_or_else(|_| "[]".to_string());
-        insert.execute(params![
-            app_id,
-            day,
-            version,
-            os_name,
-            n(acc.frames.count),
-            n(acc.frames.sum_us),
-            i64::from(acc.frames.max_us),
-            n(acc.frames.slow),
-            n(acc.frames.frozen),
-            buckets,
-            acc.cpu_sum,
-            acc.cpu_n,
-            acc.rss_sum,
-            acc.rss_n,
-            acc.rss_peak,
-            acc.startup_sum,
-            acc.startup_n
-        ])?;
+    let (wau, mau) = if newest { (window(6)?, window(29)?) } else { (-1, -1) };
+
+    let tx = conn.unchecked_transaction()?;
+    for table in ["daily_sessions", "daily_events", "daily_perf"] {
+        tx.execute(&format!("DELETE FROM main.{table} WHERE app_id = ?1 AND day = ?2"), params![app_id, day])?;
     }
-    Ok(())
+    // The install list is the big one (one row per active install). Rewriting all of it every time would hold
+    // the writer for a long moment, so only the difference is applied: installs that are gone are deleted and
+    // the ones already present are left alone (`OR IGNORE` finds them without writing).
+    tx.execute(
+        "DELETE FROM main.daily_installs WHERE app_id = ?1 AND day = ?2 AND install_id NOT IN (SELECT install_id FROM s.x_installs)",
+        params![app_id, day],
+    )?;
+    tx.execute_batch("INSERT OR IGNORE INTO main.daily_installs SELECT * FROM s.x_installs; INSERT INTO main.daily_sessions SELECT * FROM s.x_sessions; INSERT INTO main.daily_events SELECT * FROM s.x_events;")?;
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO main.daily_perf (app_id, day, version, os_name, frame_count, frame_sum_us, frame_max_us, slow, frozen, buckets,
+                                          cpu_sum, cpu_n, rss_sum, rss_n, rss_peak_mb, startup_sum, startup_n)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        )?;
+        for ((_, version, os_name), mut acc) in perf {
+            acc.frames.buckets.resize(FRAME_BUCKETS, 0);
+            let buckets = serde_json::to_string(&acc.frames.buckets).unwrap_or_else(|_| "[]".to_string());
+            insert.execute(params![
+                app_id,
+                day,
+                version,
+                os_name,
+                n(acc.frames.count),
+                n(acc.frames.sum_us),
+                i64::from(acc.frames.max_us),
+                n(acc.frames.slow),
+                n(acc.frames.frozen),
+                buckets,
+                acc.cpu_sum,
+                acc.cpu_n,
+                acc.rss_sum,
+                acc.rss_n,
+                acc.rss_peak,
+                acc.startup_sum,
+                acc.startup_n
+            ])?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO main.daily_active (app_id, day, dau, wau, mau) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (app_id, day) DO UPDATE SET dau = excluded.dau, wau = excluded.wau, mau = excluded.mau",
+        params![app_id, day, dau, wau, mau],
+    )?;
+    if let Some(mark) = mark {
+        tx.execute("DELETE FROM main.dirty_days WHERE app_id = ?1 AND day = ?2 AND marked_at <= ?3", params![app_id, day, mark])?;
+    }
+    tx.commit()
 }
 
 #[cfg(test)]

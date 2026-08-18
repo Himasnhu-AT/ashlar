@@ -283,3 +283,80 @@ fn stale_ok_sessions_are_closed_as_abnormal() {
     assert_eq!(status("done"), "exited");
     assert_eq!(jobs::close_stale_sessions(&fx.store, T).unwrap(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_timers_roll_up_and_close_stale_sessions_on_their_own() {
+    let fx = Fixture::new();
+    seed(&fx);
+    // A clock three days ahead makes the session that never ended stale; the fast timers fire at once.
+    let later = T + 3 * DAY_MS;
+    let store: std::sync::Arc<dyn Store> = std::sync::Arc::new(SqliteStore::open(&fx.path).unwrap());
+    let timers = jobs::Timers {
+        rollup_every: std::time::Duration::from_millis(20),
+        retention_every: std::time::Duration::from_millis(20),
+        clock: std::sync::Arc::new(move || later),
+    };
+    let handles = jobs::spawn_timers_with(store, 90, timers);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let rolled: i64 = fx.sql("SELECT count(*) FROM daily_sessions");
+        let closed: i64 = fx.sql("SELECT count(*) FROM sessions WHERE session_id = 'C1' AND status = 'abnormal'");
+        let dirty: i64 = fx.sql("SELECT count(*) FROM dirty_days");
+        if rolled > 0 && closed == 1 && dirty == 0 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the timers did nothing: rolled {rolled}, closed {closed}, dirty {dirty}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    for handle in handles {
+        handle.abort();
+    }
+    // The stale close changed the totals, so the rollup of that day shows the abnormal session.
+    assert_eq!(fx.sql::<i64>("SELECT sum(abnormal) FROM daily_sessions WHERE day = 20000"), 1);
+}
+
+#[test]
+fn a_rollup_tick_recomputes_only_the_days_that_received_data() {
+    let fx = Fixture::new();
+    seed(&fx);
+    assert_eq!(jobs::rollup_tick(&fx.store, T, 90).unwrap(), 2, "days 19999 and 20000");
+    assert_eq!(fx.sql::<i64>("SELECT count(*) FROM dirty_days"), 0);
+    assert_eq!(jobs::rollup_tick(&fx.store, T, 90).unwrap(), 0, "nothing new, nothing to do");
+    // Late data for an old day marks just that day.
+    let old = T - 30 * DAY_MS;
+    fx.send("Z", "Z1", "macos", "1.0", ProcessKind::Gui, T, vec![(old, event("file.open")), (old + 1, end(SessionStatus::Exited, 5, 0))]);
+    assert_eq!(fx.sql::<i64>("SELECT count(*) FROM dirty_days"), 1);
+    assert_eq!(jobs::rollup_pending(&fx.store, T, 90).unwrap(), 1);
+    assert_eq!(fx.sql::<i64>("SELECT sessions FROM daily_sessions WHERE day = 19970"), 1);
+    // A forced recompute of everything gives the same numbers.
+    let before = fx.sql::<i64>("SELECT sum(sessions) FROM daily_sessions");
+    jobs::rollup_recent(&fx.store, T, 90, 90).unwrap();
+    assert_eq!(fx.sql::<i64>("SELECT sum(sessions) FROM daily_sessions"), before);
+    // Marks for days beyond retention are dropped rather than recomputed.
+    fx.send("Y", "Y1", "macos", "1.0", ProcessKind::Gui, T, vec![(T - 85 * DAY_MS, event("file.open"))]);
+    assert_eq!(jobs::rollup_pending(&fx.store, T + 20 * DAY_MS, 90).unwrap(), 0);
+    assert_eq!(fx.sql::<i64>("SELECT count(*) FROM dirty_days"), 0);
+}
+
+#[test]
+fn weekly_and_monthly_actives_are_stored_per_day() {
+    let fx = Fixture::new();
+    // One new install per day for ten days; each also sends an event so it counts as active.
+    for n in 0..10 {
+        let at = T - (9 - n) * DAY_MS;
+        fx.send(&format!("inst{n}"), &format!("s{n}"), "macos", "1.0", ProcessKind::Gui, at, vec![(at, event("file.open"))]);
+    }
+    jobs::rollup_pending(&fx.store, T, 90).unwrap();
+    let row = |day: i64| -> (i64, i64, i64) {
+        rusqlite::Connection::open(&fx.path)
+            .unwrap()
+            .query_row("SELECT dau, wau, mau FROM daily_active WHERE day = ?1", [day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+    };
+    assert_eq!(row(DAY), (1, 7, 10), "today: 1 today, 7 in the last 7 days, all 10 in the last 30");
+    // Older days keep only their daily figure; the weekly and monthly ones are left "not computed" (-1).
+    assert_eq!(row(DAY - 1).0, 1, "yesterday is still among the newest two");
+    assert_eq!(row(DAY - 3), (1, -1, -1));
+    // The dashboard still gets the right answer for them by counting.
+    assert_eq!(fx.store.active_installs_between(fx.app_id, DAY - 9, DAY - 3, None).unwrap(), 7);
+}

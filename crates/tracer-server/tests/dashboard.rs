@@ -869,3 +869,72 @@ fn hostile_text_is_escaped_on_every_page() {
         assert!(!disposition.contains('<') && !disposition.contains('/'), "{disposition}");
     }
 }
+
+#[test]
+fn the_issue_page_shows_every_detail_a_crash_carries() {
+    use tracer_proto::{Crash, CrashKind, Device, FrameStats, Gpu, Item, ItemBody, Perf};
+    let server = TestServer::demo();
+    let t = common::now();
+    let mut frames = FrameStats::empty();
+    for us in [4_000u32, 9_000, 20_000, 900_000] {
+        frames.record(us);
+    }
+    let crash = Crash {
+        kind: CrashKind::Hang,
+        fatal: false,
+        message: Some("main loop stopped".into()),
+        location: Some("src/ui.rs:10:5".into()),
+        thread: Some("main".into()),
+        backtrace: Some("0: demo::ui::run\n1: demo::main".into()),
+        blocked_ms: Some(12_500),
+        exit_code: Some(3),
+        signal: Some(11),
+        context: Some("save".into()),
+        perf: Some(Perf { window_s: 5, frames: Some(frames), cpu_pct: Some(37.5), rss_mb: Some(512), rss_peak_mb: Some(640), ..Perf::default() }),
+        ..Crash::default()
+    };
+    let mut envelope = common::envelope("i1", "s1", vec![Item { id: "c1".into(), ts: t - 1000, body: ItemBody::Crash(crash) }]);
+    envelope.app.build = Some("abc1234".into());
+    envelope.device = Some(Device {
+        os_name: "macos".into(),
+        os_version: Some("26.0".into()),
+        arch: "aarch64".into(),
+        cpu_brand: Some("Example CPU".into()),
+        cpu_cores: Some(10),
+        ram_mb: Some(32768),
+        gpu: Some(Gpu { name: "Example GPU".into(), backend: Some("metal".into()), ..Gpu::default() }),
+        locale: Some("en-US".into()),
+    });
+    assert_eq!(server.ingest(&envelope).status, 200);
+    let mut browser = Browser::signed_in(&server);
+    let page = browser.get("/apps/demo/crashes/1");
+    assert_eq!(page.status, 200, "{}", page.body);
+    for expected in [
+        "Example CPU (10 cores)",
+        "32,768 MB",
+        "Example GPU via metal",
+        "en-US",
+        "Blocked for",
+        "12,500 ms",
+        "Exit code",
+        "Signal",
+        "Context",
+        "Build",
+        "abc1234",
+        "Frame time p99",
+        "Slow frames",
+        "37.5%",
+        "Peak memory",
+        "640 MB",
+    ] {
+        assert!(page.body.contains(expected), "the issue page lacks {expected:?}");
+    }
+    // Resolved and ignored issues offer the other transitions.
+    let csrf = browser.csrf();
+    browser.post("/apps/demo/crashes/1/status", &[("status", "ignored"), ("csrf", &csrf)]);
+    let ignored = browser.get("/apps/demo/crashes/1");
+    assert!(ignored.body.contains("Reopen"));
+    browser.post("/apps/demo/crashes/1/status", &[("status", "resolved"), ("csrf", &csrf)]);
+    let resolved = browser.get("/apps/demo/crashes/1");
+    assert!(resolved.body.contains("Reopen") && resolved.body.contains("Ignore"));
+}

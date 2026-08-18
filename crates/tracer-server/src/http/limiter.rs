@@ -205,7 +205,8 @@ impl Limiters {
 
 /// Clients that own a whole IPv6 /64 could otherwise mint unlimited addresses; bucket by the /64.
 fn mask(addr: IpAddr) -> IpAddr {
-    match addr {
+    // `::ffff:1.2.3.4` is the same client as `1.2.3.4` (a dual-stack listener reports IPv4 peers that way).
+    match addr.to_canonical() {
         IpAddr::V6(v6) => {
             let mut octets = v6.octets();
             octets[8..].fill(0);

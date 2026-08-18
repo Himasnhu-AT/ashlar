@@ -208,3 +208,53 @@ Run one server process per data folder. Do not point an older binary at a databa
 **Sessions show up as "abnormal".** A process ended without closing its session (killed, crashed natively, power loss). The next launch of the app reports it. A session that never ends and never reports again is closed as `abnormal` after a day.
 
 **The container cannot write its data.** The image runs as uid 10001. A bind-mounted data folder must be writable by that user; the named volume in `compose.yml` already is.
+
+## 10. Capacity and tuning
+
+Numbers below were measured with `examples/loadgen` on one machine (15 cores, an NVMe disk, release build, client and server on the same host over loopback, other jobs running on the machine). Treat them as an order of magnitude for your own hardware and re-measure with the commands at the end. A "typical" envelope in the generator carries about 40 items (a session start with a catalog hash, heartbeats, 20 to 50 events, a performance window with a real histogram, now and then a crash with a 30-frame backtrace, a session end) and is about 1.2 KB gzipped.
+
+**Ingest.**
+
+| Load (64 connections) | Result |
+|---|---|
+| Flat out | about 4,300 envelopes a second (170,000 items a second), p50 13 ms, p99 about 100 ms |
+| Fixed 2,000 a second | p50 8 ms, p99 about 60 ms, no errors |
+| Fixed 500 a second | p50 7 ms, p99 about 14 ms |
+| 1,000 a second for 5 minutes | no errors; p50 steady at 9 ms; p99 drifts from 70 to 230 ms as the database grows to 2.7 GB; server memory 28 to 38 MiB |
+| 2,000 a second for 5 minutes | held for about 3 minutes (a 3 GB database), then latency climbs: see "When the database outgrows memory" |
+| 9,000 a second for 15 seconds (over twice the capacity) | the server answers `503` with `Retry-After: 1` to what it cannot take, keeps accepting the rest at its normal rate, answers `/v1/health` and the dashboard in under 5 ms, and is back to no errors within a second of the load dropping |
+
+Why it is fast: ingest requests are queued to one writer thread that stores up to 64 envelopes per transaction and commits once, a separate thread checkpoints the write-ahead log, statements are prepared once, and duplicate detection is one statement per item. The queue holds 256 envelopes; when it is full the server answers `503` and the SDK retries later, so memory stays bounded however hard clients push.
+
+**Durability.** The database runs in WAL mode with `synchronous = NORMAL`. A request is acknowledged only after its data is committed to the log, so stopping the process, even with `kill -9`, loses nothing that was acknowledged (a test does exactly this under load). What `NORMAL` does not do is `fsync` each commit, so a power failure or operating-system crash can lose the last moments of acknowledged data. The database is never left corrupt. If you cannot accept that, run the database on a volume with a battery-backed cache or a replicated disk.
+
+**The dashboard on a large database.** On a database with 1,000,000 sessions, 10,000,000 events, 2,000,000 performance windows, 100,000 crashes in 5,000 issues, 50 versions, 200,000 installs and 90 days (2.5 GB):
+
+| | Before | After |
+|---|---|---|
+| Slowest page, warm | 2.1 s (reports), 1.4 s (overview) | 18 ms |
+| Slowest page, first request after start | 2.2 s | 290 ms |
+| Rollup of 3 days (writer held) | 2.3 s | 3.5 s (a few ms of it holding the writer) |
+| Full 90-day recompute | 60 s | 64 s |
+
+Ingest at 300 envelopes a second while the 3-day rollup runs as another process: p99 58 ms against 47 ms without it. While retention deletes half the data it never stops ingest, but it does hurt the tail (p99 about 300 ms against about 40 ms).
+
+**When the database outgrows memory.** Each stored item touches several B-tree indexes in random order, so once the database is much larger than the memory the operating system can use for caching, every commit reads and writes random pages and throughput falls. On the test machine that started at roughly 3 GB at 2,000 envelopes a second. The remedies are the usual ones: more memory, a shorter `TRACER_RETENTION_DAYS`, and a fast local disk. Dropping the four per-install indexes delayed the problem a little but did not remove it, so they are kept. `TRACER_MAX_DB_MB` stops ingest with `507` before the disk fills.
+
+**Settings that matter for capacity.** `TRACER_RETENTION_DAYS` (database size is about 220 bytes per stored item including its indexes and dedup record: 12 million items took 2.7 GB); `TRACER_RATE_PER_MIN` (per client address) and `TRACER_KEY_RATE_PER_MIN` (per key, a capacity guard); `TRACER_MAX_DB_MB`. Retention runs hourly in small chunks (100 rows) that yield the writer, so the first run on a very large database can take a long while; that is harmless, and later runs only remove a day's worth.
+
+**Measuring your own server.**
+
+```
+cargo xtask load                                   # a short standard profile, prints a table
+cargo build --release -p tracer-server -p loadgen
+target/release/loadgen run --spawn --concurrency 64 --duration 30             # flat out
+target/release/loadgen run --spawn --rate 500 --duration 60                   # fixed rate, open loop
+target/release/loadgen run --url http://host:8090 --key tk_... --db /data/tracer.db --rate 200 --duration 60
+target/release/loadgen run --spawn --phases 1500:10,9000:15,1500:10 --concurrency 600 --probe   # overload
+target/release/loadgen seed --db /tmp/big/tracer.db --scale 1.0               # 10M events, 1M sessions, ... (2 min, 2.5 GB)
+target/release/loadgen read --dir /tmp/big --mode rollup                      # rollup timings
+target/release/loadgen read --dir /tmp/big --mode pages                       # every page, cold and warm
+```
+
+The generator is open loop with `--rate`: requests leave on a clock and latency is measured from when they were due, so a slow server shows up as latency. It ends with a check that the number of items the server stored equals the number it acknowledged. Do not point it at a server you care about: it writes a lot.

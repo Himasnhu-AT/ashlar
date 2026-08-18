@@ -195,8 +195,12 @@ Settings come from the environment (all optional):
 
 ### 4.2 Storage
 
-- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`. `0001_init` is the schema; `0002_dashboard` adds indexes for the dashboard queries; `0003_hardening` makes catalogs additive (`catalog_events.hash`), adds `events.declared`, `daily_events.declared`, `sessions.catalog_hash` and `issues.created_day`.
-- All access goes through a `Store` trait so a second backend can be added. The SQLite implementation runs on a dedicated writer thread plus read connections; async handlers reach it through `spawn_blocking` or a channel.
+- SQLite in WAL mode, schema in `migrations/`, applied at startup and tracked with `PRAGMA user_version`. `0001_init` is the schema; `0002_dashboard` adds indexes for the dashboard queries; `0003_hardening` makes catalogs additive (`catalog_events.hash`), adds `events.declared`, `daily_events.declared`, `sessions.catalog_hash` and `issues.created_day`; `0004_scale` adds the indexes the large-database measurements called for (`sessions_by_version`, the partial `perf_with_metrics`), `daily_active` (daily, weekly and monthly active installs) and `dirty_days`.
+- All access goes through a `Store` trait so a second backend can be added.
+- **Writes: group commit.** Ingest requests go through a bounded queue (256 envelopes) to one `tracer-writer` thread. It takes whatever has queued up (at most 64 envelopes), stores them in one transaction, commits once and only then answers each caller, so a request is acknowledged only after its data is committed. When the queue is full the answer is `503` with `Retry-After: 1`: memory cannot grow, and the client keeps its data. If a group fails, its envelopes are stored one by one, so a bad envelope cannot take the others down; a failure that concerns the whole database (locked past the busy timeout, disk full, read-only) is reported at once instead (`503` for a lock, `500` otherwise).
+- **Durability.** WAL with `synchronous = NORMAL`: a commit is in the log file but not fsynced. A crash or `kill -9` of the process loses nothing that was acknowledged; a power failure or operating-system crash can lose the last moments of acknowledged data (the database stays consistent, never half-written). A separate `tracer-checkpoint` thread folds the log into the database file every second, so the writer never pays for that fsync inside a commit; the log is allowed to grow to about 200 MiB before the writer would checkpoint it itself.
+- **Reads** use a small pool of `query_only` connections and never wait for the writer (WAL).
+- **Signals.** `SIGINT` and `SIGTERM` both stop the server gracefully: it stops accepting, lets in-flight requests finish (up to 10 s) and exits with status 0.
 - Conventions are in the header of `0001_init.sql`.
 
 ### 4.3 Ingest
@@ -229,10 +233,12 @@ Settings come from the environment (all optional):
 
 ### 4.4 Rollups and retention
 
-- A timer (every five minutes, and on demand) recomputes the `daily_*` tables for the last three days from the raw tables, by delete and insert. It works one app at a time: the raw rows are read on a reader connection and the writer lock is held only to replace that app's rows, so one large app cannot stall ingest for the others.
+- Ingest marks every (app, day) it stores data for in `dirty_days`. A timer (every five minutes) recomputes the `daily_*` tables for exactly those days, oldest first, and clears each mark unless new data arrived meanwhile; `rollup --days N` recomputes a fixed window by hand. Late data for an old day (a client replaying a spool) is therefore rolled up too.
+- One day of one app is built on a private connection that only reads the raw tables and collects the results in an in-memory scratch database; the write is then one short transaction that replaces that day's rows (for the install list only the difference is applied). Ingest is never held up by the aggregation itself.
+- `daily_active` holds the daily, weekly and monthly active installs per day. The weekly and monthly figures cost a distinct count over up to 30 days, so they are computed for the newest two days only (older days store `-1`, and readers fall back to counting).
 - Per app, only the 50 busiest versions, 20 busiest operating systems and 500 busiest event names keep their own rollup rows; the long tail is folded into `other`, so made-up values cannot grow the rollups.
 - `daily_events` is keyed by `declared` as well: declared and undeclared uses of one name are separate rows.
-- Retention deletes raw rows older than `TRACER_RETENTION_DAYS`, `daily_drops` and catalogs not seen within that time, and `items_seen` older than 35 days, then lets SQLite reclaim space. Rollups other than drops are kept.
+- Retention deletes raw rows older than `TRACER_RETENTION_DAYS`, `daily_drops` and catalogs not seen within that time, and `items_seen` older than 35 days, then lets SQLite reclaim space. Rollups other than drops are kept. Big tables are deleted in chunks of 2,000 rows, each its own short transaction with a pause of three times the chunk's duration, so ingest keeps getting the writer; space is returned 2,000 pages at a time.
 - Sessions still `ok` whose `last_seen` is over a day old are closed as `abnormal`.
 
 ### 4.5 Dashboard
