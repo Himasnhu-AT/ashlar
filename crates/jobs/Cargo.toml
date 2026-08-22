@@ -9,5 +9,12 @@ description = "Background jobs: progress, cancel, panic isolation, apply-on-UI-t
 [lints]
 workspace = true
 
+[features]
+# run jobs on rayon's global pool instead of ashlar's own bounded worker threads
+rayon = ["dep:rayon"]
+
 [dependencies]
 log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { version = "1", optional = true }
