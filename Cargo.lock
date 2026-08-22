@@ -179,6 +179,7 @@ name = "ashlar-control"
 version = "0.1.0"
 dependencies = [
  "ashlar-command",
+ "getrandom",
  "log",
  "serde",
  "serde_json",
