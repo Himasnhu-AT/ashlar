@@ -1,0 +1,26 @@
+{"expect":{"error":{"code":-32700,"message":"parse error: key must be a string at line 1 column 2"},"id":null,"jsonrpc":"2.0"},"send_raw":"{not json"}
+{"expect":null,"send_raw":"   "}
+{"expect":{"error":{"code":-32600,"message":"empty batch"},"id":null,"jsonrpc":"2.0"},"send_raw":"[]"}
+{"expect":{"error":{"code":-32600,"message":"a message must be a JSON object"},"id":null,"jsonrpc":"2.0"},"send_raw":"42"}
+{"expect":{"error":{"code":-32600,"message":"a message must be a JSON object"},"id":null,"jsonrpc":"2.0"},"send_raw":"\"ping\""}
+{"expect":{"error":{"code":-32600,"message":"a message must be a JSON object"},"id":null,"jsonrpc":"2.0"},"send_raw":"null"}
+{"expect":{"error":{"code":-32600,"message":"`jsonrpc` must be \"2.0\""},"id":1,"jsonrpc":"2.0"},"send":{"id":1,"method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"`jsonrpc` must be \"2.0\""},"id":1,"jsonrpc":"2.0"},"send":{"id":1,"jsonrpc":"1.0","method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"`id` must be a string or an integer"},"id":null,"jsonrpc":"2.0"},"send":{"id":true,"jsonrpc":"2.0","method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"`id` must be a string or an integer"},"id":null,"jsonrpc":"2.0"},"send":{"id":{"a":1},"jsonrpc":"2.0","method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"`id` must be a string or an integer"},"id":null,"jsonrpc":"2.0"},"send":{"id":1.5,"jsonrpc":"2.0","method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"`id` must be a string or an integer"},"id":null,"jsonrpc":"2.0"},"send":{"id":null,"jsonrpc":"2.0","method":"ping"}}
+{"expect":{"error":{"code":-32600,"message":"missing string `method`"},"id":2,"jsonrpc":"2.0"},"send":{"id":2,"jsonrpc":"2.0"}}
+{"expect":{"error":{"code":-32600,"message":"missing string `method`"},"id":3,"jsonrpc":"2.0"},"send":{"id":3,"jsonrpc":"2.0","method":7}}
+{"expect":null,"send":{"id":4,"jsonrpc":"2.0","result":{}}}
+{"expect":null,"send":{"error":{"code":1,"message":"x"},"id":5,"jsonrpc":"2.0"}}
+{"expect":{"error":{"code":-32602,"message":"`params` must be an object"},"id":6,"jsonrpc":"2.0"},"send":{"id":6,"jsonrpc":"2.0","method":"ping","params":[1,2]}}
+{"expect":{"error":{"code":-32602,"message":"tools/call needs a string `name`"},"id":7,"jsonrpc":"2.0"},"send":{"id":7,"jsonrpc":"2.0","method":"tools/call"}}
+{"expect":{"error":{"code":-32602,"message":"tools/call needs a string `name`"},"id":8,"jsonrpc":"2.0"},"send":{"id":8,"jsonrpc":"2.0","method":"tools/call","params":{"name":5}}}
+{"expect":{"error":{"code":-32602,"message":"unknown tool: nope"},"id":9,"jsonrpc":"2.0"},"send":{"id":9,"jsonrpc":"2.0","method":"tools/call","params":{"name":"nope"}}}
+{"expect":{"error":{"code":-32602,"message":"`arguments` must be an object"},"id":10,"jsonrpc":"2.0"},"send":{"id":10,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":[1],"name":"execute"}}}
+{"expect":{"error":{"code":-32601,"message":"method not found: no/such/method"},"id":11,"jsonrpc":"2.0"},"send":{"id":11,"jsonrpc":"2.0","method":"no/such/method"}}
+{"expect":[{"id":12,"jsonrpc":"2.0","result":{}},{"error":{"code":-32601,"message":"method not found: nope"},"id":13,"jsonrpc":"2.0"},{"error":{"code":-32600,"message":"a message must be a JSON object"},"id":null,"jsonrpc":"2.0"}],"send":[{"id":12,"jsonrpc":"2.0","method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"id":13,"jsonrpc":"2.0","method":"nope"},5]}
+{"expect":null,"send":[{"jsonrpc":"2.0","method":"notifications/initialized"}]}
+{"expect":{"id":-7,"jsonrpc":"2.0","result":{}},"send":{"id":-7,"jsonrpc":"2.0","method":"ping"}}
+{"expect":{"id":"","jsonrpc":"2.0","result":{}},"send":{"id":"","jsonrpc":"2.0","method":"ping"}}
