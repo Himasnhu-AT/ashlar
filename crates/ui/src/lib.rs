@@ -5,7 +5,9 @@
 //! Applications own their assets, themes, layouts, commands and document semantics. Components
 //! accept focused style values and return egui responses; no application engine is required.
 
+pub mod automation;
 pub mod buttons;
+pub mod cache;
 pub mod docking;
 pub mod fonts;
 pub mod icons;
