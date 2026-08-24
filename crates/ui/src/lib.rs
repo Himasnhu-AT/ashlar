@@ -8,6 +8,7 @@
 pub mod automation;
 pub mod buttons;
 pub mod cache;
+pub mod commands;
 pub mod dialog;
 pub mod docking;
 pub mod edit;
