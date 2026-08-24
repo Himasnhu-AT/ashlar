@@ -6,9 +6,44 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets"
 
-[lints]
-workspace = true
+# The only crate allowed `unsafe`, for OS FFI (docs/adr/0001-native-ffi.md). The workspace lints are
+# copied here with `unsafe_code = "deny"` instead of `forbid`, so FFI modules can opt in with
+# `#[allow(unsafe_code)]`; every `unsafe` block carries a `// SAFETY:` comment.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+dbg_macro = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+undocumented_unsafe_blocks = "deny"
+
+[features]
+default = ["dialogs", "menu"]
+# Open / save / folder pickers (rfd).
+dialogs = ["dep:rfd"]
+# A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
+menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
 
 [dependencies]
 log = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ashlar-command = { workspace = true }
+# Without rfd's `wayland` feature, which needs the system libwayland at build time; the portal
+# backend works on Wayland and X11 alike.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+muda = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
