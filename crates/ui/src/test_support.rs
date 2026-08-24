@@ -7,3 +7,13 @@ pub(crate) fn run(ctx: &egui::Context, input: egui::RawInput, ui: impl FnMut(&mu
     output.textures_delta.clear();
     output
 }
+
+/// Press and release the primary button at `p`, one frame per event.
+pub(crate) fn click<S>(h: &mut egui_kittest::Harness<'_, S>, p: egui::Pos2) {
+    h.hover_at(p);
+    h.step();
+    h.drag_at(p);
+    h.step();
+    h.drop_at(p);
+    h.step();
+}

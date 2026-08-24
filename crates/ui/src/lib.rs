@@ -23,7 +23,9 @@ pub mod tabs;
 pub mod theme;
 pub mod toasts;
 pub mod tokens;
+pub mod tree;
 pub mod value_field;
+pub mod virtual_list;
 
 #[cfg(test)]
 pub(crate) mod test_support;
