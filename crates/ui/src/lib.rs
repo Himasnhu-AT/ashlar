@@ -9,13 +9,16 @@ pub mod automation;
 pub mod buttons;
 pub mod cache;
 pub mod docking;
+pub mod edit;
 pub mod fonts;
 pub mod icons;
 pub mod layout;
 pub mod printing;
+pub mod slider;
 pub mod tabs;
 pub mod theme;
 pub mod tokens;
+pub mod value_field;
 
 #[cfg(test)]
 pub(crate) mod test_support;
