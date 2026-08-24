@@ -265,12 +265,15 @@ dependencies = [
 name = "ashlar-ui"
 version = "0.1.0"
 dependencies = [
+ "ashlar-command",
  "egui",
  "egui_extras",
  "egui_kittest",
  "image",
  "serde",
  "serde_json",
+ "skrifa",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
