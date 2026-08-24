@@ -27,10 +27,26 @@
 mod error;
 pub use error::{NativeError, Result};
 
+#[cfg(feature = "clipboard")]
+pub mod clipboard;
 #[cfg(feature = "dialogs")]
 pub mod dialogs;
 #[cfg(feature = "menu")]
 pub mod menu;
+#[cfg(feature = "notify")]
+pub mod notify;
+#[cfg(feature = "open-files")]
+pub mod open_files;
+#[cfg(feature = "power")]
+pub mod power;
+#[cfg(feature = "progress")]
+pub mod progress;
+#[cfg(feature = "secrets")]
+pub mod secrets;
+#[cfg(feature = "single-instance")]
+pub mod single_instance;
+#[cfg(feature = "system")]
+pub mod system;
 
 /// Something that wakes the app's event loop (an egui `request_repaint`, a winit proxy event).
 /// Called from background threads after a new event was queued.
