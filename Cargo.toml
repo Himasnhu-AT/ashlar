@@ -9,18 +9,18 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 # internal
-ashlar = { path = "crates/ashlar" }
-ashlar-store = { path = "crates/store" }
-ashlar-command = { path = "crates/command" }
-ashlar-jobs = { path = "crates/jobs" }
-ashlar-fs = { path = "crates/fs" }
-ashlar-native = { path = "crates/native" }
-ashlar-control = { path = "crates/control" }
-ashlar-mcp = { path = "crates/mcp" }
-ashlar-cli = { path = "crates/cli" }
-ashlar-ui = { path = "crates/ui" }
-ashlar-print = { path = "crates/print" }
-ashlar-app = { path = "crates/app" }
+ashlar = { path = "crates/ashlar", version = "0.1.0" }
+ashlar-store = { path = "crates/store", version = "0.1.0" }
+ashlar-command = { path = "crates/command", version = "0.1.0" }
+ashlar-jobs = { path = "crates/jobs", version = "0.1.0" }
+ashlar-fs = { path = "crates/fs", version = "0.1.0" }
+ashlar-native = { path = "crates/native", version = "0.1.0" }
+ashlar-control = { path = "crates/control", version = "0.1.0" }
+ashlar-mcp = { path = "crates/mcp", version = "0.1.0" }
+ashlar-cli = { path = "crates/cli", version = "0.1.0" }
+ashlar-ui = { path = "crates/ui", version = "0.1.0" }
+ashlar-print = { path = "crates/print", version = "0.1.0" }
+ashlar-app = { path = "crates/app", version = "0.1.0" }
 # foundation
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
