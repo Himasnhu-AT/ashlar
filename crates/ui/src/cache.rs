@@ -158,6 +158,12 @@ impl FontEpoch {
     }
 }
 
+/// Lay out `job()`, building the job outside the fonts lock (it may measure text itself).
+fn layout(ctx: &egui::Context, job: impl FnOnce() -> LayoutJob) -> Arc<Galley> {
+    let job = job();
+    ctx.fonts_mut(|f| f.layout_job(job))
+}
+
 /// Galleys keyed by `u64` and revision. Invalidated automatically when the font atlas changes.
 pub struct GalleyCache {
     cache: RevisionCache<u64, Arc<Galley>>,
@@ -194,8 +200,23 @@ impl GalleyCache {
 
     /// The galley for `key` at `revision`, laying out `job()` only when missing or stale.
     pub fn galley(&mut self, ctx: &egui::Context, key: u64, revision: u64, job: impl FnOnce() -> LayoutJob) -> Arc<Galley> {
+        if let Some(g) = self.lookup(ctx, key, revision) {
+            return g;
+        }
+        let galley = layout(ctx, job);
+        self.insert(key, revision, Arc::clone(&galley));
+        galley
+    }
+
+    /// The cached galley, if fresh (counts a hit).
+    pub fn lookup(&mut self, ctx: &egui::Context, key: u64, revision: u64) -> Option<Arc<Galley>> {
         self.begin(ctx);
-        Arc::clone(self.cache.get_or_insert_with(key, revision, || ctx.fonts_mut(|f| f.layout_job(job()))))
+        self.cache.get(&key, revision).map(Arc::clone)
+    }
+
+    /// Store a galley laid out by the caller (counts a miss).
+    pub fn insert(&mut self, key: u64, revision: u64, galley: Arc<Galley>) {
+        self.cache.get_or_insert_with(key, revision, || galley);
     }
 
     pub fn stats(&self) -> Stats {
@@ -259,8 +280,13 @@ pub fn galley(ui: &egui::Ui, key: impl Hash, revision: u64, job: impl FnOnce() -
 /// [`galley`] with a precomputed key.
 pub fn galley_in(ctx: &egui::Context, key: u64, revision: u64, job: impl FnOnce() -> LayoutJob) -> Arc<Galley> {
     let cache = shared(ctx);
-    let mut guard = cache.0.lock();
-    guard.galley(ctx, key, revision, job)
+    if let Some(g) = cache.0.lock().lookup(ctx, key, revision) {
+        return g;
+    }
+    // no lock held while laying out: `job` may use this cache or the fonts itself
+    let galley = layout(ctx, job);
+    cache.0.lock().insert(key, revision, Arc::clone(&galley));
+    galley
 }
 
 /// Hit/miss counts of the context-wide galley cache.
@@ -336,6 +362,20 @@ mod tests {
             let g = galley(ui, "label", 1, job);
             assert!(!Arc::ptr_eq(first.as_ref().unwrap(), &g), "relaid out for the new scale");
             assert_eq!(g.pixels_per_point, 2.0);
+        });
+    }
+
+    #[test]
+    fn a_job_may_measure_text_and_use_the_cache_itself() {
+        let ctx = egui::Context::default();
+        run(&ctx, egui::RawInput::default(), |ui| {
+            let outer = galley(ui, "outer", 1, || {
+                let inner =
+                    galley(ui, "inner", 1, || LayoutJob::simple_singleline("in".into(), egui::FontId::proportional(13.0), egui::Color32::WHITE));
+                let w = ui.ctx().fonts_mut(|f| f.glyph_width(&egui::FontId::proportional(13.0), 'x'));
+                LayoutJob::simple_singleline(format!("{} {w}", inner.text()), egui::FontId::proportional(13.0), egui::Color32::WHITE)
+            });
+            assert!(outer.text().starts_with("in "));
         });
     }
 

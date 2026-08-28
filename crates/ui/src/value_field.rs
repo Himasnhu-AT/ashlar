@@ -32,7 +32,7 @@ use egui::{Align2, CursorIcon, Key, Response, Sense, Stroke, StrokeKind, Ui, Vec
 
 use crate::automation::{self, Details, Role};
 use crate::cache;
-use crate::edit::{Bounds, Edit, drive_drag, snap};
+use crate::edit::{Bounds, DragMode, Edit, drive_drag, snap};
 use crate::tokens::{self, Tokens};
 
 /// Turns a value into text and back.
@@ -172,7 +172,7 @@ impl<'a> ValueField<'a> {
         let response = ui.interact(rect, id, Sense::click_and_drag());
         let value = self.value;
         let enabled = response.enabled();
-        let mut edit = drive_drag(ui, &response, value, bounds, self.step, |d, mult| d.x as f64 * speed * mult, None);
+        let mut edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::Relative(|d: Vec2, mult| d.x as f64 * speed * mult));
 
         if edit.is_none() && response.has_focus() && enabled {
             let (up, down, enter, shift) = ui.input(|i| {

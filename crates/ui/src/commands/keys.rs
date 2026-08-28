@@ -140,7 +140,8 @@ pub fn key_to_egui(key: Key) -> Option<EKey> {
 pub fn chord_from_egui(key: EKey, modifiers: Modifiers, platform: Platform) -> Option<Chord> {
     let key = key_from_egui(key)?;
     let mods = match platform {
-        Platform::Mac => Mods { command: modifiers.mac_cmd, ctrl: modifiers.ctrl, alt: modifiers.alt, shift: modifiers.shift },
+        // on macOS egui sets `command` only together with ⌘ (`mac_cmd`); synthetic input may set one
+        Platform::Mac => Mods { command: modifiers.mac_cmd || modifiers.command, ctrl: modifiers.ctrl, alt: modifiers.alt, shift: modifiers.shift },
         Platform::Other => Mods { command: modifiers.ctrl || modifiers.command, ctrl: false, alt: modifiers.alt, shift: modifiers.shift },
     };
     Some(Chord::new(mods, key))
@@ -198,6 +199,51 @@ pub fn dispatch(ctx: &egui::Context, keymap: &Keymap) -> Option<String> {
     })
 }
 
+/// Shortcut text as shown on `platform`, spelled out where the installed fonts lack a macOS
+/// glyph (`⇧⌘E` becomes `Shift+⌘E` when there is no `⇧`).
+pub fn shortcut_label(ctx: &egui::Context, text: &str, platform: Platform, font: &egui::FontId) -> Option<String> {
+    let shown = ashlar_command::shortcut::display(text, platform)?;
+    Some(fit_glyphs(ctx, shown, font))
+}
+
+/// Replace modifier and key glyphs the fonts cannot draw with their names.
+pub fn fit_glyphs(ctx: &egui::Context, shown: String, font: &egui::FontId) -> String {
+    const NAMES: &[(char, &str)] = &[
+        ('⌃', "Ctrl+"),
+        ('⌥', "Opt+"),
+        ('⇧', "Shift+"),
+        ('⌘', "Cmd+"),
+        ('←', "Left"),
+        ('→', "Right"),
+        ('↑', "Up"),
+        ('↓', "Down"),
+        ('↖', "Home"),
+        ('↘', "End"),
+        ('⇞', "PageUp"),
+        ('⇟', "PageDown"),
+        ('↩', "Enter"),
+        ('⇥', "Tab"),
+        ('⌫', "Backspace"),
+        ('⌦', "Delete"),
+        ('⎋', "Esc"),
+    ];
+    if shown.is_ascii() {
+        return shown;
+    }
+    let missing: Vec<char> = ctx.fonts_mut(|f| shown.chars().filter(|c| !c.is_ascii() && !f.has_glyph(font, *c)).collect());
+    if missing.is_empty() {
+        return shown;
+    }
+    let mut out = String::with_capacity(shown.len() + 8);
+    for c in shown.chars() {
+        match NAMES.iter().find(|(g, _)| *g == c && missing.contains(g)) {
+            Some((_, name)) => out.push_str(name),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +273,20 @@ mod tests {
         assert!(works_while_typing(&Chord::parse("Mod+Z").unwrap()));
         assert!(works_while_typing(&Chord::parse("F5").unwrap()));
         assert!(!works_while_typing(&Chord::parse("Space").unwrap()));
+    }
+
+    #[test]
+    fn missing_glyphs_are_spelled_out() {
+        let ctx = egui::Context::default();
+        let font = egui::FontId::proportional(13.0);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+        out.textures_delta.clear();
+        let label = shortcut_label(&ctx, "Mod+Shift+E", Platform::Mac, &font).unwrap();
+        let has = |c: char| ctx.fonts_mut(|f| f.has_glyph(&font, c));
+        assert_eq!(label.contains('⇧'), has('⇧'), "{label}");
+        assert!(label.ends_with('E'));
+        assert_eq!(shortcut_label(&ctx, "Mod+Shift+E", Platform::Other, &font).as_deref(), Some("Ctrl+Shift+E"));
+        assert_eq!(shortcut_label(&ctx, "not a key+++", Platform::Other, &font), None);
     }
 
     #[test]

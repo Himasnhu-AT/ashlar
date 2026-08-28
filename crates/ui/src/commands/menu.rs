@@ -11,7 +11,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use ashlar_command::CommandInfo;
-use ashlar_command::shortcut::{Platform, display as display_shortcut, normalize};
+use ashlar_command::shortcut::{Platform, normalize};
 use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, text::LayoutJob, vec2};
 
 use crate::automation::{self, Details, Role};
@@ -273,7 +273,8 @@ fn item_row(ui: &mut Ui, item: &MenuItem, platform: Platform, top_level: bool) -
     });
     let shortcut = item.shortcut.as_deref().map(|s| {
         cache::galley(ui, ("ashlar_ui::menu-key", &item.id), cache::hash_of(&(s, platform == Platform::Mac, t.text.secondary)), || {
-            LayoutJob::simple_singleline(display_shortcut(s, platform).unwrap_or_default(), Tokens::font(t.type_scale.body), t.text.secondary)
+            let font = Tokens::font(t.type_scale.body);
+            LayoutJob::simple_singleline(super::keys::shortcut_label(ui.ctx(), s, platform, &font).unwrap_or_default(), font, t.text.secondary)
         })
     });
     let gutter = if top_level { 0.0 } else { t.control_height * 0.8 };

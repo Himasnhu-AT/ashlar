@@ -13,7 +13,7 @@ use egui::{Align2, CursorIcon, Key, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, V
 
 use crate::automation::{self, Details, Role};
 use crate::cache;
-use crate::edit::{Bounds, Edit, drive_drag, snap};
+use crate::edit::{Bounds, DragMode, Edit, drive_drag, snap};
 use crate::tokens::{self, Tokens};
 use crate::value_field::{Decimal, ValueFormat, ValueResponse};
 
@@ -110,7 +110,7 @@ impl<'a> Slider<'a> {
         let value = self.value;
         let mut edit = None;
         if bounds.finite() {
-            edit = drive_drag(ui, &response, value, bounds, self.step, |_, _| 0.0, pointer_value.filter(|_| response.dragged()));
+            edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::<fn(Vec2, f64) -> f64>::Absolute(pointer_value));
             if edit.is_none()
                 && response.clicked()
                 && let Some(v) = pointer_value
@@ -205,7 +205,7 @@ impl<'a> Knob<'a> {
         let mut edit = None;
         if bounds.finite() && bounds.max > bounds.min {
             let per_point = (bounds.max - bounds.min) / 200.0;
-            edit = drive_drag(ui, &response, value, bounds, self.step, |delta, mult| -(delta.y as f64) * per_point * mult, None);
+            edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::Relative(|delta: Vec2, mult| -(delta.y as f64) * per_point * mult));
             if edit.is_none()
                 && response.double_clicked()
                 && let Some(default) = self.default

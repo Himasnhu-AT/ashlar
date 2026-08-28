@@ -215,7 +215,7 @@ impl KeymapEditor {
                     } else if keys.is_empty() {
                         labels.unbound.clone()
                     } else {
-                        display_list(keys, platform)
+                        super::keys::fit_glyphs(ui.ctx(), display_list(keys, platform), &Tokens::font(t.type_scale.small))
                     };
                     let resp = chip(ui, &t, &shown, rec);
                     let id = &c.id;

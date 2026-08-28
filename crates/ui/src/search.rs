@@ -67,6 +67,8 @@ impl<'a> SearchField<'a> {
         // background first so the editor paints over it
         let bg_idx = ui.painter().add(egui::Shape::Noop);
         let before = self.text.len();
+        let font = Tokens::font(t.type_scale.body);
+        let row_h = ui.fonts_mut(|f| f.row_height(&font));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(edit_rect).id_salt("ashlar_search"));
         let response = child.add(
             egui::TextEdit::singleline(self.text)
@@ -75,8 +77,8 @@ impl<'a> SearchField<'a> {
                 .frame(egui::Frame::NONE)
                 .char_limit(self.max_len)
                 .desired_width(edit_rect.width())
-                .font(Tokens::font(t.type_scale.body))
-                .margin(Margin::symmetric(0, ((h - t.type_scale.body - 4.0) / 2.0).max(0.0) as i8)),
+                .font(font)
+                .margin(Margin::symmetric(0, ((h - row_h) / 2.0).max(0.0).floor() as i8)),
         );
         let mut changed = response.changed() || self.text.len() != before;
         let mut cleared = false;

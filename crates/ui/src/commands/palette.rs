@@ -14,7 +14,7 @@
 //! # }
 //! ```
 
-use ashlar_command::shortcut::{Platform, display as display_shortcut};
+use ashlar_command::shortcut::Platform;
 use ashlar_command::{CommandInfo, fuzzy_match};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Id, Key, Modifiers, Rect, pos2, vec2};
@@ -239,7 +239,7 @@ fn paint_row(ui: &mut egui::Ui, t: &Tokens, rect: Rect, c: &CommandInfo, hit: &H
         job
     });
     let right = if c.enabled {
-        c.shortcut.as_deref().and_then(|s| display_shortcut(s, platform))
+        c.shortcut.as_deref().and_then(|s| super::keys::shortcut_label(ui.ctx(), s, platform, &Tokens::font(t.type_scale.small)))
     } else {
         Some(c.disabled_reason.clone().unwrap_or_else(|| "Unavailable".into()))
     };

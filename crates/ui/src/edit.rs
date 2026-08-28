@@ -107,6 +107,8 @@ pub(crate) struct Drag {
     pub start: f64,
     /// Pointer travel accumulated (with modifier speed applied), in value units.
     pub travel: f64,
+    /// The value the gesture points at now.
+    pub target: f64,
     /// Escape was pressed: ignore the rest of this drag.
     pub cancelled: bool,
 }
@@ -122,24 +124,45 @@ pub(crate) fn speed_multiplier(modifiers: egui::Modifiers) -> f64 {
     }
 }
 
+/// How a drag maps to a value.
+pub(crate) enum DragMode<F: FnOnce(egui::Vec2, f64) -> f64> {
+    /// Pointer movement (and the modifier speed multiplier) → value change (fields, knobs).
+    Relative(F),
+    /// The value under the pointer, when known this frame (tracks).
+    Absolute(Option<f64>),
+}
+
 /// Runs the drag part of a value gesture on `response`: Begin on drag start, Update while
-/// moving, Commit on release, Cancel on Escape. `delta` converts this frame's pointer movement
-/// (and the modifier speed multiplier) into a value change; `absolute` (for tracks) sets the value
-/// from the pointer position instead.
-pub(crate) fn drive_drag(
+/// moving, Commit on release, Cancel on Escape. Movement in the start and release frames counts,
+/// so a quick flick still changes the value.
+pub(crate) fn drive_drag<F: FnOnce(egui::Vec2, f64) -> f64>(
     ui: &egui::Ui,
     response: &egui::Response,
     value: &mut f64,
     bounds: Bounds,
     step: f64,
-    delta: impl FnOnce(egui::Vec2, f64) -> f64,
-    absolute: Option<f64>,
+    mode: DragMode<F>,
 ) -> Option<Edit> {
     let key = response.id.with("ashlar_drag");
     let current = bounds.clamp(*value);
+    let aim = |drag: &mut Drag| {
+        let t = match mode {
+            DragMode::Absolute(Some(abs)) => bounds.clamp(snap(abs, step)),
+            DragMode::Absolute(None) => drag.target,
+            DragMode::Relative(delta) => {
+                drag.travel += delta(response.drag_delta(), speed_multiplier(ui.input(|i| i.modifiers)));
+                bounds.clamp(snap(drag.start + drag.travel, step))
+            }
+        };
+        if t.is_finite() {
+            drag.target = t;
+        }
+    };
     if response.drag_started() {
-        ui.data_mut(|d| d.insert_temp(key, Drag { start: current, travel: 0.0, cancelled: false }));
-        // a track's jump to the pointer arrives as the first Update, next frame
+        let mut drag = Drag { start: current, travel: 0.0, target: current, cancelled: false };
+        // this frame's movement is remembered and applied with the first Update
+        aim(&mut drag);
+        ui.data_mut(|d| d.insert_temp(key, drag));
         return Some(Edit::begin(current));
     }
     let mut drag: Drag = ui.data(|d| d.get_temp(key))?;
@@ -153,7 +176,9 @@ pub(crate) fn drive_drag(
             *value = drag.start;
             return Some(Edit::cancel(drag.start));
         }
-        return Some(Edit::commit(drag.start, current));
+        aim(&mut drag);
+        *value = drag.target;
+        return Some(Edit::commit(drag.start, drag.target));
     }
     if drag.cancelled {
         return None;
@@ -164,17 +189,11 @@ pub(crate) fn drive_drag(
         *value = drag.start;
         return Some(Edit::cancel(drag.start));
     }
-    let next = if let Some(abs) = absolute {
-        bounds.clamp(snap(abs, step))
-    } else {
-        let mult = speed_multiplier(ui.input(|i| i.modifiers));
-        drag.travel += delta(response.drag_delta(), mult);
-        ui.data_mut(|d| d.insert_temp(key, drag));
-        bounds.clamp(snap(drag.start + drag.travel, step))
-    };
-    if next != current && next.is_finite() {
-        *value = next;
-        return Some(Edit::update(drag.start, next));
+    aim(&mut drag);
+    ui.data_mut(|d| d.insert_temp(key, drag));
+    if drag.target != current {
+        *value = drag.target;
+        return Some(Edit::update(drag.start, drag.target));
     }
     None
 }
