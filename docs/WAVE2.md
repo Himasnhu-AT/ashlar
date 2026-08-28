@@ -1,0 +1,16 @@
+# Wave 2 notes (integrator)
+
+Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
+- control `Client` retries once on a dead kept connection: a mutating command could run twice if the app
+  crashed mid-request. Retry only when the request was never written (connect/write failure), never after.
+- One menu model: `ashlar_native::menu::MenuSpec` and the ashlar-ui menu model overlap. Keep one (serde,
+  structure/state hash) and have the other render it. `menu::Accelerator` must defer to
+  `ashlar_command::shortcut`.
+- rfd: ashlar-native uses `default-features=false, features=["xdg-portal"]` (no libwayland build dep).
+  Any other rfd user must match, or feature unification re-enables `wayland`.
+- macOS: `OpenFiles::listen_os` must run on the main thread before the event loop; untested in a bundle.
+- Notifications need a bundled app (macOS) / AUMID (Windows).
+- Autosave uses std fs locks: web needs a different crash-detection strategy over `FileOps`.
+- History branch switching only from the fork state (no goto-any-node).
+- Undo history and telemetry are host concerns: ashlar-app's host glues `Registry::execute` to `Store`
+  (one undo step per mutating top-level command) and to tracer.
