@@ -1,9 +1,20 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-//! Small, reusable egui components for desktop apps.
+//! General-purpose egui components for ashlar apps.
 //!
-//! Applications own their assets, themes, layouts, commands and document semantics. Components
-//! accept focused style values and return egui responses; no application engine is required.
+//! - Theme: [`tokens`] (design tokens, light/dark/system, interface scale), [`fonts`] (install
+//!   app-supplied faces with a CJK fallback chain), [`theme`] (widget-state colouring).
+//! - Inputs: [`value_field`] (drag/scrub and formatted numeric fields), [`slider`] (slider, knob),
+//!   [`swatches`], [`search`], [`buttons`], [`tabs`]; all value edits report [`edit`] phases.
+//! - Data: [`virtual_list`] (list and table, O(visible) per frame), [`tree`].
+//! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
+//! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
+//! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`cache`]
+//!   (revision-keyed galleys and meshes).
+//!
+//! Apps own their data, selection, assets and command handling: components take state by
+//! reference and report what the user asked for. Domain widgets (timelines, canvases) stay in the
+//! apps and are built from these pieces.
 
 pub mod automation;
 pub mod buttons;
