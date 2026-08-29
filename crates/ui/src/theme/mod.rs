@@ -1,7 +1,8 @@
-//! Theme mechanisms for egui widgets, with palettes and theme selection owned by applications.
+//! Theme mechanisms for egui widgets.
 //!
-//! This module does not install fonts, store a theme, or change global visuals. Applications
-//! decide their colors, borders, typography, spacing and saved preferences independently.
+//! [`crate::tokens`] is the complete theme (design tokens, light/dark/system, interface scale) and
+//! uses [`WidgetPalette`] to colour egui's widget states. Apps that keep their own token schema
+//! can use [`WidgetPalette`] alone; this module installs nothing by itself.
 
 use egui::{Color32, CornerRadius, Stroke, style::Widgets};
 
