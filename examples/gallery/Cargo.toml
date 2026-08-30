@@ -9,3 +9,9 @@ workspace = true
 
 [dependencies]
 ashlar = { workspace = true }
+egui = { workspace = true, features = ["default_fonts"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+# headless snapshot mode (`--snapshot <dir>`): renders every page offscreen with wgpu
+egui_kittest = { workspace = true, features = ["wgpu"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = { workspace = true }

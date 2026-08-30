@@ -10,11 +10,17 @@ description = "ashlar UI components: theme tokens, controls, layout, docking, ic
 workspace = true
 
 [dependencies]
+ashlar-command = { workspace = true }
 egui = { workspace = true }
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# same version egui's epaint uses: validates app-supplied font bytes before egui would panic on them
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 [features]
-serde = ["dep:serde"]
+# docking layout persistence (serde is always available for menus, automation and keymaps)
+serde = []
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }
