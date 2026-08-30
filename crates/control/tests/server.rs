@@ -359,3 +359,38 @@ fn dropping_the_server_closes_open_connections() {
     assert!(raw.closed());
     assert!(c.call("app.ping", json!({})).is_err());
 }
+
+#[test]
+fn a_request_the_app_read_before_dying_is_never_sent_again() {
+    // A fake app: authorises every connection, then reads one request and drops the connection
+    // without answering, as an app that crashed while running the command would.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = requests.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { break };
+            let mut writer = stream.try_clone().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                continue;
+            }
+            writeln!(writer, r#"{{"id":0,"ok":true,"result":null}}"#).unwrap();
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) > 0 {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    let mut c = Client::connect_with_key(port, "key").unwrap();
+    let e = c.execute("count.add", json!({})).unwrap_err();
+    assert!(matches!(&e, CommandError::Failed { msg, .. } if msg.contains("closed")), "{e:?}");
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(requests.load(Ordering::SeqCst), 1, "the request was sent again");
+    // The next call reconnects and is sent (once) as usual.
+    assert!(c.call("app.ping", json!({})).is_err());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
