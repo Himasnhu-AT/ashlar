@@ -9,6 +9,7 @@ let mut store: Store<Drawing> = Store::new(Drawing::default());
 store.edit("Add Shape", |d| d.shapes.push(shape));
 store.edit_merged("Move", "drag-42", |d| d.move_by(dx, dy)); // a whole drag is one undo step
 store.try_edit("Delete", |d| d.delete(id))?;                   // on error nothing changes
+store.commit("Import", None, built);                            // an Arc<D> built elsewhere, one step
 store.undo();
 let snap: Arc<Drawing> = store.snapshot();                       // free; send it to a job
 if store.is_dirty() { save(&snap)?; store.mark_saved(); }
