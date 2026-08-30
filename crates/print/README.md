@@ -1,7 +1,7 @@
 # ashlar-print
 
 Submit a print-ready PDF to the system spooler. Used by a PDF editor and a layout app;
-there are no dependencies on either app or on a UI framework. Requires Rust 1.95.
+there are no dependencies on any app or on a UI framework. Requires Rust 1.95.
 
 ```rust,no_run
 let job = ashlar_print::Job { title: "Report".into(), ..Default::default() };

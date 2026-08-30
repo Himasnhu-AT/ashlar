@@ -71,6 +71,8 @@ fn perf_edit_100k_structural_sharing() {
         ns_flat,
         ns_flat / ns_chunked
     );
+    println!("bench: edit_100k_chunked {ns_chunked:.0} ns");
+    println!("bench: edit_100k_flat {ns_flat:.0} ns");
     assert_eq!(changed, 1);
     assert!(ns_chunked < ns_flat, "structural sharing must beat a full copy");
 }
@@ -92,6 +94,7 @@ fn perf_undo_redo() {
         }
     });
     println!("undo/redo (1000-step history, 100k-element doc): {ns:.0} ns/op");
+    println!("bench: undo_redo {ns:.0} ns");
 }
 
 #[test]
@@ -113,4 +116,8 @@ fn perf_snapshot_publish_and_read() {
     println!(
         "snapshot cell: publish {ns_publish:.0} ns, read in place {ns_read:.1} ns, load (Arc) {ns_load:.1} ns; edit with a subscriber {ns_edit_published:.0} ns"
     );
+    println!("bench: snapshot_publish {ns_publish:.0} ns");
+    println!("bench: snapshot_read {ns_read:.1} ns");
+    println!("bench: snapshot_load {ns_load:.1} ns");
+    println!("bench: edit_with_subscriber {ns_edit_published:.0} ns");
 }
