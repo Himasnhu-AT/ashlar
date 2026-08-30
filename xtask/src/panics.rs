@@ -6,6 +6,10 @@
 //!
 //! Test code is exempt: `tests/`, `benches/`, files that are `#![cfg(test)]` or named `tests.rs`, and
 //! everything after the first `#[cfg(test)]` in a file (test modules go last).
+//!
+//! The one exception is the OS FFI crate (docs/adr/0001-native-ffi.md): it keeps its own `[lints]`
+//! table, which must still deny every never-crash lint, deny (not allow) `unsafe_code` and deny
+//! undocumented unsafe blocks; and only the FFI modules the ADR lists may allow `unsafe_code`.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +25,43 @@ const GUARDED: &[&str] = &[
     "clippy::restriction",
     "unsafe_code",
 ];
+
+/// The FFI crate of ADR 0001 and the files that may `#[allow(unsafe_code)]`. A new FFI module is
+/// an ADR change: add it there and here.
+const FFI_CRATE: &str = "crates/native";
+const FFI_MODULES: &[&str] = &[
+    "crates/native/src/power.rs",
+    "crates/native/src/open_files.rs",
+    "crates/native/src/progress.rs",
+    "crates/native/src/system.rs",
+    "crates/native/src/menu/native.rs",
+];
+
+/// What the FFI crate's own `[lints]` tables must contain instead of the workspace lints.
+const FFI_REQUIRED: &[&str] = &[
+    "unsafe_code=\"deny\"",
+    "unwrap_used=\"deny\"",
+    "expect_used=\"deny\"",
+    "panic=\"deny\"",
+    "unimplemented=\"deny\"",
+    "todo=\"deny\"",
+    "unreachable=\"deny\"",
+    "undocumented_unsafe_blocks=\"deny\"",
+];
+
+/// The `FFI_REQUIRED` lines missing from a manifest's `[lints.*]` tables.
+pub fn missing_ffi_lints(manifest: &str) -> Vec<&'static str> {
+    let mut in_lints = false;
+    let mut lines = Vec::new();
+    for line in manifest.lines().map(|l| l.replace(' ', "")) {
+        if line.starts_with('[') {
+            in_lints = line.starts_with("[lints");
+        } else if in_lints {
+            lines.push(line);
+        }
+    }
+    FFI_REQUIRED.iter().filter(|r| !lines.iter().any(|l| l == *r)).copied().collect()
+}
 
 /// True when the manifest has a `[lints]` table with `workspace = true`.
 pub fn inherits_lints(manifest: &str) -> bool {
@@ -90,7 +131,12 @@ pub fn check(root: &Path) -> Result<(), String> {
     let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).display().to_string();
     for member in members(root) {
         let manifest = std::fs::read_to_string(member.join("Cargo.toml")).unwrap_or_default();
-        if !inherits_lints(&manifest) {
+        let ffi = rel(&member).replace('\\', "/") == FFI_CRATE;
+        if ffi {
+            for lint in missing_ffi_lints(&manifest) {
+                errors.push(format!("{}/Cargo.toml: the FFI crate's [lints] must have `{lint}` (docs/adr/0001-native-ffi.md)", rel(&member)));
+            }
+        } else if !inherits_lints(&manifest) {
             errors.push(format!("{}/Cargo.toml: add `[lints] workspace = true` (the never-crash lints)", rel(&member)));
         }
         if member.ends_with("xtask") {
@@ -101,7 +147,11 @@ pub fn check(root: &Path) -> Result<(), String> {
         for file in files {
             scanned += 1;
             let src = std::fs::read_to_string(&file).unwrap_or_default();
+            let ffi_module = FFI_MODULES.contains(&rel(&file).replace('\\', "/").as_str());
             for (line, lint) in scan_source(&src) {
+                if ffi && ffi_module && lint == "unsafe_code" {
+                    continue;
+                }
                 errors.push(format!("{}:{line}: allows `{lint}` outside tests (AGENTS.md §0: handle the error instead)", rel(&file)));
             }
         }
@@ -123,6 +173,14 @@ mod tests {
         assert!(inherits_lints("[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n"));
         assert!(inherits_lints("[package]\nlints.workspace = true\n"));
         assert!(!inherits_lints("[package]\nname = \"a\"\n[dependencies]\nworkspace = true\n"));
+    }
+
+    #[test]
+    fn ffi_crate_lints() {
+        let ok = "[lints.rust]\nunsafe_code = \"deny\"\n[lints.clippy]\nunwrap_used = \"deny\"\nexpect_used = \"deny\"\npanic = \"deny\"\nunimplemented = \"deny\"\ntodo = \"deny\"\nunreachable = \"deny\"\nundocumented_unsafe_blocks = \"deny\"\n";
+        assert!(missing_ffi_lints(ok).is_empty());
+        assert_eq!(missing_ffi_lints(&ok.replace("unsafe_code = \"deny\"", "unsafe_code = \"allow\"")), ["unsafe_code=\"deny\""]);
+        assert_eq!(missing_ffi_lints("[dependencies]\npanic = \"deny\"\n").len(), FFI_REQUIRED.len());
     }
 
     #[test]
