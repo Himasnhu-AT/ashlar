@@ -26,7 +26,7 @@ pub struct NativeMenuBar {
 }
 
 fn muda_accel(item: &Item) -> Option<MudaAccelerator> {
-    item.native_accelerator().and_then(|a| a.to_muda().parse().ok())
+    item.menu_chord().as_ref().and_then(super::to_muda)
 }
 
 fn os(e: impl std::fmt::Display) -> NativeError {

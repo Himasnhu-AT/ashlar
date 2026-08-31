@@ -1,7 +1,7 @@
 //! A client for a running app's control port. It implements [`Dispatch`], so anything that drives
 //! a headless session (the MCP server, the CLI) drives a live app the same way.
 
-use std::io::{BufReader, Write};
+use std::io::{BufReader, ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -28,8 +28,10 @@ struct Conn {
 }
 
 /// A connection to `127.0.0.1:<port>` (the control port is loopback only, so the key never leaves
-/// the machine). Reconnects once when the app closed the connection or restarted (a restart also
-/// means a new key, read again from the key file).
+/// the machine). Reconnects when the app closed the kept connection or restarted (a restart also
+/// means a new key, read again from the key file), but only before a request was sent: once any
+/// byte of a request reached the socket it is never sent again, so a mutating command cannot run
+/// twice when the app dies mid-request.
 pub struct Client {
     port: u16,
     key: KeySource,
@@ -104,9 +106,33 @@ impl Client {
     }
 
     fn roundtrip(&mut self, req: &Value) -> Result<Reply, ControlError> {
+        match self.send(req) {
+            Ok(()) => self.receive(),
+            Err((_, e)) => Err(e),
+        }
+    }
+
+    /// Write one request line. `Err((sent_nothing, error))`: `sent_nothing` is true when no byte
+    /// of the request reached the socket, the only case that may be retried.
+    fn send(&mut self, req: &Value) -> Result<(), (bool, ControlError)> {
+        let port = self.port;
+        let Some(c) = self.conn.as_mut() else { return Err((true, ControlError::Io("not connected".into()))) };
+        let mut line = req.to_string().into_bytes();
+        line.push(b'\n');
+        let mut sent = 0usize;
+        while let Some(rest) = line.get(sent..).filter(|r| !r.is_empty()) {
+            match c.writer.write(rest) {
+                Ok(0) => return Err((sent == 0, ControlError::Io(format!("control connection to 127.0.0.1:{port} closed while sending")))),
+                Ok(n) => sent = sent.saturating_add(n),
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => return Err((sent == 0, ControlError::Io(format!("control connection to 127.0.0.1:{port} failed: {e}")))),
+            }
+        }
+        Ok(())
+    }
+
+    fn receive(&mut self) -> Result<Reply, ControlError> {
         let Some(c) = self.conn.as_mut() else { return Err(ControlError::Io("not connected".into())) };
-        let io = |e: std::io::Error| ControlError::Io(format!("control connection to 127.0.0.1:{} failed: {e}", self.port));
-        writeln!(c.writer, "{req}").and_then(|()| c.writer.flush()).map_err(io)?;
         let mut buf = Vec::new();
         match read_bounded_line(&mut c.reader, &mut buf, MAX_REPLY) {
             Ok(true) => {}
@@ -118,24 +144,35 @@ impl Client {
         Reply::from_json(&v).ok_or_else(|| ControlError::Protocol("reply without a boolean `ok`".into()))
     }
 
+    /// Whether the kept connection is known dead: the app closed it (it quit or restarted) or sent
+    /// something unasked. Checked without blocking, before a request is written.
+    fn stale(&self) -> bool {
+        let Some(c) = self.conn.as_ref() else { return true };
+        if !c.reader.buffer().is_empty() || c.writer.set_nonblocking(true).is_err() {
+            return true;
+        }
+        let mut probe = [0u8; 1];
+        let alive = matches!(c.writer.peek(&mut probe), Err(e) if e.kind() == ErrorKind::WouldBlock);
+        c.writer.set_nonblocking(false).is_err() || !alive
+    }
+
     /// Send one request and return the app's reply; `Err` only for transport failures.
     pub fn request(&mut self, method: &str, params: Value) -> Result<Reply, ControlError> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let req = json!({"id": id, "method": method, "params": params});
-        // A kept connection may have been closed by an app that restarted: retry once on a new one.
-        let reused = self.conn.is_some();
-        if !reused {
+        // A kept connection the app closed (it quit or restarted) is replaced before sending.
+        if self.stale() {
             self.reconnect()?;
         }
-        match self.roundtrip(&req) {
-            Err(ControlError::Io(_)) if reused => {
-                self.reconnect()?;
-                self.roundtrip(&req)
-            }
-            r => r,
-        }
-        .inspect_err(|_| self.conn = None)
+        let r = match self.send(&req) {
+            Ok(()) => self.receive(),
+            // Nothing was sent: the app cannot have seen the request, so one retry is safe.
+            Err((true, _)) => self.reconnect().and_then(|()| self.roundtrip(&req)),
+            // Part of the request may have reached the app: never send it again.
+            Err((false, e)) => Err(e),
+        };
+        r.inspect_err(|_| self.conn = None)
     }
 
     /// Call one method: its `result`, or the app's error as [`ControlError::Remote`].

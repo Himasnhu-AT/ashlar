@@ -30,7 +30,9 @@ log = "0.4"
 egui = { version = "0.36", default-features = false }
 eframe = { version = "0.36", default-features = false }
 egui_kittest = { version = "0.36" }
-rfd = "0.17"
+# Without the `wayland` feature (needs the system libwayland at build time): every user inherits
+# this, so feature unification never turns it back on. The portal backend serves Wayland and X11.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 muda = "0.21"
 
 [workspace.lints.rust]
