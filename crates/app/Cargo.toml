@@ -9,12 +9,36 @@ description = "ashlar runtime: App builder, frame scheduler, crash guard, loggin
 [lints]
 workspace = true
 
+[features]
+default = []
+# The app's commands in the macOS / Windows menu bar (ashlar-native + muda) instead of the window.
+native-menu = ["ashlar-native/menu"]
+# Crash, performance and usage telemetry through tracer-sdk. Nothing is sent before the user has
+# seen the consent notice the runtime shows.
+telemetry = ["dep:tracer-sdk"]
+
 [dependencies]
-log = { workspace = true }
-egui = { workspace = true }
+log = { workspace = true, features = ["std"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+egui = { workspace = true, features = ["default_fonts"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }
 ashlar-fs = { workspace = true }
 ashlar-ui = { workspace = true }
 ashlar-control = { workspace = true }
+ashlar-cli = { workspace = true }
+# path, not workspace: the workspace entry keeps default features on
+ashlar-native = { path = "../native", default-features = false, features = ["dialogs"] }
+png = "0.18"
+thiserror = { workspace = true }
+# Path dependency for now (outside this repo); only resolved into the build with `telemetry`.
+tracer-sdk = { path = "../../../manager/crates/tracer-sdk", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["console"] }
