@@ -28,7 +28,7 @@ cargo run -p ashlar-example-gallery -- --snapshot /tmp/gallery   # PNGs, no wind
 | `dialog` | Modal dialog shell: Enter → default button (unless a multi-line editor has focus), Escape → cancel |
 | `toasts` | Bounded toast queue, timed or sticky, hover pauses, one scheduled repaint, zero cost when empty |
 | `status_bar` | Bottom bar with left/right sections: text, buttons, determinate/indeterminate progress |
-| `commands` | `MenuSpec` (from `CommandInfo` menu paths; serializable; `structure()`/`state()` hashes for native menus), `menu_bar`, `CommandPalette` (fuzzy, shortcuts, disabled reasons), `KeymapEditor` (record, conflicts, reset/clear), `dispatch` (keys → command id) |
+| `commands` | `menu_bar` drawing `ashlar_command::menu::MenuSpec` (re-exported; from `CommandInfo` menu paths; serializable; the same spec feeds the native menu bar), `CommandPalette` (fuzzy, shortcuts, disabled reasons), `KeymapEditor` (record, conflicts, reset/clear), `dispatch` (keys → command id) |
 | `automation` | Per-pass registry of id, label, role, rect, value, selection; `inspect()` for `ui.inspect`, `find`/`click_point` for `ui.click` |
 | `cache` | `RevisionCache`, `GalleyCache`, `MeshCache`, and a context-wide `cache::galley` |
 | `buttons`, `tabs`, `layout`, `docking`, `theme`, `icons`, `printing` | Seeded from the earlier shared UI library; see below |
@@ -113,7 +113,7 @@ use ashlar_ui::commands::{dispatch, menu_bar, CommandPalette, MenuSpec};
 
 fn frame(ui: &mut egui::Ui, infos: &[CommandInfo], keymap: &Keymap, palette: &mut CommandPalette, revision: u64) -> Option<String> {
     let mut run = dispatch(ui.ctx(), keymap);                       // keyboard
-    let spec = MenuSpec::from_commands(infos);                     // also feeds a native menu
+    let spec = MenuSpec::from_commands(infos, &["File", "Edit"]);   // also feeds a native menu
     run = run.or(menu_bar(ui, &spec, Platform::current()));        // in-window menu bar
     run.or(palette.show(ui.ctx(), infos, revision, Platform::current()))
 }
