@@ -64,6 +64,11 @@ impl<D: Document> Driver<D> {
         }
     }
 
+    /// Stop driving; the runtime is handed back (e.g. to [`Runtime::abandon`] it).
+    pub fn into_runtime(self) -> Runtime<D> {
+        self.runtime
+    }
+
     pub fn ctx(&self) -> &egui::Context {
         &self.ctx
     }

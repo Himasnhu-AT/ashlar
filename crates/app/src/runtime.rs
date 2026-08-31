@@ -678,6 +678,20 @@ impl<D: Document> Runtime<D> {
         log::info!("{} closed", self.shared.name);
     }
 
+    /// End without any cleanup, as if the process had died: autosave files stay for the next
+    /// launch to recover, settings are not flushed. For crash-recovery tests.
+    pub fn abandon(mut self) {
+        self.allow_close = true;
+        if let Some(mut a) = self.autosave.take() {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(w) = a.writer.take() {
+                let _ = w.shutdown(&mut a.autosave);
+            }
+            // dropping (not closing) releases the lock and keeps the session's files
+            drop(a);
+        }
+    }
+
     fn continue_quit(&mut self, ctx: &egui::Context) {
         if self.quit_after_save {
             self.quit_after_save = false;
