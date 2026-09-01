@@ -14,7 +14,8 @@ ashlar-store = { path = "crates/store", version = "0.1.0" }
 ashlar-command = { path = "crates/command", version = "0.1.0" }
 ashlar-jobs = { path = "crates/jobs", version = "0.1.0" }
 ashlar-fs = { path = "crates/fs", version = "0.1.0" }
-ashlar-native = { path = "crates/native", version = "0.1.0" }
+# default features off: each user opts into the OS features it needs
+ashlar-native = { path = "crates/native", version = "0.1.0", default-features = false }
 ashlar-control = { path = "crates/control", version = "0.1.0" }
 ashlar-mcp = { path = "crates/mcp", version = "0.1.0" }
 ashlar-cli = { path = "crates/cli", version = "0.1.0" }
