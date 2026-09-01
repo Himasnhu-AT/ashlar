@@ -21,7 +21,7 @@ ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }
 ashlar-fs = { workspace = true }
-ashlar-native = { workspace = true }
+ashlar-native = { workspace = true, features = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system"] }
 ashlar-control = { workspace = true }
 ashlar-mcp = { workspace = true }
 ashlar-cli = { workspace = true }
