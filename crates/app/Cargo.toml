@@ -31,11 +31,11 @@ ashlar-ui = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
 # path, not workspace: the workspace entry keeps default features on
-ashlar-native = { path = "../native", default-features = false, features = ["dialogs"] }
+ashlar-native = { path = "../native", version = "0.1.0", default-features = false, features = ["dialogs"] }
 png = "0.18"
 thiserror = { workspace = true }
 # Path dependency for now (outside this repo); only resolved into the build with `telemetry`.
-tracer-sdk = { path = "../../../manager/crates/tracer-sdk", optional = true }
+tracer-sdk = { path = "../../../manager/crates/tracer-sdk", version = "0.1.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

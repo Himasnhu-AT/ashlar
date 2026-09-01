@@ -32,6 +32,9 @@ use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
 
+/// Top-level menus in this order; menus the app adds follow in first-seen order.
+pub const MENU_ORDER: &[&str] = &["File", "Edit", "View"];
+
 /// What `run()` found out before the window opened.
 #[derive(Default)]
 pub struct Launch {
@@ -541,7 +544,7 @@ impl<D: Document> Runtime<D> {
             let keys = self.keymap.keys_for(&info.id);
             info.shortcut = if keys.is_empty() { None } else { Some(format_list(keys)) };
         }
-        self.cache.menu = MenuSpec::from_commands(&infos);
+        self.cache.menu = MenuSpec::from_commands(&infos, MENU_ORDER);
         self.cache.infos = infos;
         self.cache.key = Some(key);
         self.cache.seq = self.cache.seq.wrapping_add(1);
@@ -1067,8 +1070,8 @@ impl<D: Document> Runtime<D> {
             "ui.menu.invoke" => {
                 let Some(id) = p.get("id").and_then(Value::as_str) else { return req.fail("ui.menu.invoke needs `id`") };
                 self.refresh_infos();
-                let command =
-                    self.cache.menu.find(id).map(|i| i.command.clone()).or_else(|| self.cache.menu.find_command(id).map(|i| i.command.clone()));
+                // menu item ids are command ids
+                let command = self.cache.menu.find(id).map(|i| i.id.clone());
                 match command {
                     Some(c) => {
                         let r = self.execute(&c, json!({}));

@@ -8,11 +8,8 @@ pub(crate) struct NativeMenu {
     bar: NativeMenuBar,
 }
 
-/// Top-level menus in this order; others follow in first-seen order.
-const ORDER: &[&str] = &["File", "Edit", "View"];
-
 fn spec(infos: &[CommandInfo]) -> MenuSpec {
-    let mut spec = MenuSpec::from_commands(infos, ORDER);
+    let mut spec = MenuSpec::from_commands(infos, crate::runtime::MENU_ORDER);
     #[cfg(target_os = "macos")]
     {
         // the first menu is the application menu on macOS
