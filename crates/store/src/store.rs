@@ -129,6 +129,23 @@ impl<D: Clone, X: Clone> Store<D, X> {
         Ok(r)
     }
 
+    /// Make `doc`, built elsewhere (a command's working copy, a job's result), the new state as
+    /// one undo step `label`, without copying it. `merge_key` as in [`Store::edit_merged`].
+    /// Committing the current snapshot itself (`Arc::ptr_eq`) changes nothing.
+    pub fn commit(&mut self, label: &str, merge_key: Option<&str>, doc: Arc<D>) {
+        if Arc::ptr_eq(&doc, &self.doc) {
+            return;
+        }
+        let merge = merge_key.is_some_and(|k| self.history.can_merge(label, k));
+        let old_doc = std::mem::replace(&mut self.doc, doc);
+        if !merge {
+            self.history.record(label, old_doc, self.extra.clone(), self.revision);
+            self.history.set_merge_key(merge_key);
+        }
+        self.revision = Revision::next();
+        self.publish();
+    }
+
     /// Undo the last step; returns its label.
     pub fn undo(&mut self) -> Option<String> {
         let e = self.history.undo(Arc::clone(&self.doc), self.extra.clone(), self.revision)?;
@@ -391,5 +408,25 @@ mod tests {
         s.undo();
         assert!(!s.is_dirty());
         assert_eq!(s.saved_revision(), saving);
+    }
+
+    #[test]
+    fn commit_is_one_step_without_copying() {
+        let mut s = store();
+        let mut work = s.snapshot();
+        Arc::make_mut(&mut work).items.push(1);
+        Arc::make_mut(&mut work).items.push(2);
+        let built = Arc::clone(&work);
+        s.commit("Add Two", None, work);
+        assert!(Arc::ptr_eq(s.doc(), &built), "the committed Arc is kept as is");
+        assert_eq!(s.history().depth(), 1);
+        assert!(s.is_dirty());
+        let same = s.snapshot();
+        let r = s.revision();
+        s.commit("Nothing", None, same);
+        assert_eq!((s.revision(), s.history().depth()), (r, 1), "committing the current state is a no-op");
+        assert_eq!(s.undo().as_deref(), Some("Add Two"));
+        assert!(s.doc().items.is_empty());
+        assert!(!s.is_dirty());
     }
 }
