@@ -9,10 +9,26 @@ description = "Build fast desktop and web apps in Rust: store, commands, UI, nat
 [lints]
 workspace = true
 
+[features]
+default = []
+# The app's commands in the macOS / Windows menu bar.
+native-menu = ["ashlar-app/native-menu"]
+# Crash, performance and usage telemetry (off until the user consents).
+telemetry = ["ashlar-app/telemetry"]
+
 [dependencies]
 ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }
 ashlar-fs = { workspace = true }
+ashlar-native = { workspace = true }
+ashlar-control = { workspace = true }
+ashlar-mcp = { workspace = true }
+ashlar-cli = { workspace = true }
 ashlar-ui = { workspace = true }
 ashlar-app = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }

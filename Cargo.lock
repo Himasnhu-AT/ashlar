@@ -257,11 +257,18 @@ name = "ashlar"
 version = "0.1.0"
 dependencies = [
  "ashlar-app",
+ "ashlar-cli",
  "ashlar-command",
+ "ashlar-control",
  "ashlar-fs",
  "ashlar-jobs",
+ "ashlar-mcp",
+ "ashlar-native",
  "ashlar-store",
  "ashlar-ui",
+ "egui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -336,6 +343,8 @@ name = "ashlar-example-notes"
 version = "0.1.0"
 dependencies = [
  "ashlar",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]

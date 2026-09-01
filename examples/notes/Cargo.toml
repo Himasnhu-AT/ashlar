@@ -7,5 +7,25 @@ publish = false
 [lints]
 workspace = true
 
+[lib]
+name = "notes"
+path = "src/lib.rs"
+
+[[bin]]
+name = "notes"
+path = "src/main.rs"
+
+[[bin]]
+name = "notes-cli"
+path = "src/bin/notes-cli.rs"
+
+[features]
+native-menu = ["ashlar/native-menu"]
+telemetry = ["ashlar/telemetry"]
+
 [dependencies]
 ashlar = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
