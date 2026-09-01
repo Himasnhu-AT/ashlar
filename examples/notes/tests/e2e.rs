@@ -306,3 +306,26 @@ fn palette_keymap_and_theme_from_the_keyboard_and_menus() {
     let settings = std::fs::read_to_string(dir.path().join("config/settings.json")).unwrap();
     assert!(settings.contains("\"theme\": \"dark\""), "{settings}");
 }
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn telemetry_asks_for_consent_before_anything_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = notes::app().dirs(AppDirs::under(dir.path())).telemetry("test-write-key", None).runtime();
+    let mut d = Driver::new(rt);
+    d.settle(20);
+    let ins = d.call("ui.inspect", json!({})).unwrap();
+    assert_eq!(ins["dialogs"], json!(1), "the consent notice is shown: {ins}");
+    // Continue (with the default choices)
+    let ids: Vec<String> = ins["elements"].as_array().unwrap().iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
+    assert!(ids.iter().any(|i| i == "ashlar.consent.button.0"), "{ids:?}");
+    d.call("ui.click", json!({"id": "ashlar.consent.button.0"})).unwrap();
+    assert_eq!(d.call("ui.inspect", json!({})).unwrap()["dialogs"], json!(0));
+    d.call("engine.execute", json!({"command": "note.add"})).unwrap();
+    // the notice is remembered: a second launch does not ask again
+    drop(d);
+    let rt = notes::app().dirs(AppDirs::under(dir.path())).telemetry("test-write-key", None).runtime();
+    let mut d = Driver::new(rt);
+    d.settle(20);
+    assert_eq!(d.call("ui.inspect", json!({})).unwrap()["dialogs"], json!(0));
+}

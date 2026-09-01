@@ -197,6 +197,11 @@ struct ViewState {
     title: String,
     body: String,
     scroll_to: Option<usize>,
+    /// Row of the selected note in `filtered`, for (filter key, selected id).
+    sel_row: Option<usize>,
+    sel_key: Option<(Option<(Revision, String)>, Option<u64>)>,
+    /// The list itself changed the selection last frame (no need to scroll to it).
+    picked_in_list: bool,
 }
 
 impl ViewState {
@@ -237,7 +242,16 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
                 st.refilter(&doc, rev);
             }
             ui.separator();
-            let sel_row = selected.and_then(|id| st.filtered.iter().position(|&i| doc.notes.get(i).is_some_and(|n| n.id == id)));
+            let sel_key = (st.filter_key.clone(), selected);
+            if st.sel_key.as_ref() != Some(&sel_key) {
+                // O(rows) once per change of selection or filter, never per frame
+                st.sel_row = selected.and_then(|id| st.filtered.iter().position(|&i| doc.notes.get(i).is_some_and(|n| n.id == id)));
+                if !std::mem::take(&mut st.picked_in_list) {
+                    st.scroll_to = st.sel_row;
+                }
+                st.sel_key = Some(sel_key);
+            }
+            let sel_row = st.sel_row;
             let filtered = &st.filtered;
             let label = |row: usize| -> &str { filtered.get(row).and_then(|&i| doc.notes.get(i)).map_or("", |n| n.title.as_str()) };
             let out = VirtualList::new("notes.list", filtered.len(), RowHeights::Uniform(22.0))
@@ -252,6 +266,7 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
                 && let Some(n) = filtered.get(row).and_then(|&i| doc.notes.get(i))
             {
                 cx.set_view("selected", &n.id);
+                st.picked_in_list = true;
             }
         });
 
