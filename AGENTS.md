@@ -16,7 +16,9 @@ not fatal (`lock().unwrap_or_else(PoisonError::into_inner)`). Background work ru
 
 ## 1. No app code, no app names
 A crate here must serve more than one app and never depend on one. Never name the apps that use
-ashlar in public API, docs or identifiers: say "a video editor", "a DAW". (`cargo xtask names` will enforce this.)
+ashlar in public API, docs or identifiers: say "a video editor", "a DAW". `cargo xtask names` enforces this over `crates/`,
+`examples/`, the root README and manifest (names kept hashed; false positives go in
+`xtask/names-allow.txt`).
 
 ## 2. Layering (`cargo xtask layers`)
 Crates have a rank (see `xtask/src/main.rs`); a crate depends only on lower ranks. Ranks 0–4 never
@@ -27,8 +29,11 @@ Idle apps do zero work (repaint on demand). Caches are keyed by revision numbers
 Long lists are virtualized. No blocking I/O on the UI thread. Benches guard every hot path.
 
 ## 4. Gates before every commit
-`cargo xtask ci` (fmt check, layers, clippy -D warnings, tests). One task id per commit
-(`AS-P1.2: history merge keys`), only green states, attribution line at the end.
+`cargo xtask ci`: fmt check, names, layers, deny-panics, deps (cargo-deny, when installed), then
+clippy -D warnings, tests and the wasm32 check of ranks 0–1 side by side (`--no-wait` skips waiting
+for other checkouts' builds). Also `cargo xtask msrv`, `advisories` and `bench`; see docs/contributing.md.
+One task id per commit (`AS-P1.2: history merge keys`), only green states, attribution line at the
+end.
 
 ## 5. Stable contracts
 Items marked `CONTRACT` in `ashlar-command` are shared across crates built in parallel: change

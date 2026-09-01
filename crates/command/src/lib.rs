@@ -107,6 +107,7 @@ mod journal;
 pub mod keymap;
 mod legacy;
 mod macros;
+pub mod menu;
 mod params;
 mod registry;
 pub mod shortcut;

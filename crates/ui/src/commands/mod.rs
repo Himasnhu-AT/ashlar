@@ -11,5 +11,7 @@ pub mod palette;
 
 pub use keymap_editor::{KeymapChange, KeymapEditor};
 pub use keys::{chord_from_egui, chord_to_egui, dispatch};
-pub use menu::{MenuItem, MenuNode, MenuSpec, menu_bar};
+#[allow(deprecated)]
+pub use menu::MenuItem;
+pub use menu::{Item, MenuNode, MenuSpec, Submenu, menu_bar};
 pub use palette::CommandPalette;

@@ -1,0 +1,6 @@
+# False positives for `cargo xtask names`: `<word>` allows a word everywhere, `<path-prefix> <word>`
+# only in files whose workspace-relative path starts with the prefix. Words are matched whole and
+# lowercase (the word the gate reports, not the name inside it). Keep this list short.
+
+# The PostScript Printer Description format names its vendor in keywords (`*PPD-Adobe: "4.3"`).
+crates/print adobe

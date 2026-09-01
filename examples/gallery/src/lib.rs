@@ -278,7 +278,7 @@ impl Gallery {
             self.run(&ctx, &id);
         }
         let t = tokens::current(&ctx);
-        let mut spec = MenuSpec::from_commands(&self.commands);
+        let mut spec = MenuSpec::from_commands(&self.commands, &[]);
         spec.separator_before("file.export.png");
         spec.set_checked("view.grid", Some(self.show_grid));
         for (id, m) in [("view.theme.light", ThemeMode::Light), ("view.theme.dark", ThemeMode::Dark), ("view.theme.system", ThemeMode::System)] {

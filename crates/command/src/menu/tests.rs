@@ -1,4 +1,5 @@
 use super::*;
+use crate::CommandInfo;
 
 fn sample(dirty: bool, recent: &[&str]) -> MenuSpec {
     let recent_items: Vec<MenuNode> = recent.iter().enumerate().map(|(i, r)| Item::new(format!("file.openRecent.{i}"), *r).into()).collect();
@@ -111,7 +112,7 @@ fn the_spec_round_trips_through_json_for_agents() {
 
 #[test]
 fn a_bar_is_mirrored_from_commands() {
-    let cmd = |id: &str, menu: &[&str], shortcut: Option<&str>, enabled: bool| ashlar_command::CommandInfo {
+    let cmd = |id: &str, menu: &[&str], shortcut: Option<&str>, enabled: bool| CommandInfo {
         id: id.into(),
         label: id.into(),
         menu: menu.iter().map(|s| s.to_string()).collect(),
@@ -138,4 +139,85 @@ fn a_bar_is_mirrored_from_commands() {
     assert!(matches!(spec.node(&[0, 1]), Some(MenuNode::Submenu(s)) if s.label == "Export" && s.children.len() == 2));
     assert_eq!(spec.find("edit.undo").map(|i| (i.enabled, i.accelerator.as_deref())), Some((false, Some("Mod+Z"))));
     assert!(spec.validate().is_ok());
+}
+
+fn info(id: &str, label: &str, menu: &[&str], shortcut: Option<&str>, enabled: bool) -> CommandInfo {
+    CommandInfo {
+        id: id.into(),
+        label: label.into(),
+        menu: menu.iter().map(|s| (*s).to_owned()).collect(),
+        shortcut: shortcut.map(Into::into),
+        params_schema: serde_json::Value::Null,
+        params_text: None,
+        enabled,
+        disabled_reason: (!enabled).then(|| "Nothing selected".to_owned()),
+        mutates: false,
+    }
+}
+
+fn commands() -> Vec<CommandInfo> {
+    vec![
+        info("file.open", "Open…", &["File"], Some("cmd+o"), true),
+        info("file.export.png", "PNG", &["File", "Export"], None, true),
+        info("file.quit", "Quit", &["File"], Some("Mod+Q"), true),
+        info("edit.cut", "Cut", &["Edit"], Some("Mod+X"), false),
+        info("view.grid", "Grid", &["View"], None, true),
+        info("palette.only", "Not in menus", &[], None, true),
+    ]
+}
+
+#[test]
+fn commands_add_separators_and_check_marks_with_structure_split_from_state() {
+    let mut spec = MenuSpec::from_commands(&commands(), &[]);
+    let tops: Vec<_> = spec.menus.iter().map(|m| m.label.as_str()).collect();
+    assert_eq!(tops, ["File", "Edit", "View"]);
+    assert_eq!(spec.items().len(), 5);
+    assert_eq!(spec.find("file.open").unwrap().accelerator.as_deref(), Some("Mod+O"), "shortcuts are normalized");
+    assert!(matches!(spec.node(&[0, 1, 0]), Some(MenuNode::Item(i)) if i.id == "file.export.png"));
+    assert_eq!(spec.find("edit.cut").unwrap().disabled_reason.as_deref(), Some("Nothing selected"));
+    assert_eq!(spec.find("file.open").unwrap().disabled_reason, None, "enabled items carry no reason");
+    let (structure, state) = (spec.structure_hash(), spec.state_hash());
+    assert!(spec.set_checked("view.grid", Some(true)));
+    assert_ne!(spec.structure_hash(), structure, "an item became checkable");
+    let structure = spec.structure_hash();
+    spec.set_checked("view.grid", Some(false));
+    assert_eq!(spec.structure_hash(), structure);
+    assert_ne!(spec.state_hash(), state);
+    assert!(!spec.set_checked("missing", Some(true)));
+    assert!(spec.separator_before("file.quit"));
+    assert!(spec.separator_before("file.quit"), "found again, no second separator");
+    assert!(spec.separator_before("file.open"), "first in its menu: no separator");
+    assert!(spec.separator_before("file.export.png"), "first in a submenu: no separator");
+    assert!(!spec.separator_before("missing"));
+    assert!(matches!(spec.node(&[0, 2]), Some(MenuNode::Separator)));
+    assert!(matches!(spec.node(&[0, 3]), Some(MenuNode::Item(i)) if i.id == "file.quit"));
+    assert_eq!(spec.menus.first().map(|m| m.children.len()), Some(4));
+    assert!(spec.validate().is_ok());
+    let json = serde_json::to_string(&spec).unwrap();
+    assert_eq!(serde_json::from_str::<MenuSpec>(&json).unwrap(), spec);
+    assert!(json.contains(r#""type":"separator""#));
+}
+
+#[test]
+fn deep_command_paths_are_cut_at_the_depth_limit() {
+    let mut c = info("deep", "Deep", &[], None, true);
+    c.menu = (0..50).map(|i| format!("L{i}")).collect();
+    let spec = MenuSpec::from_commands(&[c], &[]);
+    fn depth(nodes: &[MenuNode]) -> usize {
+        nodes.iter().map(|n| if let MenuNode::Submenu(s) = n { 1 + depth(&s.children) } else { 0 }).max().unwrap_or(0)
+    }
+    assert_eq!(spec.menus.first().map(|m| 1 + depth(&m.children)), Some(MAX_DEPTH));
+    assert_eq!(spec.items().len(), 1, "the command is still reachable");
+    assert!(spec.validate().is_ok());
+}
+
+#[test]
+fn only_command_keys_become_menu_key_equivalents() {
+    assert!(menu_chord("Mod+S").is_some());
+    assert!(menu_chord("Ctrl+Alt+Delete").is_some());
+    assert!(menu_chord("F3").is_some());
+    assert!(menu_chord("Mod+Z / Mod+Shift+Z").is_some_and(|c| !c.mods.shift));
+    for typing in ["V", "Space", "Shift+=", "Alt+[", "Escape", "Mod+Banana", ""] {
+        assert!(menu_chord(typing).is_none(), "{typing}");
+    }
 }
