@@ -41,4 +41,6 @@ tracer-sdk = { path = "../../../manager/crates/tracer-sdk", optional = true }
 tempfile = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["console"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Document", "Element", "HtmlCanvasElement"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"

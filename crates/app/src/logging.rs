@@ -57,6 +57,7 @@ pub fn recent(limit: usize, min: Level) -> Vec<LogLine> {
 
 /// Recent lines without waiting for the lock (for the panic hook, which may run while the
 /// panicking thread holds it).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn try_recent(limit: usize) -> Vec<LogLine> {
     match ring().lines.try_lock() {
         Ok(lines) => lines.iter().rev().take(limit).rev().cloned().collect(),
@@ -83,7 +84,10 @@ fn push_ring(line: LogLine) {
 }
 
 fn unix_now() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    #[cfg(target_arch = "wasm32")]
+    0.0
 }
 
 fn clip(mut s: String) -> String {
@@ -133,6 +137,8 @@ impl Log for Logger {
         if self.stderr {
             let _ = std::io::stderr().write_all(text.as_bytes());
         }
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::log_1(&text.trim_end().into());
         if let Some(tx) = &self.file {
             match tx.try_send(text) {
                 Ok(()) => {}
@@ -182,7 +188,7 @@ fn start_file_writer(dir: &Path, name: &str) -> Option<SyncSender<String>> {
         let mut size = file.as_ref().and_then(|f| f.metadata().ok()).map_or(0, |m| m.len());
         for line in rx {
             if size >= ROTATE_BYTES {
-                drop(file.take()); // close before renaming (Windows)
+                let _ = file.take(); // close before renaming (Windows)
                 rotate(&path);
                 file = open_append(&path);
                 size = 0;

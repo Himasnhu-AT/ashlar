@@ -190,6 +190,7 @@ pub struct Runtime<D: Document> {
     picker: Option<FilePicker>,
     passes: u64,
     /// Running in a real window (not the headless driver): OS menus may be installed.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
     #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
     native_menu: Option<crate::native_menu::NativeMenu>,
@@ -388,7 +389,6 @@ impl<D: Document> Runtime<D> {
             let wake_ctx = ctx.clone();
             match Server::start(ashlar_control::Config::new(port, dirs.config.clone()), move || wake_ctx.request_repaint()) {
                 Ok((server, rx)) => {
-                    log::info!("control port listening on 127.0.0.1:{} (key in {})", server.port(), server.key_file().display());
                     self.control = Some((server, rx));
                 }
                 Err(e) => {
@@ -652,6 +652,7 @@ impl<D: Document> Runtime<D> {
     }
 
     /// Settle everything before the process ends: stop jobs, flush settings, end autosave.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn shutdown(&mut self, _discarded: bool) {
         if self.allow_close {
             return;
@@ -680,6 +681,7 @@ impl<D: Document> Runtime<D> {
 
     /// End without any cleanup, as if the process had died: autosave files stay for the next
     /// launch to recover, settings are not flushed. For crash-recovery tests.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn abandon(mut self) {
         self.allow_close = true;
         if let Some(mut a) = self.autosave.take() {
@@ -969,6 +971,12 @@ impl<D: Document> Runtime<D> {
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
         let p = req.params().clone();
+        let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
+        let needs_frames = matches!(req.method(), "ui.click" | "ui.move" | "ui.drag" | "ui.scroll" | "ui.key" | "ui.type" | "ui.screenshot");
+        if needs_frames && !visible {
+            // eframe draws no frames for a minimized or fully covered window
+            return req.fail("the window is minimized or covered, so it draws no frames: bring it to the front for ui input and screenshots (engine.execute works regardless)");
+        }
         match req.method() {
             "ui.inspect" => {
                 let ins = automation::inspect(ctx);
@@ -983,6 +991,7 @@ impl<D: Document> Runtime<D> {
                     "dialogs": self.modals.len(),
                     "view_error": self.view_error,
                     "toasts": self.toasts.texts().collect::<Vec<_>>(),
+                    "visible": visible,
                 }));
             }
             "ui.click" => {
@@ -1220,12 +1229,14 @@ impl<D: Document> eframe::App for EframeApp<D> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Args {
     control: Option<u16>,
     safe_mode: bool,
     open: Option<PathBuf>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_args(env_prefix: &str) -> Args {
     let mut a = Args { control: None, safe_mode: false, open: None };
     let mut it = std::env::args().skip(1);
@@ -1244,6 +1255,32 @@ fn parse_args(env_prefix: &str) -> Args {
     a
 }
 
+/// On the web: run in the `<canvas>` whose id is the app's name (or `ashlar`). Returns at once;
+/// the app runs in the browser's event loop.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
+    use wasm_bindgen::JsCast;
+    let (shared, view, setup) = app.split();
+    let level = log::LevelFilter::Info;
+    crate::logging::install(Box::new(crate::logging::Logger::new(&shared.name, None, level, false)), level);
+    crash::install(None, &shared.name, &shared.version);
+    let document = web_sys::window().and_then(|w| w.document()).ok_or_else(|| Error::Window("no document".into()))?;
+    let canvas = document
+        .get_element_by_id(&shared.name)
+        .or_else(|| document.get_element_by_id("ashlar"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .ok_or_else(|| Error::Window(format!("no <canvas id=\"{}\"> in the page", shared.name)))?;
+    wasm_bindgen_futures::spawn_local(async move {
+        let creator: eframe::AppCreator<'static> =
+            Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()) })));
+        if let Err(e) = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), creator).await {
+            log::error!("the app could not start: {e:?}");
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     let (shared, view, setup) = app.split();
     let args = parse_args(&shared.env_prefix);

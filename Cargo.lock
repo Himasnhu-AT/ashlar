@@ -292,6 +292,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracer-sdk",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

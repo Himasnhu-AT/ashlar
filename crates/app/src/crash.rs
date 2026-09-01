@@ -4,7 +4,6 @@
 //! Panics in commands, jobs and views are caught by the runtime (the session survives); the hook
 //! still records each one, so the user and the developer can see what went wrong.
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
@@ -91,7 +90,7 @@ fn on_panic(info: &std::panic::PanicHookInfo<'_>) {
     let backtrace = std::backtrace::Backtrace::force_capture().to_string();
     #[cfg(target_arch = "wasm32")]
     let backtrace = String::new();
-    let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let unix = ashlar_store::autosave::unix_now();
     let mut record = PanicRecord { message, location, thread, backtrace, unix, log_file: None };
     if let Ok(state) = STATE.try_lock()
         && let Some(s) = state.as_ref()
@@ -113,6 +112,7 @@ fn write_crash_log(dir: &Path, app: &str, version: &str, r: &PanicRecord) -> Opt
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        use std::fmt::Write as _;
         std::fs::create_dir_all(dir).ok()?;
         let path = dir.join(format!("crash-{}-{}.log", r.unix, std::process::id()));
         let mut text = String::new();

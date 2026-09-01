@@ -29,6 +29,7 @@ pub enum Error {
 }
 
 /// What everything built from one [`App`] shares (immutable).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct Shared<D: Document> {
     pub name: String,
     pub version: String,
@@ -237,7 +238,11 @@ impl<D: Document> App<D> {
     /// The runtime without a window, for tests and benches: drive it with [`crate::Driver`].
     pub fn runtime(self) -> Runtime<D> {
         let (shared, view, setup) = self.split();
-        Runtime::new(shared, view, setup, crate::runtime::Launch::default())
+        let mut launch = crate::runtime::Launch::default();
+        if let (Some(cfg), Some(d)) = (&shared.telemetry, &shared.dirs) {
+            launch.telemetry = crate::telemetry::Telemetry::start(cfg, &shared.name, &shared.version, &d.data, true);
+        }
+        Runtime::new(shared, view, setup, launch)
     }
 
     /// The app's `-cli` binary: `commands`, `exec`, `run`, `mcp`, `serve`, `version`, each on a
