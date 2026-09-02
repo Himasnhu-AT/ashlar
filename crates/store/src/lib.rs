@@ -1,7 +1,7 @@
 //! Documents: Arc snapshots, revisions, undo history, versioned formats with migrations, autosave.
 //!
 //! - [`Store`]: the document as an `Arc<D>`, edited copy-on-write, with a [`Revision`] per state,
-//!   undo/redo, merged gestures and dirty tracking.
+//!   undo/redo, merged gestures, compound edits ([`Transaction`]) and dirty tracking.
 //! - [`History`]: the undo stacks on their own (labels, extra state, merge keys, step and byte
 //!   limits, optional branches).
 //! - [`Tracked`] and [`Memo`]: per-part revisions and small revision-keyed caches for views.
@@ -26,4 +26,4 @@ pub use format::{Envelope, Format, FormatError, Loaded, Migration};
 pub use history::{Branch, Entry, History};
 pub use revision::{Memo, Revision, Tracked, Versioned};
 pub use snapshot::{Published, SnapshotCell};
-pub use store::Store;
+pub use store::{Store, Transaction};

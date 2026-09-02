@@ -291,6 +291,20 @@ impl<D, X> History<D, X> {
         self.prune_orphans(removed);
     }
 
+    /// Low-level: drop the undo steps above the first `depth` (their states are forgotten; the
+    /// redo line is kept) and end any merged gesture. Meant for compatibility shims over
+    /// hand-written stacks (`truncate` then [`History::record`]); prefer [`Store::transaction`].
+    ///
+    /// [`Store::transaction`]: crate::Store::transaction
+    pub fn truncate_to(&mut self, depth: usize) {
+        if self.undo.len() <= depth {
+            return;
+        }
+        let removed: HashSet<Revision> = self.undo.drain(depth..).map(|e| e.revision).collect();
+        self.merge_key = None;
+        self.prune_orphans(removed);
+    }
+
     /// Forget everything (a new or reopened document).
     pub fn clear(&mut self) {
         self.undo.clear();
@@ -493,6 +507,25 @@ mod tests {
         assert_eq!(d.undo().as_deref(), Some("b+c"));
         assert_eq!(*d.cur, 1);
         d.h.squash_since(usize::MAX, "x");
+    }
+
+    #[test]
+    fn truncate_to_drops_newer_steps_and_keeps_redo() {
+        let mut d = Doc::new();
+        d.edit("a", 1);
+        d.edit("b", 2);
+        d.edit("c", 3);
+        d.undo();
+        d.h.set_merge_key(Some("k"));
+        d.h.truncate_to(5);
+        assert_eq!(d.h.depth(), 2);
+        assert_eq!(d.h.merge_key(), Some("k"), "nothing to drop: unchanged");
+        d.h.truncate_to(1);
+        assert_eq!(d.h.undo_labels().collect::<Vec<_>>(), ["a"]);
+        assert_eq!(d.h.redo_labels().collect::<Vec<_>>(), ["c"]);
+        assert_eq!(d.h.merge_key(), None);
+        d.h.truncate_to(0);
+        assert!(!d.h.can_undo());
     }
 
     #[test]

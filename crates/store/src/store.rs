@@ -146,6 +146,29 @@ impl<D: Clone, X: Clone> Store<D, X> {
         self.publish();
     }
 
+    /// Run `f`, which may make any number of edits, as one undo step called `label`.
+    ///
+    /// On `Ok` the edits fold into one step (none when they changed nothing); the steps before
+    /// the transaction are untouched and the redo line is dropped only if something changed. On
+    /// `Err`, or a panic in `f`, the document, extra state, revision, history (redo line and merge
+    /// key included) and saved state are put back as they were. See [`Transaction`].
+    pub fn transaction<T, E>(&mut self, label: &str, f: impl FnOnce(&mut Store<D, X>) -> Result<T, E>) -> Result<T, E> {
+        let mut tx = self.begin_transaction(label);
+        let r = f(&mut tx)?;
+        tx.commit();
+        Ok(r)
+    }
+
+    /// Start a [`Transaction`] called `label`: edit through it, then [`Transaction::commit`];
+    /// dropping it without committing (an early return, a panic) rolls everything back.
+    pub fn begin_transaction(&mut self, label: &str) -> Transaction<'_, D, X> {
+        let mut scratch = History::new();
+        scratch.set_max_steps(usize::MAX);
+        let history = std::mem::replace(&mut self.history, scratch);
+        let before = Before { doc: Arc::clone(&self.doc), extra: self.extra.clone(), revision: self.revision, saved: self.saved, history };
+        Transaction { store: self, label: label.to_string(), before: Some(before) }
+    }
+
     /// Undo the last step; returns its label.
     pub fn undo(&mut self) -> Option<String> {
         let e = self.history.undo(Arc::clone(&self.doc), self.extra.clone(), self.revision)?;
@@ -227,6 +250,87 @@ impl<D: Clone, X: Clone> Store<D, X> {
         if let Some(c) = &self.cell {
             c.publish(Arc::clone(&self.doc), self.revision);
         }
+    }
+}
+
+/// What a transaction puts back on rollback, and the history it set aside.
+struct Before<D, X> {
+    doc: Arc<D>,
+    extra: X,
+    revision: Revision,
+    saved: Revision,
+    history: History<D, X>,
+}
+
+/// A compound edit in progress ([`Store::begin_transaction`]); derefs to the [`Store`].
+///
+/// While it is open the store's history is a scratch one holding only the transaction's own
+/// steps (so undo inside it goes back no further than its start, and limits never push out an
+/// older step); the real history is set aside untouched. [`Transaction::commit`] puts it back
+/// and records one step `label` from the state at the start to the current one, or nothing if
+/// the revision is the one at the start. Dropping it uncommitted puts back the state at the start
+/// exactly: document, extra state, revision, history, merge key, saved revision.
+///
+/// Transactions nest: an inner one commits as one step into the outer one's scratch history
+/// (folded again by the outer commit) and rolls back only its own edits (a savepoint).
+pub struct Transaction<'a, D: Clone, X: Clone = ()> {
+    store: &'a mut Store<D, X>,
+    label: String,
+    before: Option<Before<D, X>>,
+}
+
+impl<D: Clone, X: Clone> Transaction<'_, D, X> {
+    /// Fold the transaction's edits into one undo step (none if nothing changed).
+    pub fn commit(mut self) {
+        if let Some(b) = self.before.take() {
+            self.store.history = b.history;
+            if self.store.revision != b.revision {
+                self.store.history.record(&self.label, b.doc, b.extra, b.revision);
+            }
+        }
+    }
+
+    /// Put everything back as it was at the start (the same as dropping it).
+    pub fn rollback(self) {}
+
+    /// Something changed since the start (a commit would record a step).
+    pub fn changed(&self) -> bool {
+        self.before.as_ref().is_some_and(|b| b.revision != self.store.revision)
+    }
+}
+
+impl<D: Clone, X: Clone> std::ops::Deref for Transaction<'_, D, X> {
+    type Target = Store<D, X>;
+    fn deref(&self) -> &Store<D, X> {
+        self.store
+    }
+}
+
+impl<D: Clone, X: Clone> std::ops::DerefMut for Transaction<'_, D, X> {
+    fn deref_mut(&mut self) -> &mut Store<D, X> {
+        self.store
+    }
+}
+
+impl<D: Clone, X: Clone> Drop for Transaction<'_, D, X> {
+    fn drop(&mut self) {
+        let Some(b) = self.before.take() else { return };
+        let s = &mut *self.store;
+        let changed = s.revision != b.revision;
+        s.history = b.history;
+        s.saved = b.saved;
+        s.doc = b.doc;
+        s.extra = b.extra;
+        s.revision = b.revision;
+        if changed {
+            s.publish();
+        }
+    }
+}
+
+impl<D: Clone + std::fmt::Debug, X: Clone + std::fmt::Debug> std::fmt::Debug for Transaction<'_, D, X> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transaction").field("label", &self.label).field("store", &self.store).finish()
     }
 }
 
@@ -428,5 +532,232 @@ mod tests {
         assert_eq!(s.undo().as_deref(), Some("Add Two"));
         assert!(s.doc().items.is_empty());
         assert!(!s.is_dirty());
+    }
+
+    fn labels(s: &Store<Doc>) -> (Vec<&str>, Vec<&str>) {
+        (s.history().undo_labels().collect(), s.history().redo_labels().collect())
+    }
+
+    #[test]
+    fn transaction_folds_edits_into_one_step() {
+        let mut s = store();
+        s.edit("a", |d| d.items.push(1));
+        s.edit("b", |d| d.items.push(2));
+        s.undo(); // redo line: b
+        let r: Result<usize, ()> = s.transaction("Assemble", |s| {
+            for i in 10..15 {
+                s.edit("part", |d| d.items.push(i));
+            }
+            s.edit_merged("drag", "k", |d| d.items.push(20));
+            s.edit_merged("drag", "k", |d| d.items.push(21));
+            assert_eq!(s.history().depth(), 6, "the scratch history holds only this transaction's steps");
+            Ok(s.doc().items.len())
+        });
+        assert_eq!(r, Ok(8));
+        assert_eq!(labels(&s), (vec!["a", "Assemble"], vec![]), "one step, redo dropped");
+        assert_eq!(s.history().merge_key(), None);
+        assert_eq!(s.undo().as_deref(), Some("Assemble"));
+        assert_eq!(s.doc().items, [1]);
+        assert_eq!(s.redo().as_deref(), Some("Assemble"));
+        assert_eq!(s.doc().items, [1, 10, 11, 12, 13, 14, 20, 21]);
+    }
+
+    #[test]
+    fn failed_transaction_puts_everything_back() {
+        let mut s: Store<Doc, u8> = Store::new(Doc::default());
+        s.edit("a", |d| d.items.push(1));
+        s.mark_saved();
+        s.edit_merged("Move", "drag", |d| d.items.push(2));
+        s.undo(); // redo: Move
+        s.edit_merged("Move", "drag", |d| d.items.push(3)); // drops redo; gesture "drag" open
+        s.edit("b", |d| d.items.push(4));
+        s.undo(); // redo: b, at [1, 3]
+        s.mark_saved();
+        s.history_mut().set_merge_key(Some("drag"));
+        *s.extra_mut() = 7;
+        let cell = s.subscribe_snapshots();
+        let (doc, rev, hist) = (s.snapshot(), s.revision(), format!("{:?}", s.history()));
+        let r: Result<(), &str> = s.transaction("T", |s| {
+            s.edit("x", |d| d.items.clear());
+            s.mark_saved();
+            *s.extra_mut() = 9;
+            s.undo();
+            s.edit("y", |d| d.items.push(5));
+            Err("no")
+        });
+        assert_eq!(r, Err("no"));
+        assert!(Arc::ptr_eq(s.doc(), &doc));
+        assert_eq!((s.revision(), *s.extra()), (rev, 7));
+        assert!(!s.is_dirty(), "clean before, clean after");
+        assert_eq!(format!("{:?}", s.history()), hist, "history, redo line and merge key as before");
+        assert!(s.history().can_merge("Move", "drag"));
+        assert_eq!(cell.revision(), rev, "the rollback was published");
+        assert_eq!(s.redo().as_deref(), Some("b"));
+
+        // A dirty store stays dirty.
+        s.edit("c", |d| d.items.push(6));
+        let rev = s.revision();
+        let _: Result<(), ()> = s.transaction("T", |s| {
+            s.mark_saved();
+            Err(())
+        });
+        assert!(s.is_dirty());
+        assert_eq!(s.revision(), rev);
+    }
+
+    #[test]
+    fn panicking_transaction_puts_everything_back() {
+        let mut s = store();
+        s.edit("a", |d| d.items.push(1));
+        s.edit("b", |d| d.items.push(2));
+        s.undo();
+        let (rev, hist) = (s.revision(), format!("{:?}", s.history()));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), ()> = s.transaction("T", |s| {
+                s.edit("x", |d| d.items.push(9));
+                s.edit("y", |d| d.items.push(9));
+                panic!("bug in a command")
+            });
+        }));
+        assert!(r.is_err());
+        assert_eq!((s.doc().items.as_slice(), s.revision()), ([1].as_slice(), rev));
+        assert_eq!(format!("{:?}", s.history()), hist);
+        assert!(s.is_dirty());
+    }
+
+    #[test]
+    fn guard_commits_or_rolls_back_on_drop() {
+        let mut s = store();
+        {
+            let mut tx = s.begin_transaction("Keep");
+            tx.edit("x", |d| d.items.push(1));
+            tx.edit("y", |d| d.items.push(2));
+            assert!(tx.changed());
+            tx.commit();
+        }
+        assert_eq!(labels(&s).0, ["Keep"]);
+        let rev = s.revision();
+        {
+            let mut tx = s.begin_transaction("Drop");
+            tx.edit("x", |d| d.items.clear());
+        }
+        assert_eq!((s.doc().items.as_slice(), s.revision()), ([1, 2].as_slice(), rev));
+        let mut tx = s.begin_transaction("Explicit");
+        tx.edit("x", |d| d.items.clear());
+        tx.rollback();
+        assert_eq!(s.doc().items, [1, 2]);
+        assert_eq!(labels(&s).0, ["Keep"]);
+    }
+
+    #[test]
+    fn empty_transaction_records_nothing() {
+        let mut s = store();
+        s.edit_merged("Move", "drag", |d| d.items.push(1));
+        s.edit("b", |d| d.items.push(2));
+        s.undo();
+        s.history_mut().set_merge_key(Some("drag"));
+        let (rev, hist, dirty) = (s.revision(), format!("{:?}", s.history()), s.is_dirty());
+        assert_eq!(s.transaction::<_, ()>("Nothing", |_| Ok(3)), Ok(3));
+        let _: Result<(), ()> = s.transaction("Failed edit", |s| {
+            let _ = s.try_edit("x", |_| Err::<(), ()>(()));
+            Ok(())
+        });
+        // An edit undone inside the transaction is back at the start too.
+        let _: Result<(), ()> = s.transaction("Edit and undo", |s| {
+            s.edit("x", |d| d.items.push(9));
+            s.undo();
+            Ok(())
+        });
+        assert_eq!(s.revision(), rev);
+        assert_eq!(format!("{:?}", s.history()), hist, "redo line and gesture kept");
+        assert!(s.history().can_merge("Move", "drag"));
+        assert_eq!(s.is_dirty(), dirty);
+    }
+
+    #[test]
+    fn nested_transactions_join_the_outer_one() {
+        let mut s = store();
+        s.edit("a", |d| d.items.push(1));
+        let r: Result<(), ()> = s.transaction("Outer", |s| {
+            s.edit("x", |d| d.items.push(2));
+            let inner: Result<(), ()> = s.transaction("Inner ok", |s| {
+                s.edit("y", |d| d.items.push(3));
+                s.edit("z", |d| d.items.push(4));
+                Ok(())
+            });
+            assert_eq!(inner, Ok(()));
+            assert_eq!(s.history().undo_labels().collect::<Vec<_>>(), ["x", "Inner ok"]);
+            let failed: Result<(), ()> = s.transaction("Inner failed", |s| {
+                s.edit("w", |d| d.items.clear());
+                Err(())
+            });
+            assert_eq!(failed, Err(()));
+            assert_eq!(s.doc().items, [1, 2, 3, 4], "only the inner edits were rolled back");
+            Ok(())
+        });
+        assert_eq!(r, Ok(()));
+        assert_eq!(labels(&s).0, ["a", "Outer"]);
+        s.undo();
+        assert_eq!(s.doc().items, [1]);
+
+        // An outer failure rolls back a committed inner transaction too.
+        let rev = s.revision();
+        let _: Result<(), ()> = s.transaction("Outer", |s| {
+            let _: Result<(), ()> = s.transaction("Inner", |s| {
+                s.edit("y", |d| d.items.push(3));
+                Ok(())
+            });
+            Err(())
+        });
+        assert_eq!((s.doc().items.as_slice(), s.revision()), ([1].as_slice(), rev));
+        assert_eq!(labels(&s), (vec!["a"], vec!["Outer"]));
+    }
+
+    #[test]
+    fn transaction_and_merge_keys() {
+        let mut s = store();
+        s.edit_merged("Move", "drag", |d| d.items.push(1));
+        let _: Result<(), ()> = s.transaction("Move", |s| {
+            // Inside, a gesture merges with itself only, never with a step before the transaction.
+            s.edit_merged("Move", "drag", |d| d.items.push(2));
+            s.edit_merged("Move", "drag", |d| d.items.push(3));
+            assert_eq!(s.history().depth(), 1);
+            Ok(())
+        });
+        assert_eq!(labels(&s).0, ["Move", "Move"]);
+        assert_eq!(s.history().merge_key(), None, "a committed transaction ends the gesture");
+        s.edit_merged("Move", "drag", |d| d.items.push(4));
+        assert_eq!(s.history().depth(), 3);
+    }
+
+    #[test]
+    fn transaction_respects_limits_once() {
+        let mut s = store();
+        s.history_mut().set_max_steps(3);
+        for i in 0..3 {
+            s.edit(&format!("e{i}"), |d| d.items.push(i));
+        }
+        let _: Result<(), ()> = s.transaction("Many", |s| {
+            for i in 0..10 {
+                s.edit("part", |d| d.items.push(i));
+            }
+            Ok(())
+        });
+        assert_eq!(labels(&s).0, ["e1", "e2", "Many"], "only the folded step counted");
+        let _: Result<(), ()> = s.transaction("Fails", |s| {
+            for i in 0..10 {
+                s.edit("part", |d| d.items.push(i));
+            }
+            Err(())
+        });
+        assert_eq!(labels(&s).0, ["e1", "e2", "Many"], "no older step pushed out by a rollback");
+        assert_eq!(s.history().max_steps(), 3);
+        s.history_mut().set_max_steps(0);
+        let _: Result<(), ()> = s.transaction("NoUndo", |s| {
+            s.edit("x", |d| d.items.push(1));
+            Ok(())
+        });
+        assert!(!s.can_undo());
+        assert!(s.is_dirty());
     }
 }
