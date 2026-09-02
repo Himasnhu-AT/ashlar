@@ -23,6 +23,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+ashlar-log = { workspace = true, features = ["serde"] }
 ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }

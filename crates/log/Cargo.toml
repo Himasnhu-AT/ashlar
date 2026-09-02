@@ -1,0 +1,26 @@
+[package]
+name = "ashlar-log"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Headless logging and crash safety: directive filters, stderr + rotating file + in-memory ring, panic hook, launch guard"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# `Serialize` for `LogLine` and `PanicRecord` (what a control method returns as JSON).
+serde = ["dep:serde"]
+
+[dependencies]
+log = { workspace = true, features = ["std"] }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "no_stdout"
+harness = false

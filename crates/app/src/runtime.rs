@@ -1265,7 +1265,17 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     use wasm_bindgen::JsCast;
     let (shared, view, setup) = app.split();
     let level = log::LevelFilter::Info;
-    crate::logging::install(Box::new(crate::logging::Logger::new(&shared.name, None, level, false)), level);
+    let console: crate::logging::Output = Box::new(|line| web_sys::console::log_1(&line.into()));
+    crate::logging::install(Box::new(crate::logging::Logger::new(&shared.name, None, level, false).with_output(console)), level);
+    // the browser console sees every panic: ashlar's hook runs first, then chains to this one
+    static CONSOLE_HOOK: std::sync::Once = std::sync::Once::new();
+    CONSOLE_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            web_sys::console::error_1(&format!("panic: {info}").into());
+            previous(info);
+        }));
+    });
     crash::install(None, &shared.name, &shared.version);
     let document = web_sys::window().and_then(|w| w.document()).ok_or_else(|| Error::Window("no document".into()))?;
     let canvas = document
@@ -1293,12 +1303,14 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     {
         eprintln!("{}: could not create its folders: {e}", shared.name);
     }
-    let level = crate::logging::level_from_env(&shared.env_prefix);
+    let env_var = format!("{}_LOG", shared.env_prefix);
+    let filter = crate::logging::filter_from_env(&[env_var.as_str(), "RUST_LOG"], "info");
+    let level = filter.max_level();
     let telemetry = match (&shared.telemetry, &shared.dirs) {
         (Some(cfg), Some(d)) => Telemetry::start(cfg, &shared.name, &shared.version, &d.data, true),
         _ => Telemetry::default(),
     };
-    let logger = crate::logging::Logger::new(&shared.name, logs.as_deref(), level, true);
+    let logger = crate::logging::Logger::new(&shared.name, logs.as_deref(), level, true).with_filter(filter);
     crate::logging::install(telemetry.wrap_logger(Box::new(logger)), level);
     // after the tracer's hook: ours runs first, then chains to it
     crash::install(logs.as_deref(), &shared.name, &shared.version);

@@ -280,6 +280,7 @@ dependencies = [
  "ashlar-control",
  "ashlar-fs",
  "ashlar-jobs",
+ "ashlar-log",
  "ashlar-native",
  "ashlar-store",
  "ashlar-ui",
@@ -368,6 +369,15 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ashlar-log"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "tempfile",
 ]
 
 [[package]]
