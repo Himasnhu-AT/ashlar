@@ -30,12 +30,10 @@ ashlar-fs = { workspace = true }
 ashlar-ui = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
-# path, not workspace: the workspace entry keeps default features on
 ashlar-native = { workspace = true, features = ["dialogs"] }
 png = "0.18"
 thiserror = { workspace = true }
-# Path dependency for now (outside this repo); only resolved into the build with `telemetry`.
-# Local sibling checkout until tracer-sdk is published to crates.io (then: tracer-sdk = "0.1").
+# A sibling checkout until tracer-sdk is published; then a crates.io dependency.
 tracer-sdk = { path = "../../../manager/crates/tracer-sdk", version = "0.1.0", optional = true }
 
 [dev-dependencies]
