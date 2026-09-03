@@ -13,8 +13,8 @@
 //! | [`session`] | `Session<D>`: the state commands run on; the host glue (one undo step per command, failed commands change nothing) |
 //! | [`runtime`] | `Runtime<D>`: one frame (control, jobs, keys, menus, view, dialogs, autosave), repaint policy, `Cx` for views |
 //! | [`driver`] | `Driver`: a headless, virtual-clock event loop for tests and benches |
-//! | [`crash`] | panic hook, crash logs, last panic, launch guard |
-//! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`) |
+//! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
+//! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
 //! | [`telemetry`] | tracer-sdk hook points (feature `telemetry`) |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -22,15 +22,17 @@
 mod app;
 mod builtins;
 mod control;
-pub mod crash;
 pub mod driver;
-pub mod logging;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
 mod native_menu;
 pub mod runtime;
 pub mod session;
 pub mod stats;
 pub mod telemetry;
+
+/// Logging and crash safety live in the headless `ashlar-log` crate (a CLI can use them without
+/// the window); re-exported here unchanged.
+pub use ashlar_log::{crash, logging};
 
 pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
 pub use driver::Driver;

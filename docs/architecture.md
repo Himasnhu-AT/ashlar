@@ -15,6 +15,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-command` | Commands: registry, typed params, one execute chokepoint, discovery | yes | yes |
 | 0 | `ashlar-fs` | Files and settings: app dirs, durable atomic writes, keyed settings, recent files | yes | yes |
 | 0 | `ashlar-jobs` | Background jobs: progress, cancel, panic isolation, apply-on-UI-thread | yes | yes |
+| 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
 | 2 | `ashlar-control` | Agent control port: hardened JSON-lines server, client, standard method set | yes | – |
