@@ -199,9 +199,11 @@ fn subprocess_backend_survives_a_crashing_command() {
 
 #[test]
 fn subprocess_backend_times_out_a_hung_worker() {
-    let sub = Subprocess::new(worker(), Vec::<String>::new()).with_timeout(Duration::from_millis(1500));
+    // The timeout also bounds the fresh worker's start for the follow-up call, so it must leave room
+    // for a loaded machine (CI runs this beside other builds); the hung call sleeps far longer.
+    let sub = Subprocess::new(worker(), Vec::<String>::new()).with_timeout(Duration::from_secs(5));
     let mut server = McpServer::new(Backend::Subprocess(sub), options());
-    let r = call(&mut server, 1, "execute", json!({"command": "count.slow", "params": {"ms": 20000}}));
+    let r = call(&mut server, 1, "execute", json!({"command": "count.slow", "params": {"ms": 60000}}));
     assert_eq!(r["isError"], true);
     assert!(r["content"][0]["text"].as_str().unwrap().contains("did not finish"), "{r}");
     assert_eq!(call(&mut server, 2, "execute", json!({"command": "count.get"}))["content"][0]["text"], "0");
