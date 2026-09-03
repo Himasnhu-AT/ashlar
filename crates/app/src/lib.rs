@@ -16,6 +16,7 @@
 //! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
+//! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
 //! | [`telemetry`] | tracer-sdk hook points (feature `telemetry`) |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -33,6 +34,9 @@ pub mod telemetry;
 /// Logging and crash safety live in the headless `ashlar-log` crate (a CLI can use them without
 /// the window); re-exported here unchanged.
 pub use ashlar_log::{crash, logging};
+/// The frame scheduler lives in `ashlar-ui` (it needs only egui, so hosts without the runtime use
+/// it too); re-exported here unchanged.
+pub use ashlar_ui::wake;
 
 pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
 pub use driver::Driver;

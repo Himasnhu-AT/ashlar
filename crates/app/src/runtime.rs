@@ -2,9 +2,11 @@
 //! dialogs), the repaint policy, and the eframe glue.
 //!
 //! Repaints happen only for: input (egui/eframe), a store revision change made during a frame, a
-//! job's wake, a control request, toasts and egui animations, injected agent input, and the
-//! timers of pending work (an autosave due, settings waiting to be written). A clean, idle app
-//! requests nothing and draws no frames.
+//! job's wake, a control request, toasts and egui animations, injected agent input, and pending
+//! work that asks for its own frame (settings and autosave wake hooks when a save is due, the
+//! autosave writer when a write finished). Every request goes through [`crate::wake`] with a
+//! reason (`app.stats` → `wakes`). An idle app, clean or dirty, requests nothing and draws no
+//! frames.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -23,6 +25,7 @@ use ashlar_ui::commands::{CommandPalette, KeymapChange, KeymapEditor, MenuSpec, 
 use ashlar_ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar_ui::toasts::Toasts;
 use ashlar_ui::tokens::{self, ThemeMode, Tokens};
+use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
 use crate::app::{App, Error, SetupFn, Shared, ViewFn};
@@ -152,8 +155,6 @@ struct AutosaveState {
     autosave: Autosave,
     #[cfg(not(target_arch = "wasm32"))]
     writer: Option<ashlar_store::BackgroundWriter>,
-    /// egui time of the last write (or of the first tick).
-    anchor: Option<f64>,
     file_gen: u64,
 }
 
@@ -181,6 +182,7 @@ pub struct Runtime<D: Document> {
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
     stats: FrameStats,
+    wakes: Scheduler,
     launch: Launch,
     queued: Vec<(String, Value)>,
     created: Option<std::time::Instant>,
@@ -250,6 +252,7 @@ impl<D: Document> Runtime<D> {
             recovery: Vec::new(),
             modals: Vec::new(),
             stats: FrameStats::default(),
+            wakes: Scheduler::default(),
             queued: Vec::new(),
             created: now(),
             started: false,
@@ -296,7 +299,6 @@ impl<D: Document> Runtime<D> {
                     autosave,
                     #[cfg(not(target_arch = "wasm32"))]
                     writer: ashlar_store::BackgroundWriter::start().ok(),
-                    anchor: None,
                     file_gen: u64::MAX,
                 });
             }
@@ -329,6 +331,11 @@ impl<D: Document> Runtime<D> {
 
     pub fn stats_mut(&mut self) -> &mut FrameStats {
         &mut self.stats
+    }
+
+    /// Frames and wake requests per [`Reason`] (`app.stats` → `wakes`).
+    pub fn wakes(&self) -> WakeStats {
+        self.wakes.stats()
     }
 
     /// Passes run so far (frames, plus egui's occasional extra layout pass).
@@ -385,12 +392,23 @@ impl<D: Document> Runtime<D> {
         {
             log::error!("app setup panicked: {}", panic_text(p.as_ref()));
         }
-        let wake_ctx = ctx.clone();
-        self.jobs.set_wake(move || wake_ctx.request_repaint());
+        let w = wake::waker(ctx, Reason::JOB);
+        self.jobs.set_wake(move || w.wake());
+        let w = wake::waker(ctx, Reason::SETTINGS);
+        self.settings.set_wake(move |d| w.wake_after(d));
+        if let Some(a) = &mut self.autosave {
+            let w = wake::waker(ctx, Reason::AUTOSAVE);
+            a.autosave.set_wake(move |d| w.wake_after(d));
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(writer) = &a.writer {
+                let w = wake::waker(ctx, Reason::AUTOSAVE);
+                writer.set_wake(move || w.wake());
+            }
+        }
         let port = self.launch.control_port.or(self.shared.control_port);
         if let (Some(port), Some(dirs)) = (port, &self.shared.dirs) {
-            let wake_ctx = ctx.clone();
-            match Server::start(ashlar_control::Config::new(port, dirs.config.clone()), move || wake_ctx.request_repaint()) {
+            let w = wake::waker(ctx, Reason::CONTROL);
+            match Server::start(ashlar_control::Config::new(port, dirs.config.clone()), move || w.wake()) {
                 Ok((server, rx)) => {
                     self.control = Some((server, rx));
                 }
@@ -423,8 +441,12 @@ impl<D: Document> Runtime<D> {
         self.launch.telemetry.end_turn();
     }
 
-    /// Hand injected agent input to egui (eframe's `raw_input_hook`).
-    pub fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
+    /// frame to the wake reasons that were due, and hand injected agent input to egui.
+    pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // installed every frame: an app may reset egui's memory, which holds the scheduler
+        self.wakes.install(ctx);
+        self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
         self.script.inject(raw);
     }
 
@@ -469,8 +491,14 @@ impl<D: Document> Runtime<D> {
         self.script.settle();
 
         // the frame changed the document: draw once more so everything shows the new state
-        if self.session.revision() != rev_before || self.script.is_busy() || !self.shots.is_empty() {
-            ctx.request_repaint();
+        if self.session.revision() != rev_before {
+            wake::wake(&ctx, Reason::DOCUMENT);
+        }
+        if self.script.is_busy() {
+            wake::wake(&ctx, Reason::CONTROL);
+        }
+        if !self.shots.is_empty() {
+            wake::wake(&ctx, Reason::SCREENSHOT);
         }
         if let Some(s) = started {
             let took = s.elapsed();
@@ -718,11 +746,9 @@ impl<D: Document> Runtime<D> {
     fn tick_storage(&mut self, ctx: &egui::Context) {
         let t = ctx.input(|i| i.time).max(0.0);
         let now = Duration::from_secs_f64(t);
+        // a pending save asks for its own frame through the settings' wake hook
         if let Err(e) = self.settings.tick(now) {
             log::warn!("settings not saved: {e}");
-        }
-        if self.settings.is_dirty() {
-            ctx.request_repaint_after(Duration::from_millis(600));
         }
         let Some(a) = &mut self.autosave else { return };
         if a.file_gen != self.session.file_generation() {
@@ -732,14 +758,13 @@ impl<D: Document> Runtime<D> {
         let dirty = self.session.is_dirty();
         let rev = self.session.revision();
         if !dirty {
-            a.anchor = None;
             if a.autosave.meta().dirty {
                 let _ = a.autosave.mark_clean();
             }
             return;
         }
-        let anchor = *a.anchor.get_or_insert(t);
-        let interval = self.shared.autosave.unwrap_or(Duration::from_secs(60));
+        // an autosave not yet due asks for its frame through the autosave's wake hook, a finished
+        // background write through the writer's
         let snap = self.session.store().snapshot();
         let format = Arc::clone(&self.shared.format);
         #[cfg(not(target_arch = "wasm32"))]
@@ -755,12 +780,7 @@ impl<D: Document> Runtime<D> {
         #[cfg(target_arch = "wasm32")]
         let wrote = a.autosave.tick(now, rev, dirty, || format.encode(&snap).unwrap_or_default()).ok().flatten().is_some();
         if wrote {
-            a.anchor = Some(t);
             log::debug!("autosaved revision {}", rev.0);
-        } else if a.autosave.meta().revision != rev.0 {
-            // wake when the next autosave is due
-            let due = (anchor + interval.as_secs_f64() - t).max(0.05);
-            ctx.request_repaint_after(Duration::from_secs_f64(due));
         }
     }
 
@@ -818,6 +838,7 @@ impl<D: Document> Runtime<D> {
                         self.settings.remove("view");
                         self.settings.remove("theme");
                         ctx.memory_mut(|m| *m = egui::Memory::default());
+                        self.wakes.install(ctx);
                         true
                     }
                     Some(_) => true,
@@ -969,7 +990,7 @@ impl<D: Document> Runtime<D> {
         for req in std::mem::take(&mut queue.pending) {
             self.answer_ui(ctx, req);
         }
-        ctx.request_repaint();
+        wake::wake(ctx, Reason::CONTROL);
     }
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
@@ -1111,6 +1132,7 @@ impl<D: Document> Runtime<D> {
                     o.insert("passes".into(), json!(self.passes));
                     o.insert("jobs".into(), self.jobs.to_json());
                     o.insert("log_lines_dropped".into(), json!(crate::logging::dropped()));
+                    o.insert("wakes".into(), serde_json::to_value(self.wakes.stats()).unwrap_or(Value::Null));
                 }
                 if p.get("reset").and_then(Value::as_bool) == Some(true) {
                     self.stats.reset_window();

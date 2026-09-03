@@ -12,6 +12,8 @@
 //! frame or on a timer) with a monotonic `now`, the document's revision and whether it is dirty,
 //! and a closure that encodes the document; it writes only when the interval has passed and the
 //! revision is new. [`BackgroundWriter`] moves the encoding and the write off the UI thread.
+//! An event-driven host ticks only when told to: [`Autosave::set_wake`] says when the next
+//! autosave is due, [`BackgroundWriter::set_wake`] when a background write finished.
 //!
 //! On start, [`Autosave::start`] lists [`RecoveryCandidate`]s: sessions whose lock is free and
 //! that had unsaved changes. Sessions that ended cleanly ([`Autosave::close`]) leave nothing behind.
@@ -19,6 +21,7 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -104,8 +107,10 @@ impl RecoveryCandidate {
     }
 }
 
+/// Asks the owner to call [`Autosave::tick`] again after the given delay.
+pub type AutosaveWake = Arc<dyn Fn(Duration) + Send + Sync>;
+
 /// The autosave state of one running session.
-#[derive(Debug)]
 pub struct Autosave {
     cfg: AutosaveConfig,
     dir: PathBuf,
@@ -115,6 +120,19 @@ pub struct Autosave {
     last: Option<Duration>,
     written: Option<Revision>,
     in_flight: Option<Revision>,
+    wake: Option<AutosaveWake>,
+}
+
+impl std::fmt::Debug for Autosave {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Autosave")
+            .field("dir", &self.dir)
+            .field("meta", &self.meta)
+            .field("last", &self.last)
+            .field("written", &self.written)
+            .field("in_flight", &self.in_flight)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Autosave {
@@ -134,7 +152,7 @@ impl Autosave {
         // Unsupported locking only weakens stale detection; it must not stop the app.
         let _ = lock.try_lock();
         let meta = SessionMeta { pid, started_unix: started, label: "Untitled".into(), slots: cfg.slots, ..SessionMeta::default() };
-        let a = Autosave { cfg, dir, meta, _lock: Some(lock), last: None, written: None, in_flight: None };
+        let a = Autosave { cfg, dir, meta, _lock: Some(lock), last: None, written: None, in_flight: None, wake: None };
         a.write_meta()?;
         let candidates = scan(&a.cfg.root, Some(&a.dir));
         Ok((a, candidates))
@@ -155,11 +173,32 @@ impl Autosave {
         self.write_meta()
     }
 
+    /// Be told when an autosave is pending: `wake(delay)` asks for a tick after `delay`. It is
+    /// called by every check ([`Autosave::due`], [`Autosave::tick`]) that finds unsaved changes
+    /// waiting for the interval, with the time left, so a host that ticks once per frame and
+    /// turns each call into one timed frame request never polls. While a background write is in
+    /// flight nothing is asked ([`BackgroundWriter::set_wake`] reports its end).
+    pub fn set_wake(&mut self, wake: impl Fn(Duration) + Send + Sync + 'static) {
+        self.wake = Some(Arc::new(wake));
+    }
+
     /// Is an autosave due? Only when `dirty`, the revision differs from the last written (or
     /// in-flight) one, and `interval` has passed since the last write (or the first tick).
     pub fn due(&mut self, now: Duration, revision: Revision, dirty: bool) -> bool {
         let since = *self.last.get_or_insert(now);
-        dirty && self.in_flight.is_none() && self.written != Some(revision) && now.saturating_sub(since) >= self.cfg.interval
+        if !dirty || self.in_flight.is_some() || self.written == Some(revision) {
+            return false;
+        }
+        let waited = now.saturating_sub(since);
+        if waited >= self.cfg.interval {
+            return true;
+        }
+        if let Some(w) = &self.wake {
+            let left = self.cfg.interval.saturating_sub(waited);
+            // the host's hook must not take the UI thread down
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w(left)));
+        }
+        false
     }
 
     /// Write an autosave if one is due. `encode` runs only then. Returns the slot written.
@@ -317,6 +356,7 @@ mod background {
     use std::io;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::thread::JoinHandle;
     use std::time::Duration;
 
@@ -324,6 +364,7 @@ mod background {
     use crate::revision::Revision;
 
     type Job = (SlotWrite, Box<dyn FnOnce() -> Vec<u8> + Send>);
+    type Wake = Arc<dyn Fn() + Send + Sync>;
 
     /// Encodes and writes autosaves on a thread of its own. The UI thread hands over an encoder
     /// closure (typically holding an `Arc` snapshot of the document) and collects results with
@@ -332,6 +373,7 @@ mod background {
         tx: Option<Sender<Job>>,
         done: Receiver<(SlotWrite, io::Result<()>)>,
         thread: Option<JoinHandle<()>>,
+        wake: Arc<Mutex<Option<Wake>>>,
     }
 
     impl std::fmt::Debug for BackgroundWriter {
@@ -344,6 +386,8 @@ mod background {
         pub fn start() -> io::Result<BackgroundWriter> {
             let (tx, rx) = channel::<Job>();
             let (dtx, done) = channel();
+            let wake: Arc<Mutex<Option<Wake>>> = Arc::default();
+            let hook = Arc::clone(&wake);
             let thread = std::thread::Builder::new().name("autosave".into()).spawn(move || {
                 for (w, encode) in rx {
                     let r = catch_unwind(AssertUnwindSafe(|| {
@@ -354,9 +398,20 @@ mod background {
                     if dtx.send((w, r)).is_err() {
                         break;
                     }
+                    let wake = hook.lock().unwrap_or_else(PoisonError::into_inner).clone();
+                    if let Some(wake) = wake {
+                        // the host's hook must not take the writer down
+                        let _ = catch_unwind(AssertUnwindSafe(|| wake()));
+                    }
                 }
             })?;
-            Ok(BackgroundWriter { tx: Some(tx), done, thread: Some(thread) })
+            Ok(BackgroundWriter { tx: Some(tx), done, thread: Some(thread), wake })
+        }
+
+        /// Be told (on the writer thread) when a write finished and its result is ready for
+        /// [`BackgroundWriter::pump`].
+        pub fn set_wake(&self, wake: impl Fn() + Send + Sync + 'static) {
+            *self.wake.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(wake));
         }
 
         /// Like [`Autosave::tick`], but the encoding and the write happen on the writer thread.
@@ -589,6 +644,37 @@ mod tests {
         assert!(w.tick(&mut a, s(40), Revision::next(), true, || panic!("encoder bug")));
         let errors = w.shutdown(&mut a);
         assert_eq!(errors.len(), 1);
+        a.close(false).unwrap();
+        fs::remove_dir_all(&r).unwrap();
+    }
+
+    #[test]
+    fn the_wake_hooks_say_when_to_tick_next() {
+        let r = root("wake");
+        let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let q = Arc::clone(&asked);
+        a.set_wake(move |d| q.lock().unwrap().push(d));
+        let rev = Revision::next();
+        assert!(!a.due(s(0), rev, false), "clean");
+        assert!(asked.lock().unwrap().is_empty(), "nothing pending, nothing asked");
+        assert!(!a.due(s(4), rev, true));
+        assert_eq!(*asked.lock().unwrap(), vec![s(6)], "the time left until the interval passed");
+
+        let mut w = BackgroundWriter::start().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        w.set_wake(move || {
+            let _ = tx.lock().unwrap().send(());
+        });
+        assert!(w.tick(&mut a, s(10), rev, true, || b"a".to_vec()), "due on time");
+        rx.recv_timeout(Duration::from_secs(10)).expect("the writer reports the finished write");
+        assert!(w.pump(&mut a).is_empty());
+        assert_eq!(a.meta().revision, rev.0);
+        let n = asked.lock().unwrap().len();
+        assert!(!a.due(s(30), rev, true), "written");
+        assert_eq!(asked.lock().unwrap().len(), n, "nothing pending once written");
+        drop(w);
         a.close(false).unwrap();
         fs::remove_dir_all(&r).unwrap();
     }

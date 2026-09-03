@@ -10,7 +10,8 @@
 //! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
 //! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`cache`]
-//!   (revision-keyed galleys and meshes).
+//!   (revision-keyed galleys and meshes), [`wake`] (frame requests with a reason, per-reason
+//!   frame counts).
 //!
 //! Apps own their data, selection, assets and command handling: components take state by
 //! reference and report what the user asked for. Domain widgets (timelines, canvases) stay in the
@@ -38,6 +39,7 @@ pub mod tokens;
 pub mod tree;
 pub mod value_field;
 pub mod virtual_list;
+pub mod wake;
 
 #[cfg(test)]
 pub(crate) mod test_support;
