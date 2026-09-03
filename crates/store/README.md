@@ -41,7 +41,7 @@ format.save(&path, &doc)?;                 // durable atomic write
 let loaded = format.load(&path)?;          // migrated, checked
 ```
 
-Files are `{"format", "schema_version", "generator", "document"}` JSON. Migrations are `fn(Value) -> Result<Value, String>` on the whole envelope, one per schema step. Files from a newer schema are refused (`TooNew`), files of another format too (`WrongFormat`). Corrupt, truncated, oversized and deeply nested input is an error, never a panic. Other envelope keys (view state) come back in `Loaded::extras` and go out with `encode_with`.
+Files are `{"format", "schema_version", "generator", "document"}` JSON. Migrations are `fn(Value) -> Result<Value, String>` on the whole envelope, one per schema step. Files from a newer schema are refused (`TooNew`), files of another format too (`WrongFormat`). Corrupt, truncated, oversized and deeply nested input is an error, never a panic. Other envelope keys (view state) come back in `Loaded::extras` and go out with `encode_with`. For files that already exist, `.extras_after_payload(true)` writes the extras after the payload (byte-identical re-encoding of `{format, schema_version, generator, payload, extras…}` files) and `.accept_untagged(true)` reads envelopes without a `format` tag when they have `schema_version` and the payload key. A refusal of valid JSON (`NotThisFormat`) carries serde's error with its line and column (`FormatError::json()`); malformed JSON is `Corrupt` with serde's message verbatim.
 
 ## Autosave
 

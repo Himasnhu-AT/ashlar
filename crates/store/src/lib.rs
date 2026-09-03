@@ -22,7 +22,7 @@ pub mod store;
 #[cfg(not(target_arch = "wasm32"))]
 pub use autosave::BackgroundWriter;
 pub use autosave::{Autosave, AutosaveConfig, RecoveryCandidate, SessionMeta, SlotWrite};
-pub use format::{Envelope, Format, FormatError, Loaded, Migration};
+pub use format::{Envelope, Format, FormatError, JsonError, Loaded, Migration};
 pub use history::{Branch, Entry, History};
 pub use revision::{Memo, Revision, Tracked, Versioned};
 pub use snapshot::{Published, SnapshotCell};
