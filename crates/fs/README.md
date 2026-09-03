@@ -5,6 +5,7 @@ Files and settings for ashlar apps. Headless, no UI dependencies, builds for `wa
 | Item | What it does |
 |---|---|
 | `AppDirs::new(qualifier, org, app)` | Config, data, cache and logs directories where each OS expects them (via the `directories` crate). `ASHLAR_DIRS_ROOT=/some/dir` puts all four under one folder (tests, portable installs). `AppDirs::under(root)` does the same in code. |
+| `AppDirs::data_only(app, override_env)` | The conventional flat per-app data folder: `~/Library/Application Support/<App>`, `%APPDATA%\<App>`, `$XDG_DATA_HOME/<app>` or `~/.local/share/<app>`. The app's own override variable wins; `ASHLAR_DIRS_ROOT` does not move it. `dirs::data_dir_for(os, app, override_env, lookup)` is the pure core, for tests. |
 | `atomic_write(path, bytes)` | Durable replace: hidden temp file in the same directory, write, `fsync`, rename over the target, `fsync` the directory (Unix). On failure the temp file is removed and the old file is untouched. Follows symlinks, keeps permissions. `atomic_write_with(path, \|file\| ...)` streams instead of buffering. |
 | `ConfigStore` | Named text blobs (`settings.json`, `keymap.json`). `DirConfig` (a folder, atomic writes) and `MemoryConfig`. Names that climb out of the store (`..`, absolute) are refused. |
 | `FileOps` | Path-based read / atomic write / remove / list, for autosave and recovery. `StdFiles` and `MemFiles`. A browser (OPFS) backend implements the same trait. |
