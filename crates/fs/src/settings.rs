@@ -4,7 +4,8 @@
 //! dotted names such as `"editor.font_size"` for grouping). Changes are saved by [`Settings::tick`]
 //! once no change has happened for the debounce period, or at once by [`Settings::flush`] (call it
 //! on exit). The clock is the caller's (a monotonic `Duration` since any fixed start), so the
-//! type works the same on the web, in tests and on desktop.
+//! type works the same on the web, in tests and on desktop. An event-driven host sets a wake hook
+//! ([`Settings::set_wake`]) instead of ticking on a timer: it is told when the next tick is due.
 //!
 //! Loading never fails: a missing file gives empty settings, an unreadable one is moved aside to
 //! `<name>.corrupt` and replaced by empty settings, and a file from a newer schema is read but
@@ -41,6 +42,9 @@ pub enum LoadState {
     TooNew { found: u64 },
 }
 
+/// Asks the owner to call [`Settings::tick`] again after the given delay.
+pub type SettingsWake = Arc<dyn Fn(Duration) + Send + Sync>;
+
 /// Keyed settings persisted in a [`ConfigStore`].
 pub struct Settings {
     store: Arc<dyn ConfigStore>,
@@ -54,6 +58,7 @@ pub struct Settings {
     saved_gen: u64,
     /// The generation seen by the last tick and when it was first seen.
     seen: Option<(u64, Duration)>,
+    wake: Option<SettingsWake>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -77,6 +82,7 @@ impl Settings {
             generation: 0,
             saved_gen: 0,
             seen: None,
+            wake: None,
         };
         let Some(text) = s.store.read(name) else { return s };
         match parse(&text) {
@@ -108,6 +114,22 @@ impl Settings {
     pub fn with_debounce(mut self, debounce: Duration) -> Settings {
         self.debounce = debounce;
         self
+    }
+
+    /// Be told when a save is pending: `wake(delay)` asks for a [`Settings::tick`] after `delay`.
+    /// It is called on every change (with the debounce period) and by every tick that finds a
+    /// save pending but not yet due (with the time left), so a host that ticks once per frame
+    /// and turns each call into one timed frame request never polls. A failed save is not
+    /// rescheduled: the next change, tick or [`Settings::flush`] retries it.
+    pub fn set_wake(&mut self, wake: impl Fn(Duration) + Send + Sync + 'static) {
+        self.wake = Some(Arc::new(wake));
+    }
+
+    fn wake(&self, delay: Duration) {
+        if let Some(w) = &self.wake {
+            // the host's hook must not take the settings owner down
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w(delay)));
+        }
     }
 
     pub fn state(&self) -> LoadState {
@@ -167,6 +189,7 @@ impl Settings {
 
     fn changed(&mut self) {
         self.generation = self.generation.wrapping_add(1);
+        self.wake(self.debounce);
     }
 
     // ------------------------------------------------------------------ saving
@@ -185,12 +208,17 @@ impl Settings {
         }
         match self.seen {
             Some((g, since)) if g == self.generation => {
-                if now.saturating_sub(since) >= self.debounce {
+                let waited = now.saturating_sub(since);
+                if waited >= self.debounce {
                     self.flush()?;
                     return Ok(true);
                 }
+                self.wake(self.debounce.saturating_sub(waited));
             }
-            _ => self.seen = Some((self.generation, now)),
+            _ => {
+                self.seen = Some((self.generation, now));
+                self.wake(self.debounce);
+            }
         }
         Ok(false)
     }
@@ -273,6 +301,32 @@ mod tests {
         let back = Settings::load(store, "s.json", &[]);
         assert_eq!(back.get::<i32>("a"), Some(2));
         assert_eq!(back.state(), LoadState::Loaded { from: 1 });
+    }
+
+    #[test]
+    fn the_wake_hook_says_when_the_next_tick_is_due() {
+        let store = mem();
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut s = Settings::load(store.clone(), "s.json", &[]).with_debounce(100 * MS);
+        let a = Arc::clone(&asked);
+        s.set_wake(move |d| a.lock().unwrap().push(d));
+        assert!(!s.tick(Duration::ZERO).unwrap());
+        assert!(asked.lock().unwrap().is_empty(), "nothing pending, nothing asked");
+        s.set("a", &1).unwrap();
+        assert_eq!(*asked.lock().unwrap(), vec![100 * MS], "a change asks for a tick after the debounce");
+        assert!(!s.tick(10 * MS).unwrap());
+        assert!(!s.tick(40 * MS).unwrap());
+        assert_eq!(asked.lock().unwrap()[1..], [100 * MS, 70 * MS], "each tick asks for the time left");
+        // driving ticks only when asked saves on time
+        assert!(s.tick(110 * MS).unwrap());
+        assert!(store.read("s.json").is_some());
+        let n = asked.lock().unwrap().len();
+        assert!(!s.tick(500 * MS).unwrap());
+        assert_eq!(asked.lock().unwrap().len(), n, "a clean tick asks for nothing");
+        // a panicking hook is contained
+        s.set_wake(|_| panic!("hook"));
+        s.set("a", &2).unwrap();
+        assert!(s.is_dirty());
     }
 
     #[test]

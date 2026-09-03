@@ -35,8 +35,8 @@ fn spec(infos: &[CommandInfo]) -> MenuSpec {
 impl NativeMenu {
     /// Install the bar (main thread). `None` when the platform refuses; the in-window bar stays.
     pub fn install(infos: &[CommandInfo], ctx: &egui::Context) -> Option<NativeMenu> {
-        let wake = ctx.clone();
-        match NativeMenuBar::install(&spec(infos), std::sync::Arc::new(move || wake.request_repaint())) {
+        let wake = ashlar_ui::wake::waker(ctx, ashlar_ui::wake::Reason::MENU);
+        match NativeMenuBar::install(&spec(infos), std::sync::Arc::new(move || wake.wake())) {
             Ok(bar) => Some(NativeMenu { bar }),
             Err(e) => {
                 log::warn!("native menu bar unavailable, using the in-window one: {e}");
