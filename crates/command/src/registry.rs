@@ -6,11 +6,29 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
-use crate::{CommandError, CommandInfo, CommandSpec, Dispatch, Host, params, shortcut};
+use crate::{CommandError, CommandInfo, CommandSpec, Dispatch, ExecError, Host, Params, params, shortcut};
 
 /// Commands may run other commands up to this depth; deeper calls are refused (a command that
 /// calls itself, directly or through others, cannot overflow the stack).
 pub const MAX_DEPTH: usize = 64;
+
+/// Which declarations [`Registry::execute`] checks params against before [`Host::enabled_for`]
+/// (set with [`Registry::with_validation`]). Whatever the policy, [`Host::validate`] runs at the
+/// same step, and [`Registry::validate`] stays available for checking on demand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Validation {
+    /// Every declaration: typed params fully, legacy text docs loosely (keys the doc clearly does
+    /// not mention, non-object params). The default.
+    #[default]
+    Strict,
+    /// Only typed declarations ([`Params::Typed`], [`Params::Static`]); legacy text docs and
+    /// [`Params::None`] accept anything. For a table whose text docs are descriptions, not contracts.
+    TypedOnly,
+    /// None at the chokepoint: a call goes straight to [`Host::enabled_for`], so a disabled
+    /// command reports `Disabled` whatever its params. The host validates where it wants to
+    /// ([`Host::validate`], or [`Registry::validate`] from its own code).
+    Off,
+}
 
 /// The command table of one app. Immutable once built (a `static` is typical); the execution state
 /// lives in the host's [`crate::Journal`].
@@ -20,6 +38,7 @@ pub struct Registry<S: Host> {
     common: &'static [&'static str],
     aliases: &'static [(&'static str, &'static str)],
     schemas: OnceLock<Vec<Value>>,
+    validation: Validation,
 }
 
 impl<S: Host> Registry<S> {
@@ -29,7 +48,7 @@ impl<S: Host> Registry<S> {
         for (i, c) in specs.iter().enumerate() {
             index.entry(c.id).or_insert(i);
         }
-        Self { specs, index, common: &[], aliases: &[], schemas: OnceLock::new() }
+        Self { specs, index, common: &[], aliases: &[], schemas: OnceLock::new(), validation: Validation::Strict }
     }
 
     /// Keys every command accepts on top of its own (document targeting, gesture merging…).
@@ -42,6 +61,16 @@ impl<S: Host> Registry<S> {
     pub fn with_param_aliases(mut self, aliases: &'static [(&'static str, &'static str)]) -> Self {
         self.aliases = aliases;
         self
+    }
+
+    /// Where the chokepoint validates params (default [`Validation::Strict`]).
+    pub fn with_validation(mut self, validation: Validation) -> Self {
+        self.validation = validation;
+        self
+    }
+
+    pub fn validation(&self) -> Validation {
+        self.validation
     }
 
     pub fn find(&self, id: &str) -> Option<&CommandSpec<S>> {
@@ -107,7 +136,38 @@ impl<S: Host> Registry<S> {
 
     /// The one chokepoint every caller goes through (UI, menus, palette, shortcuts, CLI, control
     /// port, MCP, and commands running other commands). See [`Host`] for the order of steps.
+    /// Host errors come back converted into [`CommandError`]; [`Registry::execute_host`] keeps them.
     pub fn execute(&self, state: &mut S, id: &str, params: Value) -> Result<Value, CommandError> {
+        let converted = |e: S::Error| {
+            let e = e.into().or_id(id);
+            (e.clone(), e)
+        };
+        self.chokepoint(state, id, params, converted).map_err(|e| match e {
+            ExecError::Command(e) | ExecError::Host(e) => e,
+        })
+    }
+
+    /// [`Registry::execute`] for a host whose callers match on its own error type: an error a
+    /// command body returned comes back unchanged as [`ExecError::Host`]; a refusal or failure of
+    /// the chokepoint itself (unknown, too deep, `before`, validation, disabled, panic) is
+    /// [`ExecError::Command`]. Same steps and hooks; [`Host::after`] still sees the error converted
+    /// into a `CommandError` (hence `Clone`: the original is kept for the caller).
+    pub fn execute_host(&self, state: &mut S, id: &str, params: Value) -> Result<Value, ExecError<S::Error>>
+    where
+        S::Error: Clone,
+    {
+        self.chokepoint(state, id, params, |e: S::Error| (e.clone().into().or_id(id), e))
+    }
+
+    /// The steps of [`Host`]. `host_error` turns an error a body returned into what `after` sees
+    /// and what the caller gets.
+    fn chokepoint<E>(
+        &self,
+        state: &mut S,
+        id: &str,
+        params: Value,
+        host_error: impl FnOnce(S::Error) -> (CommandError, E),
+    ) -> Result<Value, ExecError<E>> {
         let depth = state.journal().depth();
         let Some(spec) = self.find(id) else {
             return reject(state, id, CommandError::Unknown { id: id.to_string() }, depth);
@@ -120,8 +180,11 @@ impl<S: Host> Registry<S> {
         if let Err(e) = state.before(spec, &mut params, depth) {
             return reject(state, id, e.or_id(id), depth);
         }
-        if let Err(e) = self.validate(spec, &params) {
+        if let Err(e) = self.validate_by_policy(spec, &params) {
             return reject(state, id, e, depth);
+        }
+        if let Err(e) = state.validate(spec, &params, depth) {
+            return reject(state, id, e.or_id(id), depth);
         }
         if let Err(reason) = state.enabled_for(spec, &params) {
             return reject(state, id, CommandError::Disabled { id: id.to_string(), reason }, depth);
@@ -132,9 +195,15 @@ impl<S: Host> Registry<S> {
         let run = catch_unwind(AssertUnwindSafe(|| (spec.run)(state, &params)));
         // set, not decrement: a nested call that went wrong cannot leave the depth off by one
         state.journal().set_depth(depth);
+        // `after` sees a `CommandError`; the caller gets the host's own error when there is one
+        let mut kept = None;
         let result = match run {
             Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) => Err(e.into().or_id(id)),
+            Ok(Err(e)) => {
+                let (seen, host) = host_error(e);
+                kept = Some(host);
+                Err(seen)
+            }
             Err(_) => Err(CommandError::Panicked { id: id.to_string() }),
         };
         state.after(spec, &params, &result, depth);
@@ -143,7 +212,14 @@ impl<S: Host> Registry<S> {
             state.scrub(id, &mut params);
             state.journal().push(id, params);
         }
-        result
+        result.map_err(|e| kept.map_or(ExecError::Command(e), ExecError::Host))
+    }
+
+    fn validate_by_policy(&self, spec: &CommandSpec<S>, params: &Value) -> Result<(), CommandError> {
+        match (self.validation, &spec.params) {
+            (Validation::Strict, _) | (Validation::TypedOnly, Params::Typed(_) | Params::Static(_)) => self.validate(spec, params),
+            (Validation::TypedOnly | Validation::Off, _) => Ok(()),
+        }
     }
 
     /// Bind the table to a state: a [`Dispatch`] for discovery and execution.
@@ -152,9 +228,9 @@ impl<S: Host> Registry<S> {
     }
 }
 
-fn reject<S: Host>(state: &mut S, id: &str, e: CommandError, depth: usize) -> Result<Value, CommandError> {
+fn reject<S: Host, E>(state: &mut S, id: &str, e: CommandError, depth: usize) -> Result<Value, ExecError<E>> {
     state.rejected(id, &e, depth);
-    Err(e)
+    Err(ExecError::Command(e))
 }
 
 /// A registry bound to one state: what control port, MCP and CLI drive through [`Dispatch`].

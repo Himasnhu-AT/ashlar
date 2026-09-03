@@ -63,7 +63,10 @@ impl Journal {
         self.depth
     }
 
-    pub(crate) fn set_depth(&mut self, depth: usize) {
+    /// Set the nesting depth. [`crate::Registry::execute`] does this around every command; a host
+    /// sets it only to run a command from one of its hooks as nested (see [`crate::Host`]), and
+    /// puts the old value back afterwards.
+    pub fn set_depth(&mut self, depth: usize) {
         self.depth = depth;
     }
 
@@ -106,6 +109,22 @@ impl Journal {
     /// The sequence number the next recorded entry gets.
     pub fn next_seq(&self) -> u64 {
         self.next_seq
+    }
+
+    /// Keep only the first `len` entries (drop the newest; e.g. calls undone and then replaced).
+    /// Sequence numbers already handed out are not reused.
+    pub fn truncate(&mut self, len: usize) {
+        self.entries.truncate(len);
+    }
+
+    /// Keep only the entries `keep` returns true for, in order.
+    pub fn retain(&mut self, mut keep: impl FnMut(&JournalEntry) -> bool) {
+        self.entries.retain(|e| keep(e));
+    }
+
+    /// Remove and return the newest entry.
+    pub fn pop(&mut self) -> Option<JournalEntry> {
+        self.entries.pop_back()
     }
 
     pub fn clear(&mut self) {

@@ -28,6 +28,45 @@ pub enum CommandError {
     Panicked { id: String },
 }
 
+/// Why a call through [`Registry::execute_host`] failed: the chokepoint refused or lost it
+/// (`Command`: unknown, too deeply nested, [`Host::before`], validation, disabled, panicked), or
+/// the command body returned the host's own error (`Host`, unchanged, as callers match on it).
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum ExecError<E> {
+    #[error(transparent)]
+    Command(CommandError),
+    #[error("{0}")]
+    Host(E),
+}
+
+impl<E> ExecError<E> {
+    /// The host's error, when the command body returned one.
+    pub fn host(&self) -> Option<&E> {
+        match self {
+            Self::Host(e) => Some(e),
+            Self::Command(_) => None,
+        }
+    }
+    /// The chokepoint's error, when the call never ran or panicked.
+    pub fn command(&self) -> Option<&CommandError> {
+        match self {
+            Self::Command(e) => Some(e),
+            Self::Host(_) => None,
+        }
+    }
+}
+
+impl<E: Into<CommandError>> ExecError<E> {
+    /// Everything as a [`CommandError`], as [`Registry::execute`] returns it (`command` fills in an
+    /// empty id).
+    pub fn into_command(self, command: &str) -> CommandError {
+        match self {
+            Self::Command(e) => e,
+            Self::Host(e) => e.into().or_id(command),
+        }
+    }
+}
+
 /// CONTRACT: the kind of one typed parameter. Maps 1:1 onto JSON Schema.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -117,7 +156,7 @@ pub use journal::{Journal, JournalEntry};
 pub use keymap::Keymap;
 pub use legacy::accepted_params;
 pub use params::{Kind, Param, params_schema, validate_params};
-pub use registry::{Bound, MAX_DEPTH, Registry};
+pub use registry::{Bound, MAX_DEPTH, Registry, Validation};
 
 impl CommandError {
     /// The command the error is about.
@@ -220,12 +259,18 @@ impl<S: Host> CommandSpec<S> {
 /// The host state commands run on, and the hooks the chokepoint calls around every command.
 ///
 /// [`Registry::execute`] runs, in order: lookup → [`Host::before`] (may rewrite params) → parameter
-/// validation → [`Host::enabled_for`] → the command under `catch_unwind` → [`Host::after`] →
+/// validation (the registry's [`Validation`] policy, then [`Host::validate`]) → [`Host::enabled_for`] → the command under `catch_unwind` → [`Host::after`] →
 /// journal (mutating commands that succeeded, params passed through [`Host::scrub`]). A call that
 /// is turned away before it runs goes to [`Host::rejected`] instead of `after`.
 ///
 /// `depth` is 0 for a call from outside (UI, CLI, agent) and grows by one for each command run
 /// from inside another command; hooks use it to log or sync only once per top-level call.
+///
+/// The chokepoint keeps `depth` itself, including for commands a body runs through
+/// `Registry::execute`. A host touches it ([`Journal::set_depth`]) only to run a command from a
+/// hook, where the chokepoint has already put the depth back to the caller's: to make that command
+/// count as nested in the current call (not journaled as top-level, not logged twice), save
+/// [`Journal::depth`], set it one higher, execute, and set the saved value back.
 ///
 /// Mutable execution state (nesting depth, the journal) lives in a [`Journal`] the host owns, so
 /// one `Registry` (often a `static`) serves any number of documents/sessions.
@@ -237,6 +282,13 @@ pub trait Host: Sized {
     fn journal(&mut self) -> &mut Journal;
     /// Rewrite params before validation (resolve names to ids, settle an ongoing gesture…).
     fn before(&mut self, _spec: &CommandSpec<Self>, _params: &mut Value, _depth: usize) -> Result<(), CommandError> {
+        Ok(())
+    }
+    /// Extra parameter checks after the registry's [`Validation`] policy and before
+    /// [`Host::enabled_for`] (an `Err` is refused and goes to [`Host::rejected`]). With
+    /// [`Validation::Off`] this is where a host validates when it wants to, e.g. only at depth 0
+    /// or only for agent calls. Default: nothing.
+    fn validate(&mut self, _spec: &CommandSpec<Self>, _params: &Value, _depth: usize) -> Result<(), CommandError> {
         Ok(())
     }
     /// Enabled check for one call; override when explicit targets in params change availability
