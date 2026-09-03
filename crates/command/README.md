@@ -37,13 +37,21 @@ an app's `Result` alias port unchanged.
 1. lookup (hash index; `Unknown`)
 2. nesting limit (`MAX_DEPTH` = 64)
 3. `Host::before`: may rewrite params (resolve names to ids, settle an ongoing gesture)
-4. parameter validation (`BadParams`, every problem in one message)
+4. parameter validation (`BadParams`, every problem in one message): the registry's policy
+   (`Registry::with_validation(Validation::Strict | TypedOnly | Off)`, default `Strict`), then the
+   `Host::validate` hook (default: nothing). With `Off`, a disabled command reports `Disabled`
+   whatever its params, and the host validates where it wants (the hook, or `Registry::validate`)
 5. `Host::enabled_for` (default: the spec's predicate; override to check targets named in params)
 6. the command under `catch_unwind` (a panic becomes `Panicked`, the app keeps running)
 7. `Host::after` (every run, ok or not, at every depth: sync persistence, log errors at depth 0…)
 8. journal: mutating commands that succeeded, params passed through `Host::scrub` first
 
 A call refused in steps 1–5 goes to `Host::rejected` instead of `after`.
+
+`execute` converts a body's error into `CommandError`. A host whose callers match on its own error
+type uses `Registry::execute_host` (needs `Host::Error: Clone`): `Err(ExecError::Host(e))` is the
+body's error unchanged, `Err(ExecError::Command(e))` the chokepoint's own refusal or a panic;
+`ExecError::into_command(id)` gives what `execute` would have returned.
 
 **Where the execution state lives.** The registry is immutable and usually a `static`. The mutable
 part (current nesting depth and the journal) is a `Journal` the host owns and hands out through
@@ -53,6 +61,10 @@ hook gets `depth` (0 = called from outside), so a host can log or sync once per 
 
 The journal is a capped ring (10,000 entries, the oldest 1,000 dropped at once). By default only
 top-level calls are recorded; `Journal::new().record_nested(true)` records nested calls too.
+`len`, `entries`, `since`, `truncate`, `retain` and `pop` let the host keep it in step with its
+undo history. The chokepoint manages `depth()` itself; a host calls `Journal::set_depth` only to
+run a command from one of its hooks as part of the current call (save the depth, set it one
+higher, execute, restore).
 
 ## Parameters
 

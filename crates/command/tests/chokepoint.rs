@@ -6,12 +6,12 @@
 
 use std::sync::LazyLock;
 
-use ashlar_command::{CommandError, CommandSpec, Dispatch, Host, Journal, MAX_DEPTH, Registry, always, cmd, query};
+use ashlar_command::{CommandError, CommandSpec, Dispatch, ExecError, Host, Journal, MAX_DEPTH, Param, Registry, Validation, always, cmd, query};
 use serde_json::{Value, json};
 
 // ---------- the app's own error and result, as before the port ----------
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 enum EngineError {
     NoSequence,
     Bad(String),
@@ -52,6 +52,8 @@ struct Session {
     graphics_synced: usize,
     trim_active: bool,
     trim_commits: Vec<String>,
+    /// validate params in the `Host::validate` hook, top-level calls only
+    validate_top_level: bool,
 }
 
 fn session() -> Session {
@@ -165,6 +167,7 @@ fn build() -> Vec<CommandSpec<Session>> {
             })?;
             Ok(Value::Null)
         }),
+        cmd!("clip.speed", "Speed…", ["Clip"], None, [Param::int_in("percent", 1, 1000).required()], has_selection, |_, _| Ok(Value::Null)),
         cmd!("graphics.bringToFront", "Bring to Front", ["Graphics", "Arrange"], Some("Cmd+Shift+]"), "{}", has_selection, |_, _| Ok(Value::Null)),
         cmd!("prefs.setApiKey", "Set API Key", [], None, r#"{"key":str}"#, always, |s, p| {
             s.api_key = str_p(p, "key").map(str::to_string);
@@ -194,6 +197,11 @@ fn build() -> Vec<CommandSpec<Session>> {
 }
 
 static REGISTRY: LazyLock<Registry<Session>> = LazyLock::new(|| Registry::new(build()).with_common_params(&["sequence"]));
+/// The same table the way the editor runs it: no validation at the chokepoint.
+static UNCHECKED: LazyLock<Registry<Session>> =
+    LazyLock::new(|| Registry::new(build()).with_common_params(&["sequence"]).with_validation(Validation::Off));
+static TYPED_ONLY: LazyLock<Registry<Session>> =
+    LazyLock::new(|| Registry::new(build()).with_common_params(&["sequence"]).with_validation(Validation::TypedOnly));
 
 impl Host for Session {
     type Error = EngineError;
@@ -219,6 +227,10 @@ impl Host for Session {
             params["clip"] = json!(id);
         }
         Ok(())
+    }
+
+    fn validate(&mut self, spec: &CommandSpec<Self>, params: &Value, depth: usize) -> std::result::Result<(), CommandError> {
+        if self.validate_top_level && depth == 0 { REGISTRY.validate(spec, params) } else { Ok(()) }
     }
 
     fn enabled_for(&mut self, spec: &CommandSpec<Self>, params: &Value) -> std::result::Result<(), String> {
@@ -471,4 +483,113 @@ fn top_level_only_journal_by_default() {
     run(&mut s, "edit.cut", json!({})).unwrap();
     let ids: Vec<&str> = s.journal.entries().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, ["edit.selectAll", "edit.cut"]);
+}
+
+#[test]
+fn validation_off_reports_disabled_and_lets_undocumented_keys_through() {
+    assert_eq!(UNCHECKED.validation(), Validation::Off);
+    assert_eq!(REGISTRY.validation(), Validation::Strict);
+    let mut s = session();
+    s.sequence_open = false;
+    // explicit targets on a command documented `{}`: strict refuses the key first…
+    assert!(matches!(run(&mut s, "graphics.bringToFront", json!({"clips": [1]})), Err(CommandError::BadParams { .. })));
+    // …the editor's chokepoint says why the command cannot run
+    let e = UNCHECKED.execute(&mut s, "graphics.bringToFront", json!({"clips": [1]})).unwrap_err();
+    assert_eq!(e, CommandError::Disabled { id: "graphics.bringToFront".into(), reason: "no sequence is open".into() });
+    assert_eq!(s.log.last().unwrap().0, "warning");
+    // undocumented keys from an agent run; typed params are not checked either
+    assert!(UNCHECKED.execute(&mut s, "file.newProject", json!({"name": "A", "nmae": "B"})).is_ok());
+    assert_eq!(s.project_name, "A");
+    s.sequence_open = true;
+    s.selection = vec![1];
+    assert!(UNCHECKED.execute(&mut s, "clip.speed", json!({"percent": 0})).is_ok());
+}
+
+#[test]
+fn typed_only_checks_typed_declarations_and_trusts_text_docs() {
+    let mut s = session();
+    s.selection = vec![1];
+    let e = TYPED_ONLY.execute(&mut s, "clip.speed", json!({"percent": 0})).unwrap_err();
+    assert!(matches!(&e, CommandError::BadParams { msg, .. } if msg.contains("at least 1")), "{e:?}");
+    assert_eq!(TYPED_ONLY.execute(&mut s, "clip.speed", json!({"percent": 50})), Ok(Value::Null));
+    assert!(TYPED_ONLY.execute(&mut s, "file.newProject", json!({"name": "A", "nmae": "B"})).is_ok());
+    assert!(TYPED_ONLY.execute(&mut s, "edit.selectAll", json!({"all": true})).is_ok());
+}
+
+#[test]
+fn the_host_validate_hook_checks_where_the_host_wants() {
+    let mut s = session();
+    s.validate_top_level = true;
+    let syncs = s.syncs;
+    // top level: refused by the hook, as `rejected`, with the command id filled in
+    let e = UNCHECKED.execute(&mut s, "file.newProject", json!({"name": "A", "nmae": "B"})).unwrap_err();
+    assert!(matches!(&e, CommandError::BadParams { id, .. } if id == "file.newProject"), "{e:?}");
+    assert_eq!(s.syncs, syncs);
+    // nested: not checked (cut passes its targets on unchanged)
+    run(&mut s, "edit.selectAll", json!({})).unwrap();
+    assert!(UNCHECKED.execute(&mut s, "edit.cut", json!({})).is_ok());
+}
+
+#[test]
+fn execute_host_keeps_the_hosts_error_variant() {
+    let mut s = session();
+    s.sequence_open = false;
+    let r = REGISTRY.execute_host(&mut s, "sequence.nudge", Value::Null);
+    assert_eq!(r, Err(ExecError::Host(EngineError::NoSequence)));
+    // `after` still saw it, converted and with its id, and logged it at the top level
+    assert_eq!(s.log.last().unwrap(), &("error", "sequence.nudge".to_string(), "no sequence is open".to_string()));
+    let r = REGISTRY.execute_host(&mut s, "prefs.get", json!({"key": "x"}));
+    assert!(matches!(r, Err(ExecError::Host(EngineError::Bad(ref m))) if m == "unknown preference `x`"), "{r:?}");
+    assert_eq!(r.unwrap_err().into_command("prefs.get"), CommandError::bad_params("prefs.get", "unknown preference `x`"));
+    // the chokepoint's own refusals and failures are told apart
+    let r = REGISTRY.execute_host(&mut s, "no.such", json!({}));
+    assert_eq!(r, Err(ExecError::Command(CommandError::Unknown { id: "no.such".into() })));
+    let r = REGISTRY.execute_host(&mut s, "sequence.close", json!({}));
+    assert!(matches!(r, Err(ExecError::Command(CommandError::Disabled { .. }))), "{r:?}");
+    let r = REGISTRY.execute_host(&mut s, "file.newProject", json!({"nmae": 1}));
+    assert!(r.as_ref().unwrap_err().command().is_some_and(|e| matches!(e, CommandError::BadParams { .. })), "{r:?}");
+    // success: same value and journal entry as `execute`
+    s.sequence_open = true;
+    assert_eq!(REGISTRY.execute_host(&mut s, "edit.selectAll", json!({})), Ok(json!({"selected": 2})));
+    assert_eq!(s.journal.last().unwrap().id, "edit.selectAll");
+    let r = REGISTRY.execute_host(&mut s, "debug.panic", json!({}));
+    assert_eq!(r, Err(ExecError::Command(CommandError::Panicked { id: "debug.panic".into() })));
+    assert!(r.unwrap_err().host().is_none());
+    assert_eq!(s.journal.depth(), 0);
+}
+
+#[test]
+fn journal_truncate_retain_pop() {
+    let mut s = session();
+    for name in ["a", "b", "c", "d"] {
+        run(&mut s, "file.newProject", json!({"name": name})).unwrap();
+    }
+    assert_eq!(s.journal.len(), 4);
+    let seq = s.journal.next_seq();
+    // undo two, then a new edit replaces them
+    s.journal.truncate(2);
+    let names: Vec<&Value> = s.journal.entries().map(|e| &e.params["name"]).collect();
+    assert_eq!(names, [&json!("a"), &json!("b")]);
+    run(&mut s, "file.newProject", json!({"name": "e"})).unwrap();
+    assert_eq!(s.journal.last().unwrap().seq, seq, "sequence numbers are not reused");
+    s.journal.truncate(99);
+    assert_eq!(s.journal.len(), 3);
+    s.journal.retain(|e| e.params["name"] != "b");
+    assert_eq!(s.journal.entries().map(|e| e.params["name"].as_str().unwrap()).collect::<Vec<_>>(), ["a", "e"]);
+    assert_eq!(s.journal.pop().unwrap().params["name"], "e");
+    assert_eq!(s.journal.len(), 1);
+}
+
+#[test]
+fn a_command_run_from_a_hook_counts_as_nested_when_the_host_sets_the_depth() {
+    let mut s = session();
+    s.journal = Journal::new(); // top-level calls only
+    // what a host does inside `after` to run a follow-up command as part of the current call
+    let saved = s.journal.depth();
+    s.journal.set_depth(saved + 1);
+    run(&mut s, "edit.selectAll", json!({})).unwrap();
+    s.journal.set_depth(saved);
+    assert!(s.journal.is_empty(), "nested calls are not journaled by this host");
+    run(&mut s, "edit.selectAll", json!({})).unwrap();
+    assert_eq!(s.journal.len(), 1);
 }
