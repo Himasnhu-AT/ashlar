@@ -144,7 +144,7 @@ impl Subprocess {
             Err(e) => return Reply::err(e),
         };
         let line = json!({"id": id, "method": method, "params": params}).to_string();
-        let sent = writeln!(r.stdin, "{line}").and_then(|()| r.stdin.flush());
+        let sent = r.stdin.write_all(format!("{line}\n").as_bytes()).and_then(|()| r.stdin.flush());
         let outcome = match sent {
             Err(e) => Err(format!("the worker {program} is gone ({e})")),
             Ok(()) => loop {

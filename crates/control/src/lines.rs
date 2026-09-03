@@ -146,7 +146,13 @@ pub(crate) fn serve_lines<S: Source, W: Write>(
     let mut authorised = false;
     // The key an `auth` request gave this connection.
     let mut conn_key: Option<String> = None;
-    let send = |out: &mut W, v: Value| writeln!(out, "{v}").and_then(|()| out.flush()).is_ok();
+    // One write per reply: `writeln!` with serde_json's Display would issue a syscall (and, with
+    // TCP_NODELAY, a packet) per fragment — a 180 KB reply took ~180 ms instead of ~1 ms.
+    let send = |out: &mut W, v: Value| {
+        let mut line = v.to_string();
+        line.push('\n');
+        out.write_all(line.as_bytes()).and_then(|()| out.flush()).is_ok()
+    };
     loop {
         let (id, key, method, params) = match read_bounded_line(reader, &mut buf, max_line) {
             Ok(false) | Err(ReadError::Io) => return,

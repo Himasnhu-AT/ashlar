@@ -162,7 +162,7 @@ fn accept_loop(listener: TcpListener, ctx: Ctx, stop: &AtomicBool, conns: &Arc<M
         // the thread can't be started (the closure, and with it the guard, is dropped).
         let Some(slot) = slot else {
             let _ = stream.set_write_timeout(Some(Duration::from_millis(200)));
-            let _ = writeln!(stream, "{}", Reply::err("too many control connections").to_json(None));
+            let _ = stream.write_all(format!("{}\n", Reply::err("too many control connections").to_json(None)).as_bytes());
             continue;
         };
         let ctx = ctx.clone();
