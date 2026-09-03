@@ -19,3 +19,7 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
 - ashlar-ui components (toasts, status_bar, printing, keymap editor) still call `request_repaint` directly → route through
   `ashlar_ui::wake` with proper reasons and extend the wake source scan to crates/ui.
 - `FormatError::Corrupt(String)` has no structured `JsonError` detail (tuple variant; change at next breaking release).
+- ashlar-mcp gaps before a large app can drop rmcp: `notifications/progress`, `notifications/cancelled`,
+  answering `ping` while a call runs (server is synchronous), resources (+ cache hints), destructive/idempotent
+  tool annotations (only read-only today), app-defined custom tools beyond the command vocabulary.
+- ashlar-control: optional public `KeyFile` constructor / configurable key path.
