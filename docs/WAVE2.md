@@ -23,3 +23,5 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
   answering `ping` while a call runs (server is synchronous), resources (+ cache hints), destructive/idempotent
   tool annotations (only read-only today), app-defined custom tools beyond the command vocabulary.
 - ashlar-control: optional public `KeyFile` constructor / configurable key path.
+- ashlar-command: let `Host::before` return `S::Error` through `execute_host` (an `ExecError::Host` path for
+  before-hook errors), so hosts need no side stash to keep their error variant.
