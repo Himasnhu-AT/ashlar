@@ -14,3 +14,8 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
 - History branch switching only from the fork state (no goto-any-node).
 - Undo history and telemetry are host concerns: ashlar-app's host glues `Registry::execute` to `Store`
   (one undo step per mutating top-level command) and to tracer.
+
+## Open after wave 2
+- ashlar-ui components (toasts, status_bar, printing, keymap editor) still call `request_repaint` directly → route through
+  `ashlar_ui::wake` with proper reasons and extend the wake source scan to crates/ui.
+- `FormatError::Corrupt(String)` has no structured `JsonError` detail (tuple variant; change at next breaking release).
