@@ -58,6 +58,10 @@ pub struct Element {
     /// Selected or checked state, when the element has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
+    /// The egui widget this element was registered from (its `Id` value), when known: lets the
+    /// debugger ([`crate::devtools`]) merge it with egui's own AccessKit node for the widget.
+    #[serde(skip)]
+    pub egui_id: Option<u64>,
 }
 
 impl Element {
@@ -162,7 +166,7 @@ pub fn set_enabled(ctx: &egui::Context, enabled: bool) {
     with_registry(ctx, |r| r.disabled = !enabled);
 }
 
-fn record(ui: &Ui, rect: Rect, id: std::fmt::Arguments<'_>, label: &str, role: Role, enabled: bool, details: Details<'_>) {
+fn record(ui: &Ui, rect: Rect, egui_id: Option<egui::Id>, id: std::fmt::Arguments<'_>, label: &str, role: Role, enabled: bool, details: Details<'_>) {
     let visible = rect.intersect(ui.clip_rect());
     if !visible.is_positive() || !visible.is_finite() {
         return;
@@ -184,22 +188,23 @@ fn record(ui: &Ui, rect: Rect, id: std::fmt::Arguments<'_>, label: &str, role: R
             e.value.push_str(v);
         }
         e.selected = details.selected;
+        e.egui_id = egui_id.map(|i| i.value());
     });
 }
 
 /// Register a widget's response under `id`.
 pub fn register(ui: &Ui, response: &Response, id: &str, label: &str, role: Role) {
-    record(ui, response.rect, format_args!("{id}"), label, role, response.enabled(), Details::default());
+    record(ui, response.rect, Some(response.id), format_args!("{id}"), label, role, response.enabled(), Details::default());
 }
 
 /// Register with a value or selection state.
 pub fn register_with(ui: &Ui, response: &Response, id: &str, label: &str, role: Role, details: Details<'_>) {
-    record(ui, response.rect, format_args!("{id}"), label, role, response.enabled(), details);
+    record(ui, response.rect, Some(response.id), format_args!("{id}"), label, role, response.enabled(), details);
 }
 
 /// Register a formatted id (`format_args!("{list}.row.{i}")`) without allocating a `String`.
 pub fn register_fmt(ui: &Ui, rect: Rect, id: std::fmt::Arguments<'_>, label: &str, role: Role, enabled: bool, details: Details<'_>) {
-    record(ui, rect, id, label, role, enabled, details);
+    record(ui, rect, None, id, label, role, enabled, details);
 }
 
 /// Elements of the last completed pass (what `ui.inspect` reports).
