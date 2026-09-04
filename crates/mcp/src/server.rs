@@ -274,10 +274,24 @@ impl McpServer {
                 None => ToolResult::error("execute needs a string `command`"),
             },
             "batch" => ToolResult::from_reply(self.call("engine.batch", args)),
-            "screenshot" => tools::screenshot_result(self.call("ui.screenshot", args)),
+            "screenshot" => match tools::normalize_targets(args) {
+                Ok(a) => tools::screenshot_result(self.call("ui.screenshot", a)),
+                Err(e) => ToolResult::error(e),
+            },
+            "ui_snapshot" => match tools::normalize_targets(args) {
+                Ok(mut a) => {
+                    // `elements` shapes the tool result; the app is not asked for it.
+                    let with_elements = a.as_object_mut().and_then(|o| o.remove("elements")).and_then(|v| v.as_bool()).unwrap_or(false);
+                    tools::snapshot_result(self.call("ui.snapshot", a), with_elements)
+                }
+                Err(e) => ToolResult::error(e),
+            },
             other => {
                 if let Some(method) = tools::ui_method(other) {
-                    ToolResult::from_reply(self.call(method, args))
+                    match tools::normalize_targets(args) {
+                        Ok(a) => ToolResult::from_reply(self.call(method, a)),
+                        Err(e) => ToolResult::error(e),
+                    }
                 } else if let Some(id) = self.command_for_tool(other) {
                     ToolResult::from_reply(self.call("engine.execute", json!({"command": id, "params": args})))
                 } else {

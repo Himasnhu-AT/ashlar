@@ -22,7 +22,7 @@ mod server;
 
 pub use client::{Client, MAX_REPLY};
 pub use lines::{DEFAULT_MAX_LINE, serve_stream};
-pub use methods::{AppInfo, MAX_BATCH, NoUi, STANDARD_METHODS, UI_METHODS, UiHandler, answer, handle, matches_query};
+pub use methods::{AppInfo, DEBUG_METHODS, MAX_BATCH, NoUi, STANDARD_METHODS, UI_METHODS, UiHandler, answer, handle, matches_query};
 pub use protocol::{PROTOCOL_VERSION, Reply, Request};
 pub use server::{Config, Server, Wake};
 

@@ -330,6 +330,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-debug"
+version = "0.1.0"
+dependencies = [
+ "ashlar-command",
+ "ashlar-control",
+ "ashlar-mcp",
+ "base64 0.22.1",
+ "directories",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ashlar-example-gallery"
 version = "0.1.0"
 dependencies = [
@@ -346,7 +360,9 @@ name = "ashlar-example-notes"
 version = "0.1.0"
 dependencies = [
  "ashlar",
+ "ashlar-debug",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 

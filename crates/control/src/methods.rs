@@ -16,6 +16,23 @@ pub const STANDARD_METHODS: &[&str] = &["app.ping", "app.version", "engine.comma
 pub const UI_METHODS: &[&str] =
     &["ui.inspect", "ui.click", "ui.drag", "ui.scroll", "ui.key", "ui.type", "ui.screenshot", "ui.menu.list", "ui.menu.invoke", "ui.set", "app.quit"];
 
+/// The debugger vocabulary (element snapshots with refs, actions on targets, waits; see
+/// `docs/control-protocol.md`). Not part of [`UI_METHODS`]: a [`UiHandler`] reports each one only
+/// once it answers it, so clients never list a tool the app cannot serve.
+pub const DEBUG_METHODS: &[&str] = &[
+    "ui.snapshot",
+    "ui.hover",
+    "ui.focus",
+    "ui.fill",
+    "ui.press",
+    "ui.scroll_into_view",
+    "ui.get",
+    "ui.wait",
+    "ui.highlight",
+    "devtools.toggle",
+    "devtools.state",
+];
+
 /// Most steps one `engine.batch` may hold.
 pub const MAX_BATCH: usize = 10_000;
 

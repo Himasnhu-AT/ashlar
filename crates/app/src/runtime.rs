@@ -406,9 +406,11 @@ impl<D: Document> Runtime<D> {
             }
         }
         let port = self.launch.control_port.or(self.shared.control_port);
-        if let (Some(port), Some(dirs)) = (port, &self.shared.dirs) {
+        // A launcher may say where the key goes (`ashlar-debug open`); otherwise the settings folder.
+        let key_dir = ashlar_control::key::key_dir_from_env().or_else(|| self.shared.dirs.as_ref().map(|d| d.config.clone()));
+        if let (Some(port), Some(key_dir)) = (port, key_dir) {
             let w = wake::waker(ctx, Reason::CONTROL);
-            match Server::start(ashlar_control::Config::new(port, dirs.config.clone()), move || w.wake()) {
+            match Server::start(ashlar_control::Config::new(port, key_dir), move || w.wake()) {
                 Ok((server, rx)) => {
                     self.control = Some((server, rx));
                 }

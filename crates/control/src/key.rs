@@ -6,6 +6,16 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// A launcher (`ashlar-debug open`, a test harness) that starts an app with `--control <port>` sets
+/// this to the folder the app must write its key to, so it can read the key back without knowing
+/// the app's settings folder.
+pub const KEY_DIR_ENV: &str = "ASHLAR_CONTROL_KEY_DIR";
+
+/// The key folder a launcher asked for ([`KEY_DIR_ENV`]), if any.
+pub fn key_dir_from_env() -> Option<PathBuf> {
+    std::env::var_os(KEY_DIR_ENV).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
 /// The `instance-id=` value of a `/.flatpak-info` file, only when it is `[A-Za-z0-9_-]+` (it
 /// becomes part of a file name).
 pub fn parse_instance_id(info: &str) -> Option<String> {

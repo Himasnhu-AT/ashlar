@@ -102,38 +102,86 @@ pub fn core_tools() -> Vec<Value> {
     ]
 }
 
+/// The schema of an element target: a ref string from `ui_snapshot` or an object.
+fn target_schema(what: &str) -> Value {
+    json!({
+        "description": format!("{what}: \"@e3\" (a ref from ui_snapshot), \"id=<automation id>\", \"text=<label>\", or an object {{ref}} | {{id}} | {{text, role?}} | {{x, y}} (window points)"),
+        "anyOf": [
+            {"type": "string"},
+            {"type": "object", "properties": {
+                "ref": {"type": "string"}, "id": {"type": "string"}, "text": {"type": "string"}, "role": {"type": "string"},
+                "x": {"type": "number"}, "y": {"type": "number"}}}
+        ]
+    })
+}
+
 /// `(tool, method, title, description, schema, read-only)` for the UI vocabulary.
 fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Value, bool)> {
     let point = json!({"type": "object", "description": "{id} (element centre) or {x, y} (window points)",
         "properties": {"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}});
     let mods = json!({"type": "object", "properties": {"command": {"type": "boolean"}, "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "ctrl": {"type": "boolean"}}});
+    let target = target_schema("The element");
     vec![
         (
             "screenshot",
             "ui.screenshot",
             "Screenshot",
-            "A PNG of the app window (or one element, by `id`).",
-            obj(json!({"id": {"type": "string"}}), &[]),
+            "A PNG of the app window, or of one element (`target`, `pad` points around it). `annotate` draws each interactive element's ref on the picture (and lists them); `highlight` outlines one element.",
+            obj(
+                json!({"id": {"type": "string", "description": "Legacy: crop to this automation id"}, "target": target_schema("Crop to this element"),
+                    "annotate": {"type": "boolean"}, "highlight": target_schema("Outline this element"), "pad": {"type": "number"}}),
+                &[],
+            ),
             true,
         ),
         ("ui_inspect", "ui.inspect", "Inspect UI", "UI state and every element: id, label, rect [x,y,w,h].", obj(json!({}), &[]), true),
         (
+            "ui_snapshot",
+            "ui.snapshot",
+            "Snapshot UI",
+            "The UI as an indented outline, one element per line with a ref: `- button \"Save\" [ref=e3]`. Act on elements with their ref (\"@e3\") in the other ui_* tools; refs stay valid while the element exists. `interactive` keeps only elements you can act on; `scope` limits to one element's subtree; `elements` also returns every element as JSON (rect, value, state).",
+            obj(
+                json!({"interactive": {"type": "boolean"}, "scope": target_schema("Only this element's subtree"), "depth": {"type": "integer", "minimum": 0},
+                    "compact": {"type": "boolean"}, "elements": {"type": "boolean", "description": "Also return the element list as JSON"}}),
+                &[],
+            ),
+            true,
+        ),
+        (
             "ui_click",
             "ui.click",
             "Click",
-            "Click an element by id, or a point.",
+            "Click an element (`target`, e.g. \"@e3\"), or a point.",
             obj(
-                json!({"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"},
+                json!({"target": target, "id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"},
                     "button": {"type": "string", "enum": ["primary", "secondary", "middle"]}, "count": {"type": "integer", "minimum": 1, "maximum": 3}, "modifiers": mods}),
                 &[],
             ),
+            false,
+        ),
+        ("ui_hover", "ui.hover", "Hover", "Move the pointer over an element.", obj(json!({"target": target}), &["target"]), false),
+        ("ui_focus", "ui.focus", "Focus", "Give an element keyboard focus.", obj(json!({"target": target}), &["target"]), false),
+        (
+            "ui_fill",
+            "ui.fill",
+            "Fill",
+            "Replace a text field's contents (focus, select all, type); `submit` presses Enter after.",
+            obj(json!({"target": target, "text": {"type": "string"}, "submit": {"type": "boolean"}}), &["target", "text"]),
+            false,
+        ),
+        (
+            "ui_press",
+            "ui.press",
+            "Press keys",
+            "Press a chord, e.g. \"Mod+S\" (Mod = Cmd on macOS, Ctrl elsewhere), or a sequence \"Tab Tab Enter\".",
+            obj(json!({"keys": {"type": "string"}}), &["keys"]),
             false,
         ),
         (
             "ui_drag",
             "ui.drag",
             "Drag",
-            "Press, move and release.",
+            "Press, move and release: from one element or point to another.",
             obj(json!({"from": point, "to": point, "steps": {"type": "integer"}, "modifiers": mods}), &["from", "to"]),
             false,
         ),
@@ -141,9 +189,51 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "ui_scroll",
             "ui.scroll",
             "Scroll",
-            "Scroll at a point.",
-            obj(json!({"x": {"type": "number"}, "y": {"type": "number"}, "dx": {"type": "number"}, "dy": {"type": "number"}}), &["dx", "dy"]),
+            "Scroll by dx, dy points (dy > 0 scrolls down), over an element (`target`) or a point.",
+            obj(
+                json!({"target": target, "x": {"type": "number"}, "y": {"type": "number"}, "dx": {"type": "number"}, "dy": {"type": "number"}}),
+                &["dx", "dy"],
+            ),
             false,
+        ),
+        (
+            "ui_scroll_into_view",
+            "ui.scroll_into_view",
+            "Scroll into view",
+            "Scroll until an element is visible.",
+            obj(json!({"target": target}), &["target"]),
+            false,
+        ),
+        (
+            "ui_get",
+            "ui.get",
+            "Read element",
+            "Read one property of an element: text, value, rect, enabled, visible, focused or checked.",
+            obj(
+                json!({"target": target, "what": {"type": "string", "enum": ["text", "value", "rect", "enabled", "visible", "focused", "checked"]}}),
+                &["target", "what"],
+            ),
+            true,
+        ),
+        (
+            "ui_wait",
+            "ui.wait",
+            "Wait",
+            "Wait until an element appears (for: element), disappears (gone), becomes enabled (enabled), some text shows (text), or the app is idle (idle). Fails after timeout_ms (default 5000).",
+            obj(
+                json!({"for": {"type": "string", "enum": ["element", "gone", "text", "enabled", "idle"]}, "target": target, "text": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "minimum": 0}}),
+                &["for"],
+            ),
+            true,
+        ),
+        (
+            "ui_highlight",
+            "ui.highlight",
+            "Highlight",
+            "Flash an outline around an element in the live app (to show a human what you mean).",
+            obj(json!({"target": target, "ms": {"type": "integer"}}), &["target"]),
+            true,
         ),
         (
             "ui_key",
@@ -165,6 +255,58 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
         ),
         ("ui_set", "ui.set", "Set view state", "Change view state (theme, workspace…; app-defined keys).", json!({"type": "object"}), false),
     ]
+}
+
+/// A target written as a string (`"@e3"`, `"e3"`, `"id=…"`, `"text=…"`) as the protocol's object;
+/// objects pass through.
+pub fn target_value(v: &Value) -> Result<Value, String> {
+    let Value::String(s) = v else { return Ok(v.clone()) };
+    let s = s.trim();
+    let is_ref = |r: &str| r.strip_prefix('e').is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()));
+    if let Some(r) = s.strip_prefix('@').filter(|r| !r.is_empty()) {
+        return Ok(json!({"ref": r}));
+    }
+    if is_ref(s) {
+        return Ok(json!({"ref": s}));
+    }
+    if let Some(id) = s.strip_prefix("id=").filter(|i| !i.is_empty()) {
+        return Ok(json!({"id": id}));
+    }
+    if let Some(t) = s.strip_prefix("text=") {
+        return Ok(json!({"text": t}));
+    }
+    Err(format!("`{s}` is not a target: use a ref like \"@e3\" (from ui_snapshot), \"id=…\", \"text=…\" or an object"))
+}
+
+/// Tool arguments with every string target (`target`, `scope`, `highlight`, `from`, `to`) made an
+/// object.
+pub fn normalize_targets(mut args: Value) -> Result<Value, String> {
+    if let Some(o) = args.as_object_mut() {
+        for k in ["target", "scope", "highlight", "from", "to"] {
+            if let Some(v) = o.get(k).filter(|v| v.is_string()) {
+                let t = target_value(v).map_err(|e| format!("{k}: {e}"))?;
+                o.insert(k.into(), t);
+            }
+        }
+    }
+    Ok(args)
+}
+
+/// A `ui.snapshot` reply as a tool result: the outline (and the generation), plus the element
+/// list as JSON when asked for.
+pub fn snapshot_result(r: Reply, with_elements: bool) -> ToolResult {
+    match r {
+        Reply::Ok(v) => {
+            let tree = v.get("tree").and_then(Value::as_str).unwrap_or("").trim_end().to_string();
+            let generation = v.get("generation").cloned().unwrap_or(Value::Null);
+            let mut content = vec![json!({"type": "text", "text": format!("{tree}\n(snapshot {generation})")})];
+            if with_elements {
+                content.push(json!({"type": "text", "text": json!({"generation": generation, "elements": v.get("elements")}).to_string()}));
+            }
+            ToolResult { content, is_error: false }
+        }
+        e => ToolResult::from_reply(e),
+    }
 }
 
 /// The UI tools for the methods a backend answers.
@@ -229,17 +371,20 @@ pub fn compact(c: &CommandInfo) -> Value {
     Value::Object(o)
 }
 
-/// An image result from a `ui.screenshot` reply (`{png, width, height}`).
+/// An image result from a `ui.screenshot` reply (`{png, width, height, annotations?}`).
 pub fn screenshot_result(r: Reply) -> ToolResult {
     match r {
         Reply::Ok(v) => match v.get("png").and_then(Value::as_str) {
-            Some(png) if !png.is_empty() => ToolResult {
-                content: vec![
-                    json!({"type": "image", "data": png, "mimeType": "image/png"}),
-                    json!({"type": "text", "text": json!({"width": v.get("width"), "height": v.get("height")}).to_string()}),
-                ],
-                is_error: false,
-            },
+            Some(png) if !png.is_empty() => {
+                let mut info = json!({"width": v.get("width"), "height": v.get("height")});
+                if let Some(a) = v.get("annotations") {
+                    info["annotations"] = a.clone();
+                }
+                ToolResult {
+                    content: vec![json!({"type": "image", "data": png, "mimeType": "image/png"}), json!({"type": "text", "text": info.to_string()})],
+                    is_error: false,
+                }
+            }
             _ => ToolResult::error("the reply carried no picture"),
         },
         e => ToolResult::from_reply(e),
@@ -262,9 +407,26 @@ mod tests {
     fn every_ui_tool_maps_to_a_ui_method() {
         for (name, method, ..) in ui_table() {
             assert_eq!(ui_method(name), Some(method));
-            assert!(ashlar_control::UI_METHODS.contains(&method), "{method}");
+            assert!(ashlar_control::UI_METHODS.contains(&method) || ashlar_control::DEBUG_METHODS.contains(&method), "{method}");
         }
         assert_eq!(ui_tools(&[]).len(), 0);
         assert_eq!(ui_tools(&["ui.screenshot".into()]).len(), 1);
+        // Every debugger method has a tool (devtools.* are for humans, not agents).
+        for m in ashlar_control::DEBUG_METHODS.iter().filter(|m| m.starts_with("ui.")) {
+            assert!(ui_table().iter().any(|t| t.1 == *m), "{m} has no tool");
+        }
+    }
+
+    #[test]
+    fn string_targets_become_objects() {
+        assert_eq!(target_value(&json!("@e3")), Ok(json!({"ref": "e3"})));
+        assert_eq!(target_value(&json!("e12")), Ok(json!({"ref": "e12"})));
+        assert_eq!(target_value(&json!("id=file.save")), Ok(json!({"id": "file.save"})));
+        assert_eq!(target_value(&json!("text=Save")), Ok(json!({"text": "Save"})));
+        assert_eq!(target_value(&json!({"x": 1, "y": 2})), Ok(json!({"x": 1, "y": 2})));
+        assert!(target_value(&json!("Save")).is_err());
+        let a = normalize_targets(json!({"target": "@e1", "from": "e2", "to": {"id": "x"}, "text": "@e9"})).unwrap();
+        assert_eq!(a, json!({"target": {"ref": "e1"}, "from": {"ref": "e2"}, "to": {"id": "x"}, "text": "@e9"}));
+        assert!(normalize_targets(json!({"scope": "nope"})).unwrap_err().starts_with("scope:"));
     }
 }
