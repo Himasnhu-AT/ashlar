@@ -208,9 +208,9 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "ui_get",
             "ui.get",
             "Read element",
-            "Read one property of an element: text, value, rect, enabled, visible, focused or checked.",
+            "Read one property of an element: text, value, name, role, rect, enabled, visible, focused, checked, selected, or the whole element.",
             obj(
-                json!({"target": target, "what": {"type": "string", "enum": ["text", "value", "rect", "enabled", "visible", "focused", "checked"]}}),
+                json!({"target": target, "what": {"type": "string", "enum": ["text", "value", "name", "role", "rect", "enabled", "visible", "focused", "checked", "selected", "element"]}}),
                 &["target", "what"],
             ),
             true,

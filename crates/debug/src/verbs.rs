@@ -13,6 +13,9 @@ use crate::session::{self, Session, Trace};
 use crate::words::{Args, quote};
 use crate::{Ctx, Done, Fail, Res, target, usage_of};
 
+/// What `get` reads (`ui.get {what}`).
+const GET_WHAT: &[&str] = &["text", "value", "name", "role", "rect", "enabled", "visible", "focused", "checked", "selected", "element"];
+
 /// Verbs that change the UI: a trace records after each.
 const ACTIONS: &[&str] = &["click", "dblclick", "hover", "focus", "fill", "type", "press", "scroll", "scrollintoview", "drag", "exec", "menu"];
 
@@ -394,10 +397,11 @@ impl Ctx<'_, '_, '_> {
     }
 
     fn get(&mut self, mut a: Args) -> Res {
-        let what = need(a.positional(), "what to read (text, value, rect, enabled, visible, focused, checked)", "get")?;
+        let what =
+            need(a.positional(), "what to read (text, value, name, role, rect, enabled, visible, focused, checked, selected, element)", "get")?;
         let t = need(a.positional(), "a target", "get")?;
         a.finish().map_err(usage("get"))?;
-        if !["text", "value", "rect", "enabled", "visible", "focused", "checked"].contains(&what.as_str()) {
+        if !GET_WHAT.contains(&what.as_str()) {
             return Err(Fail::Usage(format!("cannot get `{what}`"), usage_of("get")));
         }
         let v = self.call("ui.get", json!({"target": parse_target(&t, "get")?, "what": what}))?;
