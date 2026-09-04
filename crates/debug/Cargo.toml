@@ -1,0 +1,22 @@
+[package]
+name = "ashlar-debug"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "ashlar-debug: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests)"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ashlar-debug"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ashlar-control = { workspace = true }
+ashlar-command = { workspace = true }
+base64 = "0.22"
+directories = "6"
+png = "0.18"

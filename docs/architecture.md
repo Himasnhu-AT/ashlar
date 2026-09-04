@@ -22,6 +22,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 2 | `ashlar-print` | System PDF print spooler (CUPS, Windows) | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
+| 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
 | 7 | `ashlar` | Umbrella crate: re-exports the others behind features | no | – |
