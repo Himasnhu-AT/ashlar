@@ -121,3 +121,24 @@ fn perf_snapshot_publish_and_read() {
     println!("bench: snapshot_load {ns_load:.1} ns");
     println!("bench: edit_with_subscriber {ns_edit_published:.0} ns");
 }
+
+#[test]
+#[ignore]
+fn perf_undo_redo_10k_steps() {
+    let mut s: Store<Vec<u64>> = Store::new(Vec::new());
+    s.history_mut().set_max_steps(10_000);
+    for i in 0..10_000u64 {
+        s.edit("push", |d| d.push(i));
+    }
+    let ops = 10_000;
+    let ns = time(ops * 2, |i| {
+        if i < ops {
+            black_box(s.undo());
+        } else {
+            black_box(s.redo());
+        }
+    });
+    assert_eq!(s.doc().len(), 10_000);
+    println!("undo/redo walking a 10k-step history: {ns:.0} ns/op");
+    println!("bench: undo_redo_10k_steps {ns:.0} ns");
+}

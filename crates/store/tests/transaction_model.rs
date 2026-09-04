@@ -4,6 +4,8 @@
 //! undo stack back to its old depth and push one step from the old document; on failure or panic
 //! put everything back. Random sequences of edits, merged edits, transactions (succeeding,
 //! failing, panicking, nested, empty), undo, redo and saves must agree on every observable.
+//! Half the seeds run their transactions through `Store::transaction_on` on a host that owns
+//! the store, as an app's compound commands do.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -125,10 +127,17 @@ impl Rng {
 const LABELS: [&str; 3] = ["Move", "Trim", "Gain"];
 const KEYS: [&str; 2] = ["drag-1", "drag-2"];
 
+/// An app-like owner of the store whose commands take `&mut Host`.
+struct Host<'a> {
+    store: &'a mut Store<Doc>,
+    commands: u32,
+}
+
 /// One random operation on the model, the store, or both. A transaction runs its inner
-/// sequence on each side separately from the same seed. Commands do not undo, so inside a
-/// transaction only edits, saves and nested transactions are drawn.
-fn step(rng: &mut Rng, mut m: Option<&mut Model>, mut s: Option<&mut Store<Doc>>, depth: u32) {
+/// sequence on each side separately from the same seed (on the store directly, or through a
+/// host with `via_host`). Commands do not undo, so inside a transaction only edits, saves and
+/// nested transactions are drawn.
+fn step(rng: &mut Rng, mut m: Option<&mut Model>, mut s: Option<&mut Store<Doc>>, depth: u32, via_host: bool) {
     let label = LABELS[rng.below(3) as usize];
     let key = KEYS[rng.below(2) as usize];
     let v = rng.below(1000) as i32;
@@ -186,23 +195,40 @@ fn step(rng: &mut Rng, mut m: Option<&mut Model>, mut s: Option<&mut Store<Doc>>
                 let mut r = Rng(seed);
                 m.one_step(label, outcome >= 2, |m| {
                     for _ in 0..n {
-                        step(&mut r, Some(&mut *m), None, depth + 1);
+                        step(&mut r, Some(&mut *m), None, depth + 1, via_host);
                     }
                 });
             }
             if let Some(s) = s {
                 let mut r = Rng(seed);
+                let finish = move || match outcome {
+                    0 => Err(()),
+                    1 => panic!("bug"),
+                    _ => Ok(()),
+                };
                 let res = catch_unwind(AssertUnwindSafe(|| {
-                    s.transaction::<(), ()>(label, |s| {
-                        for _ in 0..n {
-                            step(&mut r, None, Some(&mut *s), depth + 1);
-                        }
-                        match outcome {
-                            0 => Err(()),
-                            1 => panic!("bug"),
-                            _ => Ok(()),
-                        }
-                    })
+                    if via_host {
+                        let mut host = Host { store: s, commands: 0 };
+                        Store::transaction_on(
+                            &mut host,
+                            |h| &mut *h.store,
+                            label,
+                            |h| {
+                                for _ in 0..n {
+                                    h.commands += 1;
+                                    step(&mut r, None, Some(&mut *h.store), depth + 1, via_host);
+                                }
+                                finish()
+                            },
+                        )
+                    } else {
+                        s.transaction::<(), ()>(label, |s| {
+                            for _ in 0..n {
+                                step(&mut r, None, Some(&mut *s), depth + 1, via_host);
+                            }
+                            finish()
+                        })
+                    }
                 }));
                 assert_eq!(res.is_err(), outcome == 1);
             }
@@ -236,7 +262,7 @@ fn transactions_match_the_one_step_model() {
         let mut s: Store<Doc> = Store::new(Vec::new());
         s.history_mut().set_max_steps(limit);
         for i in 0..200 {
-            step(&mut rng, Some(&mut m), Some(&mut s), 0);
+            step(&mut rng, Some(&mut m), Some(&mut s), 0, seed % 2 == 0);
             check(&m, &s, &format!("seed {seed} step {i}"));
         }
     }
