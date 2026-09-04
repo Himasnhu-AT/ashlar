@@ -166,7 +166,7 @@ pub(crate) const VERBS: &[(&str, &str, &str)] = &[
     ("scroll", "scroll [T] [up|down|left|right] [px] | --dx N --dy N", "scroll (over an element, or the window)"),
     ("scrollintoview", "scrollintoview <T>", "scroll until an element is visible"),
     ("drag", "drag <from> <to> [--steps N]", "press on one element, move, release on another"),
-    ("get", "get <text|value|rect|enabled|visible|focused|checked> <T>", "read one property of an element"),
+    ("get", "get <text|value|name|role|rect|enabled|visible|focused|checked|selected|element> <T>", "read one property of an element"),
     (
         "wait",
         "wait <T | ms> | --text S | --gone T | --enabled T | --idle  [--timeout MS]",

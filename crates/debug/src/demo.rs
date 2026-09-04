@@ -358,7 +358,15 @@ impl Model {
             "visible" => json!(true),
             "focused" => json!(self.focused == Some(r)),
             "checked" => json!(e.checked.unwrap_or(false)),
-            other => return Reply::err(format!("ui.get: unknown `what` `{other}` (text, value, rect, enabled, visible, focused, checked)")),
+            "name" => json!(e.name),
+            "role" => json!(e.role),
+            "selected" => json!(false),
+            "element" => self.element_json(e),
+            other => {
+                return Reply::err(format!(
+                    "ui.get: unknown `what` `{other}` (text, value, name, role, rect, enabled, visible, focused, checked, selected, element)"
+                ));
+            }
         };
         Reply::ok(json!({"value": v}))
     }

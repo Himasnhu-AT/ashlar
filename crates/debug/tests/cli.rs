@@ -109,6 +109,8 @@ fn acting_on_refs_and_reading_back() {
     assert_eq!(f.ok(&["get", "text", "id=status"]), "Saved: Groceries\n");
     assert_eq!(f.ok(&["get", "value", "e2"]), "Groceries\n");
     assert_eq!(f.ok(&["get", "enabled", "@e5"]), "true\n");
+    assert_eq!(f.ok(&["get", "role", "@e5"]), "button\n");
+    assert_eq!(f.json(&["get", "element", "@e5"])["result"]["id"], "edit.delete");
     assert_eq!(f.json(&["get", "rect", "@e3"]), json!({"ok": true, "result": [224.0, 16.0, 56.0, 24.0]}));
     f.ok(&["click", "@e4"]);
     assert_eq!(f.ok(&["get", "checked", "text=Wrap lines"]), "true\n");
