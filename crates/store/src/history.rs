@@ -240,13 +240,14 @@ impl<D, X> History<D, X> {
     }
 
     /// Undo: given the current state, return the state to go back to (its label is the step
-    /// undone). The current state moves to the redo stack.
+    /// undone). The current state moves to the redo stack. O(1): the byte total is adjusted by
+    /// the two entries that moved, not recounted.
     pub fn undo(&mut self, doc: Arc<D>, extra: X, revision: Revision) -> Option<Entry<D, X>> {
         let prev = self.undo.pop()?;
         let cur = self.entry(prev.label.clone(), doc, extra, revision);
+        self.bytes = self.bytes.saturating_sub(prev.bytes).saturating_add(cur.bytes);
         self.redo.push(cur);
         self.merge_key = None;
-        self.recount();
         Some(prev)
     }
 
@@ -255,9 +256,9 @@ impl<D, X> History<D, X> {
     pub fn redo(&mut self, doc: Arc<D>, extra: X, revision: Revision) -> Option<Entry<D, X>> {
         let next = self.redo.pop()?;
         let cur = self.entry(next.label.clone(), doc, extra, revision);
+        self.bytes = self.bytes.saturating_sub(next.bytes).saturating_add(cur.bytes);
         self.undo.push(cur);
         self.merge_key = None;
-        self.recount();
         Some(next)
     }
 
@@ -468,6 +469,9 @@ mod tests {
         assert_eq!(d.h.bytes(), 500 + 600 + 100 + 200);
         d.undo();
         assert_eq!(d.h.bytes(), 500 + 600 + 100 + 300, "the undone state moved to redo");
+        d.redo();
+        assert_eq!(d.h.bytes(), 500 + 600 + 100 + 200, "redo moves it back");
+        d.undo();
         d.edit("g", 0);
         assert_eq!(d.h.bytes(), 500 + 600 + 100 + 200, "redo dropped");
     }
