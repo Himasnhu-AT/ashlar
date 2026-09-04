@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// The environment variable a launched app reads to know where to write its control key.
-pub const KEY_DIR_ENV: &str = "ASHLAR_CONTROL_KEY_DIR";
+pub use ashlar_control::key::KEY_DIR_ENV;
 
 /// Where state lives and where apps keep their settings. [`Env::from_os`] for the real thing; tests
 /// point both somewhere private.

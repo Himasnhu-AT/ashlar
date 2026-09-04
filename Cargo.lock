@@ -360,7 +360,9 @@ name = "ashlar-example-notes"
 version = "0.1.0"
 dependencies = [
  "ashlar",
+ "ashlar-debug",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 
