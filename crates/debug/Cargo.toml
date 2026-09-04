@@ -20,3 +20,6 @@ ashlar-command = { workspace = true }
 base64 = "0.22"
 directories = "6"
 png = "0.18"
+
+[dev-dependencies]
+ashlar-mcp = { workspace = true }

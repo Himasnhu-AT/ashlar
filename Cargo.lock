@@ -335,6 +335,7 @@ version = "0.1.0"
 dependencies = [
  "ashlar-command",
  "ashlar-control",
+ "ashlar-mcp",
  "base64 0.22.1",
  "directories",
  "png 0.18.1",
