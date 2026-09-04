@@ -8,7 +8,7 @@
 //!   - button "Save" [ref=e3]               Save: status "Saved: <title>", enables Delete
 //!   - checkbox "Wrap lines" [ref=e4]       toggles
 //!   - button "Delete" [ref=e5] [disabled]  removes the last item
-//!   - button "Load" [ref=e6]               "Loading…", then 300 ms later "Loaded" and "Item 4"
+//!   - button "Load" [ref=e6]               "Loading…", then 1 s later "Loaded" and "Item 4"
 //!   - label "Ready" [ref=e7]               the status line (id `status`)
 //!   - list "Items" [ref=e8]
 //!     - listitem "Item 1" [ref=e9] …
@@ -56,7 +56,7 @@ pub const METHODS: &[&str] = &[
 
 const W: u32 = 360;
 const H: u32 = 260;
-const LOAD_DELAY: Duration = Duration::from_millis(300);
+const LOAD_DELAY: Duration = Duration::from_millis(1000);
 
 #[derive(Debug, Clone)]
 struct El {

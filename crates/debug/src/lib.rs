@@ -193,7 +193,7 @@ pub(crate) fn usage_of(verb: &str) -> String {
 
 fn help(out: &mut dyn Write) {
     let _ = writeln!(out, "ashlar-debug {}: drive a running app's UI\n", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(out, "usage: ashlar-debug [--session NAME | --port N [--key-dir D] | --app NAME] [--json] [--timeout MS] <command>\n");
+    let _ = writeln!(out, "usage: ashlar-debug [--session NAME | --port N [--key-dir D] | --app NAME] [--json] [--call-timeout MS] <command>\n");
     for (_, usage, about) in VERBS {
         let _ = writeln!(out, "  {usage}\n      {about}");
     }
@@ -215,7 +215,7 @@ pub fn run(args: Vec<String>, env: &Env, io: &mut Io<'_>) -> Exit {
         let port = a.number::<u16>(&["--port"])?;
         let key_dir = a.value(&["--key-dir"])?.map(PathBuf::from);
         let app = a.value(&["--app"])?;
-        let timeout = a.number::<u64>(&["--timeout"])?.map(Duration::from_millis);
+        let timeout = a.number::<u64>(&["--call-timeout"])?.map(Duration::from_millis);
         Ok((session, port, key_dir, app, timeout))
     })();
     let (session, port, key_dir, app, timeout) = match parsed {
