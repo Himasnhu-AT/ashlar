@@ -782,3 +782,15 @@ pub fn run(port: Option<u16>, key_dir: Option<&Path>, out: &mut dyn std::io::Wri
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_demo_answers_the_whole_debugger_vocabulary() {
+        for m in ashlar_control::DEBUG_METHODS {
+            assert!(METHODS.contains(m), "{m}");
+        }
+    }
+}
