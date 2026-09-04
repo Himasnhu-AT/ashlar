@@ -2,7 +2,6 @@
 name = "ashlar-print"
 version.workspace = true
 edition.workspace = true
-repository.workspace = true
 rust-version.workspace = true
 description = "System PDF print spooler: CUPS and Windows"
 

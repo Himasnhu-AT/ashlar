@@ -1,4 +1,4 @@
-//! `cargo xtask names`: no app name may appear in the published crates (AGENTS.md §1).
+//! `cargo xtask names`: no app name may appear anywhere in the repository (AGENTS.md §1).
 //!
 //! The names are kept as FNV-1a hashes so this file does not itself contain them. A long, distinctive
 //! name matches anywhere inside a word (`MyNameDoc` too); a short one that is also an English word
@@ -34,13 +34,16 @@ pub const FORBIDDEN: &[(u64, usize, Match)] = &[
     (0xa29f3fb230bb0051, 8, Match::Within),
     (0x486cb51beedff37b, 10, Match::Within),
     (0xc55c37eaee936ef5, 9, Match::Within),
+    // the suite and its organisation
+    (0x91790f9ec40c3f01, 5, Match::Within),
+    (0x6dad38891082a6af, 9, Match::Within),
 ];
 
-/// What is scanned, relative to the workspace root: everything that is published or shown to users.
-const SCANNED_DIRS: &[&str] = &["crates", "examples"];
-const SCANNED_FILES: &[&str] = &["README.md", "Cargo.toml"];
+/// What is scanned: every text file in the repository (crates, examples, docs, agent instructions,
+/// CI and tooling config), except build output, VCS data, the local code-graph cache and the allow
+/// list itself. Extensionless files are scanned too.
 const SCANNED_EXTENSIONS: &[&str] = &["rs", "md", "toml", "txt", "json", "yml", "yaml", "html", "css", "wgsl", "ftl", "hbs", "js", "svg"];
-const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules"];
+const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules", "graft"];
 const ALLOW_FILE: &str = "xtask/names-allow.txt";
 
 pub fn fnv1a(text: &str) -> u64 {
@@ -138,7 +141,7 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
             if !SKIPPED_DIRS.contains(&name.as_str()) {
                 files(&path, out);
             }
-        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| SCANNED_EXTENSIONS.contains(&e)) {
+        } else if path.extension().and_then(|e| e.to_str()).is_none_or(|e| SCANNED_EXTENSIONS.contains(&e)) {
             out.push(path);
         }
     }
@@ -147,10 +150,8 @@ fn files(dir: &Path, out: &mut Vec<PathBuf>) {
 pub fn check(root: &Path) -> Result<(), String> {
     let allow = parse_allow(&std::fs::read_to_string(root.join(ALLOW_FILE)).unwrap_or_default());
     let mut paths = Vec::new();
-    for dir in SCANNED_DIRS {
-        files(&root.join(dir), &mut paths);
-    }
-    paths.extend(SCANNED_FILES.iter().map(|f| root.join(f)).filter(|p| p.is_file()));
+    files(root, &mut paths);
+    paths.retain(|p| p != &root.join(ALLOW_FILE));
     paths.sort();
     let mut errors = Vec::new();
     for path in &paths {
@@ -174,7 +175,7 @@ pub fn check(root: &Path) -> Result<(), String> {
         println!("names: ok ({} files)", paths.len());
         Ok(())
     } else {
-        Err(format!("names: {} app name(s) in public crates (AGENTS.md §1)\n{}", errors.len(), errors.join("\n")))
+        Err(format!("names: {} app name(s) in the repository (AGENTS.md §1)\n{}", errors.len(), errors.join("\n")))
     }
 }
 

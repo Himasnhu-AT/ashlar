@@ -4,7 +4,7 @@ ashlar is a Rust library for building fast desktop and web apps: documents and u
 background jobs, files and settings, native OS features, UI components (egui), and a runtime that
 gives every app crash safety, telemetry and agent control (control port, MCP, CLI) for free.
 Domain widgets (a timeline, a CAD canvas…) are app-specific and stay in the apps; ashlar only
-provides the general building blocks they are made from. The plan is `../FRAMEWORK-PLAN.md`.
+provides the general building blocks they are made from.
 
 ## 0. Never crash
 No `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/`unimplemented!` outside tests (denied in
@@ -16,8 +16,9 @@ not fatal (`lock().unwrap_or_else(PoisonError::into_inner)`). Background work ru
 
 ## 1. No app code, no app names
 A crate here must serve more than one app and never depend on one. Never name the apps that use
-ashlar in public API, docs or identifiers: say "a video editor", "a DAW". `cargo xtask names` enforces this over `crates/`,
-`examples/`, the root README and manifest (names kept hashed; false positives go in
+ashlar, anywhere in this repository (public API, identifiers, docs, agent instructions, commit
+messages): describe them by kind instead, "a video editor", "a DAW". `cargo xtask names` enforces this
+over every file in the repository (the names are kept only as hashes; false positives go in
 `xtask/names-allow.txt`).
 
 ## 2. Layering (`cargo xtask layers`)

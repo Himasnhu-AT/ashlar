@@ -1,4 +1,4 @@
-# Print a print-ready PDF on Windows (CUPS-independent backend). The job arrives in ASHLAR_* environment
+# Print a print-ready PDF on Windows (CUPS-independent backend). The job arrives in ASHLAR_PRINT_* environment
 # variables, never as arguments: printer names contain spaces and quotes, and the document's
 # path must not be visible in the process list while it prints.
 #

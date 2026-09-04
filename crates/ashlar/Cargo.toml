@@ -2,7 +2,6 @@
 name = "ashlar"
 version.workspace = true
 edition.workspace = true
-repository.workspace = true
 rust-version.workspace = true
 description = "Build fast desktop and web apps in Rust: store, commands, UI, native, agent control"
 

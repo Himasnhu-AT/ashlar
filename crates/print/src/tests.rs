@@ -251,7 +251,7 @@ fn the_print_script_renders_the_job_and_reaches_the_spooler() {
     let dry = spool::windows_submit(&pdf, &job, &[("ASHLAR_PRINT_DRYRUN", "1")]);
     assert_eq!(dry.as_deref(), Ok("rendered 2 sheet(s)"), "{dry:?}");
 
-    let name = format!("Ashlar Test Print {}", std::process::id());
+    let name = format!("ashlar Test Print {}", std::process::id());
     let name = name.as_str();
     let added = windows_powershell(
         r#"

@@ -2,7 +2,6 @@
 name = "ashlar-mcp"
 version.workspace = true
 edition.workspace = true
-repository.workspace = true
 rust-version.workspace = true
 description = "MCP server generated from the command registry (stdio), headless or bridged"
 

@@ -330,9 +330,7 @@ fn style_widgets(visuals: &mut egui::Visuals, palette: WidgetPalette, text: Colo
 }
 ```
 
-This is the low-level mechanism; [`tokens`](#design-tokens) is the complete theme. See
-[theme infrastructure](../../docs/ui/theme-infrastructure.md) for the comparison it
-came from.
+This is the low-level mechanism; [`tokens`](#design-tokens) is the complete theme.
 
 ### Print settings and feedback
 

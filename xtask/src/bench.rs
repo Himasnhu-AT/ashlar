@@ -1,4 +1,4 @@
-//! `cargo xtask bench`: the performance gate (FRAMEWORK-PLAN §5).
+//! `cargo xtask bench`: the performance gate (docs/architecture.md, performance).
 //!
 //! Runs every ignored test whose name contains `perf`, in every crate, in release, one at a time
 //! (`cargo test --release -- --ignored --nocapture perf`, but each test in its own process so they

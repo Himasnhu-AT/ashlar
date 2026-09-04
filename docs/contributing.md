@@ -10,7 +10,7 @@ and design principles are in [architecture.md](architecture.md).
 | Step | What it checks |
 |---|---|
 | `fmt` | `cargo fmt --all --check` |
-| `names` | no app name in `crates/`, `examples/`, the root README or manifest (false positives: `xtask/names-allow.txt`) |
+| `names` | no app name in any file of the repository (false positives: `xtask/names-allow.txt`) |
 | `layers` | each crate depends only on lower ranks; ranks 0–4 never on a UI crate |
 | `deny-panics` | every crate inherits the workspace lints; no never-crash lint is allowed away outside tests (the OS FFI crate follows docs/adr/0001-native-ffi.md instead) |
 | deps | `cargo deny check bans sources` (skipped with a note when cargo-deny isn't installed) |

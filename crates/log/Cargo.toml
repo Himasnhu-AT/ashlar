@@ -2,7 +2,6 @@
 name = "ashlar-log"
 version.workspace = true
 edition.workspace = true
-repository.workspace = true
 rust-version.workspace = true
 description = "Headless logging and crash safety: directive filters, stderr + rotating file + in-memory ring, panic hook, launch guard"
 
