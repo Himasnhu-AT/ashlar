@@ -188,21 +188,27 @@ impl<D: Document> Driver<D> {
         self.frames - start
     }
 
-    /// Send a control request (as the control port would) and run frames until it is answered.
+    /// Send a control request (as the control port would) and run frames until it is answered:
+    /// one frame for the request, then only the frames something asks for, on the virtual clock
+    /// (a request that needs frames nobody asks for is reported, not papered over by polling).
     pub fn request(&mut self, method: &str, params: Value) -> Reply {
         let (req, rx) = Request::new(method, params);
         self.runtime.inject_request(req);
-        for _ in 0..600 {
-            if self.closed {
-                break;
-            }
-            self.time += 1.0 / 120.0;
-            self.frame();
+        self.time += 1.0 / 120.0;
+        self.frame();
+        let limit = self.time + 600.0;
+        for _ in 0..10_000 {
             if let Ok(r) = rx.try_recv() {
                 return r;
             }
+            if self.closed {
+                break;
+            }
+            let Some(due) = self.due().filter(|d| *d <= limit) else { break };
+            self.time = due.max(self.time + 1.0 / 120.0);
+            self.frame();
         }
-        rx.try_recv().unwrap_or_else(|_| Reply::err(format!("`{method}` was not answered within 600 frames")))
+        rx.try_recv().unwrap_or_else(|_| Reply::err(format!("`{method}` was not answered, and no frame is pending")))
     }
 
     /// [`Driver::request`] expecting success.

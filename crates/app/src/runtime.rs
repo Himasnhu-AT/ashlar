@@ -22,6 +22,7 @@ use ashlar_jobs::Jobs;
 use ashlar_store::{Autosave, AutosaveConfig, RecoveryCandidate, Revision};
 use ashlar_ui::automation;
 use ashlar_ui::commands::{CommandPalette, KeymapChange, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar_ui::devtools;
 use ashlar_ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar_ui::toasts::Toasts;
 use ashlar_ui::tokens::{self, ThemeMode, Tokens};
@@ -29,7 +30,7 @@ use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
 use crate::app::{App, Error, SetupFn, Shared, ViewFn};
-use crate::control::{self, ShotToken, UiQueue};
+use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
@@ -175,9 +176,6 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
-    script: control::Script,
-    shots: Vec<(u64, Request, Option<egui::Rect>)>,
-    shot_seq: u64,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -245,9 +243,6 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
-            script: control::Script::default(),
-            shots: Vec::new(),
-            shot_seq: 0,
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -384,7 +379,7 @@ impl<D: Document> Runtime<D> {
             return;
         }
         self.started = true;
-        automation::install(ctx);
+        devtools::install(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
         tokens::install(ctx, &Tokens::light(), &Tokens::dark(), mode);
         if let Some(setup) = self.setup.take()
@@ -442,12 +437,12 @@ impl<D: Document> Runtime<D> {
     }
 
     /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
-    /// frame to the wake reasons that were due, and hand injected agent input to egui.
+    /// frame to the wake reasons that were due. (Injected agent input is handed to egui by the
+    /// debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
-        self.script.inject(raw);
     }
 
     /// Draw the frame.
@@ -461,7 +456,6 @@ impl<D: Document> Runtime<D> {
         let (focused, active) = ctx.input(|i| (i.focused, !i.events.is_empty()));
         self.launch.telemetry.input(focused, active);
 
-        self.collect_screenshots(&ctx);
         self.refresh_infos();
         if !self.modal_open()
             && let Some(id) = dispatch(&ctx, &self.keymap)
@@ -488,17 +482,11 @@ impl<D: Document> Runtime<D> {
         self.apply_effects(&ctx);
         self.persist_view();
         self.tick_storage(&ctx);
-        self.script.settle();
+        self.feed_devtools(&ctx);
 
         // the frame changed the document: draw once more so everything shows the new state
         if self.session.revision() != rev_before {
             wake::wake(&ctx, Reason::DOCUMENT);
-        }
-        if self.script.is_busy() {
-            wake::wake(&ctx, Reason::CONTROL);
-        }
-        if !self.shots.is_empty() {
-            wake::wake(&ctx, Reason::SCREENSHOT);
         }
         if let Some(s) = started {
             let took = s.elapsed();
@@ -996,10 +984,16 @@ impl<D: Document> Runtime<D> {
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
         let p = req.params().clone();
         let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
-        let needs_frames = matches!(req.method(), "ui.click" | "ui.move" | "ui.drag" | "ui.scroll" | "ui.key" | "ui.type" | "ui.screenshot");
-        if needs_frames && !visible {
-            // eframe draws no frames for a minimized or fully covered window
-            return req.fail("the window is minimized or covered, so it draws no frames: bring it to the front for ui input and screenshots (engine.execute works regardless)");
+        if devtools::handles(req.method()) {
+            let needs_frames = !matches!(req.method(), "devtools.toggle" | "devtools.state");
+            if needs_frames && !visible {
+                // eframe draws no frames for a minimized or fully covered window
+                return req.fail("the window is minimized or covered, so it draws no frames: bring it to the front for ui input, snapshots and screenshots (engine.execute works regardless)");
+            }
+            if let devtools::Outcome::NotMine(req) = devtools::handle(ctx, req) {
+                req.unknown();
+            }
+            return;
         }
         match req.method() {
             "ui.inspect" => {
@@ -1017,72 +1011,6 @@ impl<D: Document> Runtime<D> {
                     "toasts": self.toasts.texts().collect::<Vec<_>>(),
                     "visible": visible,
                 }));
-            }
-            "ui.click" => {
-                let at = match p.get("id").and_then(Value::as_str) {
-                    Some(id) => automation::click_point(ctx, id),
-                    None => control::point(&p),
-                };
-                let Some(at) = at else {
-                    return req.fail("no such element on screen (see ui.inspect), or no {x, y}");
-                };
-                let count = p.get("count").and_then(Value::as_u64).unwrap_or(1).min(3) as u32;
-                self.script.push(control::click_frames(at, control::button(&p), count, control::modifiers(&p)), req);
-            }
-            "ui.move" => match control::point(&p) {
-                Some(at) => self
-                    .script
-                    .push(vec![control::InputFrame { events: vec![egui::Event::PointerMoved(at)], modifiers: control::modifiers(&p) }], req),
-                None => req.fail("ui.move needs {x, y}"),
-            },
-            "ui.drag" => {
-                let end = |v: Option<&Value>| -> Option<egui::Pos2> {
-                    let v = v?;
-                    match v.get("id").and_then(Value::as_str) {
-                        Some(id) => automation::click_point(ctx, id),
-                        None => control::point(v),
-                    }
-                };
-                match (end(p.get("from")), end(p.get("to"))) {
-                    (Some(a), Some(b)) => {
-                        let steps = p.get("steps").and_then(Value::as_u64).unwrap_or(8).min(240) as u32;
-                        self.script.push(control::drag_frames(a, b, steps, control::modifiers(&p)), req);
-                    }
-                    _ => req.fail("ui.drag needs `from` and `to`, each {id} or {x, y} of something on screen"),
-                }
-            }
-            "ui.scroll" => {
-                let at = match p.get("id").and_then(Value::as_str) {
-                    Some(id) => automation::click_point(ctx, id),
-                    None => control::point(&p).or_else(|| Some(ctx.content_rect().center())),
-                };
-                match at {
-                    Some(at) => self.script.push(control::scroll_frames(at, control::delta(&p), control::modifiers(&p)), req),
-                    None => req.fail("no such element on screen"),
-                }
-            }
-            "ui.key" => match p.get("key").and_then(Value::as_str).and_then(control::key) {
-                Some(k) => self.script.push(control::key_frames(k, control::modifiers(&p)), req),
-                None => req.fail("ui.key needs a `key` egui knows (Enter, Escape, A, F5, ArrowDown…)"),
-            },
-            "ui.type" => match p.get("text").and_then(Value::as_str) {
-                Some(t) => self.script.push(control::type_frames(t), req),
-                None => req.fail("ui.type needs `text`"),
-            },
-            "ui.screenshot" => {
-                let crop = match p.get("id").and_then(Value::as_str) {
-                    Some(id) => match automation::find(ctx, id) {
-                        Some(e) => Some(e.egui_rect()),
-                        None => return req.fail(format!("no element `{id}` on screen")),
-                    },
-                    None => None,
-                };
-                if self.shots.len() >= 8 {
-                    return req.fail("too many screenshots pending");
-                }
-                self.shot_seq = self.shot_seq.wrapping_add(1);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(ShotToken(self.shot_seq))));
-                self.shots.push((self.shot_seq, req, crop));
             }
             "ui.menu.list" => {
                 self.refresh_infos();
@@ -1148,32 +1076,20 @@ impl<D: Document> Runtime<D> {
         }
     }
 
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
-        if self.shots.is_empty() {
-            return;
-        }
-        let ppp = ctx.pixels_per_point();
-        let images: Vec<(u64, Arc<egui::ColorImage>)> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<ShotToken>()).copied()?;
-                        Some((token.0, Arc::clone(image)))
-                    }
-                    _ => None,
-                })
-                .collect()
+    /// The inspector's panels and the app's pending work for `ui.wait {for: "idle"}`. The panels
+    /// are built only while the inspector is open.
+    fn feed_devtools(&mut self, ctx: &egui::Context) {
+        devtools::set_busy(ctx, self.jobs.is_busy());
+        devtools::section(ctx, "Logs", || {
+            crate::logging::recent(200, log::Level::Trace).into_iter().map(|l| format!("{:<5} {}: {}", l.level, l.target, l.message)).collect()
         });
-        for (token, image) in images {
-            let Some(pos) = self.shots.iter().position(|(t, ..)| *t == token) else { continue };
-            let (_, req, crop) = self.shots.remove(pos);
-            match control::encode_png(&image, crop, ppp) {
-                Ok((png, w, h)) => req.ok(json!({"png": control::base64(&png), "width": w, "height": h})),
-                Err(e) => req.fail(e),
-            }
-        }
+        let history = self.session.store().history();
+        devtools::section(ctx, "Undo", || {
+            let mut lines: Vec<String> = history.undo_labels().map(|l| format!("  {l}")).collect();
+            lines.push("── now ──".into());
+            lines.extend(history.redo_labels().map(|l| format!("  {l} (redo)")));
+            lines
+        });
     }
 }
 
