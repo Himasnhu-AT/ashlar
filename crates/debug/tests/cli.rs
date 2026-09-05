@@ -30,7 +30,7 @@ impl Fixture {
         let root = temp(tag);
         let key_dir = root.join("config/org.example.Demo");
         let demo = demo::start(0, &key_dir).unwrap();
-        let env = Env { home: root.join("home"), config_roots: vec![root.join("config")], session: "default".into(), key_dir: None };
+        let env = Env::under(&root);
         let f = Self { env, root, demo };
         f.ok(&["connect", &f.demo.port.to_string()]);
         f
@@ -220,6 +220,30 @@ fn screenshots_are_written_as_png_files() {
 }
 
 #[test]
+fn screenshots_can_be_kept_from_raising_the_window() {
+    let f = Fixture::new("raise");
+    let raised = |env: &Env, args: &[&str]| {
+        let (code, _, err) = cli(env, args, "");
+        assert_eq!(code, Exit::Ok, "{args:?}: {err}");
+        let (_, out, _) = cli(env, &["--json", "stats"], "");
+        serde_json::from_str::<Value>(out.trim()).unwrap()["result"]["screenshot_raise"].clone()
+    };
+    let shot = f.root.join("s.png");
+    let shot = shot.to_str().unwrap();
+    assert_eq!(raised(&f.env, &["screenshot", shot]), Value::Null, "the app's default");
+    assert_eq!(raised(&f.env, &["screenshot", shot, "--no-raise"]), json!(false));
+    let quiet = Env { no_raise: true, ..f.env.clone() };
+    assert_eq!(raised(&quiet, &["screenshot", shot]), json!(false), "ASHLAR_DEBUG_NO_RAISE");
+    // A session connected with --no-raise keeps it, traces included.
+    f.ok(&["connect", &f.demo.port.to_string(), "--no-raise"]);
+    assert_eq!(raised(&f.env, &["screenshot", shot]), json!(false));
+    f.ok(&["trace", "start", f.root.join("t").to_str().unwrap()]);
+    assert_eq!(raised(&f.env, &["click", "@e3"]), json!(false));
+    f.ok(&["connect", &f.demo.port.to_string()]);
+    assert_eq!(raised(&f.env, &["screenshot", shot]), Value::Null);
+}
+
+#[test]
 fn batch_runs_a_ui_test_and_stops_at_the_first_failure() {
     let f = Fixture::new("batch");
     let script = f.root.join("test.txt");
@@ -351,7 +375,7 @@ fn wait_gone(pid_alive: impl Fn() -> bool) -> bool {
 #[test]
 fn open_launches_an_app_and_close_quits_it() {
     let root = temp("open");
-    let env = Env { home: root.join("home"), config_roots: vec![root.join("config")], session: "default".into(), key_dir: None };
+    let env = Env::under(&root);
     let (code, out, err) = cli(&env, &["--session", "s1", "open", binary(), "--", "demo"], "");
     assert_eq!(code, Exit::Ok, "{err}");
     assert!(out.starts_with(&format!("opened {} (pid ", binary())) && out.ends_with("as session `s1`\n"), "{out}");

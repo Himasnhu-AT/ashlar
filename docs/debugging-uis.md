@@ -79,7 +79,7 @@ Running a script from Rust gives you the same thing in-process. `ashlar_debug::r
 takes an `Env` that points the state and key search at a temporary folder:
 
 ```rust
-let env = ashlar_debug::Env { home: tmp.join("home"), config_roots: vec![], session: "t".into(), key_dir: None };
+let env = ashlar_debug::Env::under(&tmp); // state in tmp/home, keys looked for in tmp/config
 let code = ashlar_debug::run(vec!["--port".into(), port.to_string(), "--key-dir".into(), key_dir, "batch".into(), "-".into()], &env, &mut io);
 ```
 
@@ -100,7 +100,12 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   not match: a disabled element shows `[disabled]` and a focused one `[focused]`.
 - `highlight @e3` flashes an outline in the app window, which helps when you are pairing with a
   human.
-- `screenshot --annotate` draws each interactive element's ref on the picture.
+- `screenshot --annotate` draws each interactive element's ref on the picture. The app paints no
+  frames while its window is covered, minimized or the screen is locked, so to take a screenshot it
+  raises the window once and fails after a few seconds if that does not help. Use
+  `screenshot --no-raise`, a session opened with `open --no-raise` (or `connect --no-raise`), or
+  `ASHLAR_DEBUG_NO_RAISE=1` for CI and background runs that must never steal focus. The MCP
+  `screenshot` tool takes `raise: false` for the same purpose.
 - `logs -n 50`, `stats` and `devtools open` show the app's recent log lines, its frame and job
   statistics, and the in-app inspector.
 - `call <method> '{json}'` sends any control method as is.

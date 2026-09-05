@@ -34,11 +34,14 @@ pub struct Env {
     pub session: String,
     /// `ASHLAR_CONTROL_KEY_DIR`, if set: the key folder for `connect` / `--port` without `--key-dir`.
     pub key_dir: Option<PathBuf>,
+    /// `ASHLAR_DEBUG_NO_RAISE`: screenshots never raise a covered window (automated runs must not
+    /// steal focus from the person at the machine).
+    pub no_raise: bool,
 }
 
 impl Env {
     /// `ASHLAR_DEBUG_HOME` (or the user cache folder + `ashlar-debug`), the OS settings folders,
-    /// `ASHLAR_DEBUG_SESSION` (or `default`).
+    /// `ASHLAR_DEBUG_SESSION` (or `default`), `ASHLAR_DEBUG_NO_RAISE`.
     pub fn from_os() -> Self {
         let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
         let base = directories::BaseDirs::new();
@@ -54,7 +57,14 @@ impl Env {
             }
         }
         let session = var("ASHLAR_DEBUG_SESSION").and_then(|s| s.into_string().ok()).unwrap_or_else(|| "default".into());
-        Self { home, config_roots, session, key_dir: var(KEY_DIR_ENV).map(PathBuf::from) }
+        let no_raise = var("ASHLAR_DEBUG_NO_RAISE").is_some_and(|v| truthy(&v.to_string_lossy()));
+        Self { home, config_roots, session, key_dir: var(KEY_DIR_ENV).map(PathBuf::from), no_raise }
+    }
+
+    /// The folders of `from_os` under `root` instead (tests): state in `<root>/home`, settings
+    /// searched in `<root>/config`, nothing taken from the environment.
+    pub fn under(root: &Path) -> Self {
+        Self { home: root.join("home"), config_roots: vec![root.join("config")], session: "default".into(), key_dir: None, no_raise: false }
     }
 
     pub fn sessions_dir(&self) -> PathBuf {
@@ -69,6 +79,11 @@ impl Env {
     pub fn session_dir(&self, name: &str) -> PathBuf {
         self.sessions_dir().join(name)
     }
+}
+
+/// An environment flag's value: anything but empty, `0`, `false`, `no` or `off` turns it on.
+pub fn truthy(v: &str) -> bool {
+    !matches!(v.trim().to_ascii_lowercase().as_str(), "" | "0" | "false" | "no" | "off")
 }
 
 /// A trace being recorded: a screenshot and a snapshot after every action.
@@ -97,6 +112,9 @@ pub struct Session {
     pub launched: bool,
     #[serde(default)]
     pub trace: Option<Trace>,
+    /// Screenshots in this session never raise the window (`open --no-raise`).
+    #[serde(default)]
+    pub no_raise: bool,
 }
 
 /// A session name: `[A-Za-z0-9_-]{1,64}` (it becomes a file name).
@@ -291,6 +309,7 @@ pub fn launch(env: &Env, name: &str, exe: &str, args: &[String], wait: Duration)
                         log: Some(log_path),
                         launched: true,
                         trace: None,
+                        no_raise: false,
                     };
                     return Ok((s, c));
                 }
@@ -331,7 +350,7 @@ mod tests {
     }
 
     fn env(home: &Path) -> Env {
-        Env { home: home.to_path_buf(), config_roots: vec![home.join("config")], session: "default".into(), key_dir: None }
+        Env { home: home.to_path_buf(), config_roots: vec![home.join("config")], session: "default".into(), key_dir: None, no_raise: false }
     }
 
     #[test]
@@ -339,7 +358,7 @@ mod tests {
         let home = temp("store");
         let env = env(&home);
         assert_eq!(load(&env, "default").unwrap(), None);
-        let s = Session { port: 7, key_dir: home.join("k"), pid: Some(3), exe: None, log: None, launched: true, trace: None };
+        let s = Session { port: 7, key_dir: home.join("k"), pid: Some(3), exe: None, log: None, launched: true, trace: None, no_raise: false };
         save(&env, "default", &s).unwrap();
         save(&env, "other", &s).unwrap();
         assert_eq!(load(&env, "default").unwrap(), Some(s));
@@ -380,6 +399,16 @@ mod tests {
         std::fs::write(deep.join("control-key.local-7003"), "k").unwrap();
         assert_eq!(ports(Some(7003), None), Vec::<u16>::new());
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn flags_from_the_environment() {
+        for on in ["1", "true", "YES", "on"] {
+            assert!(truthy(on), "{on}");
+        }
+        for off in ["", "0", "false", "No", " off "] {
+            assert!(!truthy(off), "{off:?}");
+        }
     }
 
     #[test]

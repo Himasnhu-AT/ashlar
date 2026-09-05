@@ -150,8 +150,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `(verb, usage, about)` for help and usage errors.
 pub(crate) const VERBS: &[(&str, &str, &str)] = &[
-    ("open", "open <exe> [--wait MS] [-- app-args…]", "launch an app with a control port and remember it as the session"),
-    ("connect", "connect <port>", "remember an app already running with `--control <port>`"),
+    ("open", "open <exe> [--wait MS] [--no-raise] [-- app-args…]", "launch an app with a control port and remember it as the session"),
+    ("connect", "connect <port> [--no-raise]", "remember an app already running with `--control <port>`"),
     ("close", "close [--quit]", "quit the app `open` started (or forget a connected one; --quit quits it too)"),
     ("status", "status", "the session and the app's name, version and methods"),
     ("sessions", "sessions", "every recorded session and whether it answers"),
@@ -172,7 +172,7 @@ pub(crate) const VERBS: &[(&str, &str, &str)] = &[
         "wait <T | ms> | --text S | --gone T | --enabled T | --idle  [--timeout MS]",
         "wait for an element, text, its absence, enablement, or an idle app",
     ),
-    ("screenshot", "screenshot [path.png] [--target T] [--annotate] [--highlight T] [--pad N]", "save a PNG and print its path"),
+    ("screenshot", "screenshot [path.png] [--target T] [--annotate] [--highlight T] [--pad N] [--no-raise]", "save a PNG and print its path"),
     ("highlight", "highlight <T> [--ms N]", "flash an outline around an element in the live app"),
     ("exec", "exec <command> [json|-]", "run one of the app's commands"),
     ("commands", "commands [query]", "list the app's commands"),
@@ -201,7 +201,9 @@ fn help(out: &mut dyn Write) {
         out,
         "\nTargets (T): @e3 or e3 (a ref from the latest snapshot), id=<automation id>, text=<label>,\n\
          <role>=<label> (button=Save), or x,y in window points.\n\
-         Exit codes: 0 ok, 1 failed, 2 usage. --json prints one {{\"ok\":…}} line."
+         Exit codes: 0 ok, 1 failed, 2 usage. --json prints one {{\"ok\":…}} line.\n\
+         A covered window is raised once to take a screenshot; --no-raise (on open, connect or screenshot)\n\
+         or ASHLAR_DEBUG_NO_RAISE=1 never raises it, for runs that must not steal focus."
     );
 }
 

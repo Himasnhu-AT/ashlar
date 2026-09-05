@@ -129,7 +129,8 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "A PNG of the app window, or of one element (`target`, `pad` points around it). `annotate` draws each interactive element's ref on the picture (and lists them); `highlight` outlines one element.",
             obj(
                 json!({"id": {"type": "string", "description": "Legacy: crop to this automation id"}, "target": target_schema("Crop to this element"),
-                    "annotate": {"type": "boolean"}, "highlight": target_schema("Outline this element"), "pad": {"type": "number"}}),
+                    "annotate": {"type": "boolean"}, "highlight": target_schema("Outline this element"), "pad": {"type": "number"},
+                    "raise": {"type": "boolean", "description": "Bring a covered window to the front to paint it (default true; false never steals focus)"}}),
                 &[],
             ),
             true,
