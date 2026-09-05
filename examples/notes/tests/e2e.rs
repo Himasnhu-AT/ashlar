@@ -251,7 +251,7 @@ fn an_idle_app_draws_nothing() {
     let mut d = windowed(dir.path());
     d.call("engine.execute", json!({"command": "note.generate", "params": {"count": 1000}})).unwrap();
     d.call("engine.execute", json!({"command": "file.save_as", "params": {"path": dir.path().join("i.notes").to_string_lossy()}})).unwrap();
-    d.call("ui.scroll", json!({"id": "notes.list", "dy": -400.0})).unwrap();
+    d.call("ui.scroll", json!({"id": "notes.list", "dy": 400.0})).unwrap();
     d.settle(60);
     // pending work finishes by itself (the debounced settings write wakes the loop once)
     let drain = d.advance(2.0);

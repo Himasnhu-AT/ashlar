@@ -146,7 +146,7 @@ fn waits_resolve_on_later_frames_and_time_out() {
 
     let before = d.time();
     let (e, detail) = error(d.request("ui.wait", json!({"for": "text", "text": "never shown", "timeout_ms": 300})));
-    assert!(e.contains("timed out"), "{e}");
+    assert!(e.starts_with("timeout"), "{e}");
     assert_eq!(detail["kind"], "timeout");
     let waited = d.time() - before;
     assert!((0.3..1.0).contains(&waited), "timed out after {waited} s of virtual time");
@@ -162,12 +162,12 @@ fn stale_refs_are_reported_with_the_generation() {
     d.call("engine.execute", json!({"command": "note.delete", "params": {"id": 2}})).unwrap();
     d.settle(10);
     let (e, detail) = error(d.request("ui.click", json!({"target": {"ref": second}})));
-    assert!(e.contains("stale ref"), "{e}");
+    assert!(e.starts_with("stale_ref"), "{e}");
     assert_eq!(detail["kind"], "stale_ref");
     assert_eq!(detail["ref"], second.as_str());
     assert_eq!(detail["generation"], snap["generation"]);
     let (e, detail) = error(d.request("ui.get", json!({"target": {"id": "no.such.thing"}})));
-    assert!(e.contains("no element"), "{e}");
+    assert!(e.starts_with("not_found"), "{e}");
     assert_eq!(detail["kind"], "not_found");
 }
 

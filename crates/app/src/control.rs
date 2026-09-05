@@ -2,7 +2,7 @@
 //! debugger's ([`ashlar_ui::devtools`]); the runtime answers the rest (`ui.inspect`, menus,
 //! `ui.set`, `app.*`) with access to the whole app.
 
-use ashlar_control::{Request, UI_METHODS, UiHandler};
+use ashlar_control::{DEBUG_METHODS, Request, UI_METHODS, UiHandler};
 use ashlar_ui::devtools;
 
 /// Extra methods the windowed runtime answers itself.
@@ -18,7 +18,7 @@ pub(crate) struct UiQueue {
 impl UiHandler for UiQueue {
     fn methods(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for m in UI_METHODS.iter().chain(devtools::METHODS).chain(RUNTIME_METHODS) {
+        for m in UI_METHODS.iter().chain(DEBUG_METHODS).chain(devtools::METHODS).chain(RUNTIME_METHODS) {
             if !out.iter().any(|o| o == m) {
                 out.push((*m).to_string());
             }

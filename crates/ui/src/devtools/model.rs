@@ -632,11 +632,13 @@ impl Outline {
         if n.echo {
             return false;
         }
+        // an unnamed drag area or click catcher tells an agent nothing it can act on by name
+        let anonymous = n.role == "generic" && n.name.is_empty() && n.id.is_none();
         if self.interactive {
-            return n.interactive && n.visible;
+            return n.interactive && n.visible && !anonymous;
         }
         if self.compact {
-            return n.visible && (n.interactive || !n.name.is_empty() || n.id.is_some());
+            return n.visible && !anonymous && (n.interactive || !n.name.is_empty() || n.id.is_some());
         }
         true
     }
@@ -779,7 +781,7 @@ impl Model {
     pub fn resolve(&self, t: &Target, refs: &Refs, generation: u64) -> Result<Hit, Miss> {
         let hit = |i: usize| self.nodes.get(i).map(|n| Hit { node: Some(i), point: n.center() });
         let not_found = || Miss {
-            error: format!("no element {} on screen (take a new ui.snapshot)", t.describe()),
+            error: format!("not_found: no element {} on screen (take a new ui.snapshot)", t.describe()),
             detail: json!({"kind": "not_found", "generation": generation}),
         };
         match t {
@@ -788,7 +790,7 @@ impl Model {
                 match found.and_then(hit) {
                     Some(h) => Ok(h),
                     None => Err(Miss {
-                        error: format!("stale ref @e{r}: that element is gone (snapshot generation {generation}; take a new ui.snapshot)"),
+                        error: format!("stale_ref: @e{r} is gone (snapshot generation {generation}; take a new ui.snapshot)"),
                         detail: json!({"kind": "stale_ref", "ref": format!("e{r}"), "generation": generation}),
                     }),
                 }

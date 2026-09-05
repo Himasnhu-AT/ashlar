@@ -111,7 +111,10 @@ const MAX_SHOTS: usize = 8;
 /// A frame that asks for no repaint sooner than this counts as idle.
 const IDLE_AFTER: Duration = Duration::from_millis(200);
 /// A screenshot not delivered within this long fails.
-const SHOT_TIMEOUT_S: f64 = 10.0;
+const SHOT_TIMEOUT_S: f64 = 5.0;
+/// A backend drops a screenshot request when it cannot present a frame (a window in the
+/// background on macOS gets no drawable): ask again this often until it arrives.
+const SHOT_RESEND_S: f64 = 0.5;
 
 /// What [`handle`] did with a request.
 #[derive(Debug)]
@@ -233,6 +236,10 @@ struct Shot {
     req: Request,
     token: u64,
     stage: ShotStage,
+    /// When it was first asked for (egui time).
+    asked: Option<f64>,
+    /// Bring the window to the front when no frame is presented (the request's `raise`).
+    raise: bool,
     crop: Option<Rect>,
     highlight: Option<Rect>,
     /// (ref, rect) of interactive elements, painted on the image.
@@ -417,9 +424,22 @@ impl State {
             for (label, r) in &s.annotations {
                 overlay::tag(&painter, *r, label, accent);
             }
-            if matches!(s.stage, ShotStage::Paint) && !discard {
+            let now = ctx.input(|i| i.time);
+            let due = match s.stage {
+                ShotStage::Paint => true,
+                ShotStage::Sent(at) => now - at >= SHOT_RESEND_S,
+                ShotStage::Got(_) => false,
+            };
+            if due && !discard {
+                // asked before and nothing came: the window presents no frames (in the background
+                // or covered); bring it to the front once so it does
+                if matches!(s.stage, ShotStage::Sent(_)) && std::mem::take(&mut s.raise) {
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                }
                 ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::new(ShotToken(s.token))));
-                s.stage = ShotStage::Sent(ctx.input(|i| i.time));
+                s.stage = ShotStage::Sent(now);
+                s.asked.get_or_insert(now);
             }
         }
         if self.overlay.open {
@@ -519,7 +539,7 @@ impl State {
             wake::wake(ctx, Reason::SCREENSHOT);
         }
         let mut next = self.waits.iter().map(|w| w.deadline).chain(self.highlights.iter().map(|h| h.1)).fold(f64::INFINITY, f64::min);
-        if let Some(t) = self.shots.iter().find_map(|s| if let ShotStage::Sent(t) = s.stage { Some(t + SHOT_TIMEOUT_S) } else { None }) {
+        if let Some(t) = self.shots.iter().filter_map(|s| s.asked).map(|t| t + SHOT_TIMEOUT_S).reduce(f64::min) {
             next = next.min(t);
         }
         if next.is_finite() {
@@ -569,7 +589,8 @@ impl State {
                     self.shot_seq = self.shot_seq.wrapping_add(1);
                     let token = self.shot_seq;
                     let (crop, highlight, annotations) = shot;
-                    self.shots.push(Shot { req, token, stage: ShotStage::Paint, crop, highlight, annotations });
+                    let raise = p.get("raise").and_then(Value::as_bool).unwrap_or(true);
+                    self.shots.push(Shot { req, token, stage: ShotStage::Paint, asked: None, raise, crop, highlight, annotations });
                     return;
                 }
                 Err(e) => Err(e),
@@ -634,7 +655,7 @@ impl State {
         let (_, h) = self.target(p, "ui.get")?;
         let what = param_str(p, "what").unwrap_or("text");
         let Some(n) = h.node.and_then(|i| self.model.get(i)) else {
-            return Err(Reply::err("no element there"));
+            return Err(Reply::err_with("not_found: no element there", json!({"kind": "not_found", "generation": self.generation})));
         };
         let value = match what {
             "text" => json!(n.text()),
@@ -696,7 +717,9 @@ impl State {
                     Some(t) => self.hit(&t)?.point,
                     None => ctx.content_rect().center(),
                 };
-                input::scroll_frames(at, input::delta(p), mods)
+                // the protocol's dy > 0 scrolls down (towards the end); egui's wheel delta is the
+                // other way round
+                input::scroll_frames(at, -input::delta(p), mods)
             }
             "ui.scroll_into_view" => {
                 let (_, h) = self.target(p, method)?;
@@ -781,7 +804,7 @@ impl State {
                     Cond::Idle => "the app to go idle".into(),
                 };
                 w.req.reply(Reply::err_with(
-                    format!("timed out after {elapsed_ms} ms waiting for {what}"),
+                    format!("timeout: waited {elapsed_ms} ms for {what}"),
                     json!({"kind": "timeout", "elapsed_ms": elapsed_ms}),
                 ));
             } else {
@@ -830,7 +853,7 @@ impl State {
         while i < self.shots.len() {
             let done = match self.shots.get(i).map(|s| &s.stage) {
                 Some(ShotStage::Got(_)) => true,
-                Some(ShotStage::Sent(at)) => now - at > SHOT_TIMEOUT_S,
+                Some(ShotStage::Sent(_)) => self.shots.get(i).and_then(|s| s.asked).is_some_and(|at| now - at > SHOT_TIMEOUT_S),
                 _ => false,
             };
             if !done {
@@ -839,7 +862,9 @@ impl State {
             }
             let s = self.shots.remove(i);
             let ShotStage::Got(img) = &s.stage else {
-                s.req.fail("the screenshot never arrived (the window may be hidden)");
+                s.req.fail(format!(
+                    "the window presented no frame for the screenshot within {SHOT_TIMEOUT_S} s: the window is covered, minimized, on another desktop or the screen is locked (the system gives such a window nothing to draw into); show it and try again"
+                ));
                 continue;
             };
             match image::encode_png(img, s.crop, ppp) {
