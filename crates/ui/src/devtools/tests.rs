@@ -180,7 +180,7 @@ fn click_by_ref_and_text_and_stale_refs() {
     app.show_button = false;
     app.settle();
     let Reply::Err { error, detail } = app.call("ui.click", json!({"target": {"ref": save}})) else { panic!("clicked a gone button") };
-    assert!(error.contains("stale ref"), "{error}");
+    assert!(error.starts_with("stale_ref"), "{error}");
     assert_eq!(detail.as_ref().unwrap()["kind"], "stale_ref");
     assert!(detail.unwrap()["generation"].as_u64().is_some());
     assert!(!app.call("ui.click", json!({"target": {"text": "Nothing like this"}})).is_ok());
@@ -223,7 +223,7 @@ fn waits_finish_on_a_later_frame_or_time_out() {
     assert!(app.show_extra);
     app.ok("ui.wait", json!({"for": "element", "target": {"text": "Saved!"}}));
     let Reply::Err { error, detail } = app.call("ui.wait", json!({"for": "gone", "target": {"text": "Saved!"}, "timeout_ms": 100})) else { panic!() };
-    assert!(error.contains("timed out"), "{error}");
+    assert!(error.starts_with("timeout"), "{error}");
     assert_eq!(detail.unwrap()["kind"], "timeout");
     app.ok("ui.wait", json!({"for": "enabled", "target": {"id": "toolbar.save"}}));
     app.ok("ui.wait", json!({"for": "idle", "timeout_ms": 1000}));

@@ -634,7 +634,7 @@ impl State {
         let (_, h) = self.target(p, "ui.get")?;
         let what = param_str(p, "what").unwrap_or("text");
         let Some(n) = h.node.and_then(|i| self.model.get(i)) else {
-            return Err(Reply::err("no element there"));
+            return Err(Reply::err_with("not_found: no element there", json!({"kind": "not_found", "generation": self.generation})));
         };
         let value = match what {
             "text" => json!(n.text()),
@@ -696,7 +696,9 @@ impl State {
                     Some(t) => self.hit(&t)?.point,
                     None => ctx.content_rect().center(),
                 };
-                input::scroll_frames(at, input::delta(p), mods)
+                // the protocol's dy > 0 scrolls down (towards the end); egui's wheel delta is the
+                // other way round
+                input::scroll_frames(at, -input::delta(p), mods)
             }
             "ui.scroll_into_view" => {
                 let (_, h) = self.target(p, method)?;
@@ -781,7 +783,7 @@ impl State {
                     Cond::Idle => "the app to go idle".into(),
                 };
                 w.req.reply(Reply::err_with(
-                    format!("timed out after {elapsed_ms} ms waiting for {what}"),
+                    format!("timeout: waited {elapsed_ms} ms for {what}"),
                     json!({"kind": "timeout", "elapsed_ms": elapsed_ms}),
                 ));
             } else {

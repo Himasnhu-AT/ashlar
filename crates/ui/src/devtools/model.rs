@@ -779,7 +779,7 @@ impl Model {
     pub fn resolve(&self, t: &Target, refs: &Refs, generation: u64) -> Result<Hit, Miss> {
         let hit = |i: usize| self.nodes.get(i).map(|n| Hit { node: Some(i), point: n.center() });
         let not_found = || Miss {
-            error: format!("no element {} on screen (take a new ui.snapshot)", t.describe()),
+            error: format!("not_found: no element {} on screen (take a new ui.snapshot)", t.describe()),
             detail: json!({"kind": "not_found", "generation": generation}),
         };
         match t {
@@ -788,7 +788,7 @@ impl Model {
                 match found.and_then(hit) {
                     Some(h) => Ok(h),
                     None => Err(Miss {
-                        error: format!("stale ref @e{r}: that element is gone (snapshot generation {generation}; take a new ui.snapshot)"),
+                        error: format!("stale_ref: @e{r} is gone (snapshot generation {generation}; take a new ui.snapshot)"),
                         detail: json!({"kind": "stale_ref", "ref": format!("e{r}"), "generation": generation}),
                     }),
                 }
