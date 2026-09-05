@@ -462,10 +462,12 @@ name = "ashlar-ui"
 version = "0.1.0"
 dependencies = [
  "ashlar-command",
+ "ashlar-control",
  "egui",
  "egui_extras",
  "egui_kittest",
  "image",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "skrifa",

@@ -9,7 +9,8 @@
 //! - Data: [`virtual_list`] (list and table, O(visible) per frame), [`tree`].
 //! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
-//! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`cache`]
+//! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`devtools`]
+//!   (the UI debugger: element tree with refs, injected input, waits, screenshots, inspector), [`cache`]
 //!   (revision-keyed galleys and meshes), [`wake`] (frame requests with a reason, per-reason
 //!   frame counts).
 //!
@@ -21,6 +22,7 @@ pub mod automation;
 pub mod buttons;
 pub mod cache;
 pub mod commands;
+pub mod devtools;
 pub mod dialog;
 pub mod docking;
 pub mod edit;

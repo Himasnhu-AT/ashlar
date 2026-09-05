@@ -80,25 +80,117 @@ Answered by `ashlar_control::handle` from any `Dispatch` (headless or windowed):
 
 ## UI methods
 
-Routed to the app's `UiHandler` (implemented by the egui runtime). A handler may keep a request and
-answer it on a later frame. Headless sessions refuse them with a hint. The canonical vocabulary:
+Routed to the app's `UiHandler`. A handler may keep a request and answer it on a later frame.
+Headless sessions refuse them with a hint. The windowed runtime answers the app-level ones itself
+and hands the debugger methods (next section) to `ashlar_ui::devtools`:
 
 | Method | Params | Result |
 |---|---|---|
-| `ui.inspect` | — | UI state plus every registered element `{id, label, rect:[x,y,w,h]}` |
-| `ui.click` | `{id}` or `{x, y}`, `button?` (`primary`/`secondary`/`middle`), `count?`, `modifiers?` | `{}` once processed |
-| `ui.drag` | `{from: {id}│{x,y}, to: {id}│{x,y}, steps?, modifiers?}` | `{}` |
-| `ui.scroll` | `{x, y, dx, dy}` | `{}` |
-| `ui.key` | `{key, modifiers?}` (`modifiers`: `{command, shift, alt, ctrl}`; `command` = ⌘ on macOS, Ctrl elsewhere) | `{}` |
-| `ui.type` | `{text}` | `{}` |
-| `ui.screenshot` | `{id?}` (crop to an element) | `{png: <base64>, width, height}`: pictures travel inline, never through a predictable temp file |
+| `ui.inspect` | — | UI state plus every registered element `{id, label, role, rect:[x,y,w,h], enabled, value?, selected?}` |
 | `ui.menu.list` | — | the menu tree with enablement |
 | `ui.menu.invoke` | `{id}` | as `engine.execute` |
 | `ui.set` | app-defined view state (`{theme?, workspace?, …}`) | `{}` |
-| `app.quit` | — | `{}`, then the app quits |
+| `app.quit` | `{discard?}` | `{closing}`, then the app quits |
+| `app.stats` | `{reset?}` | frame times, passes, jobs, `wakes` (frames and requests per reason) |
+| `app.logs` | `{limit?, level?}` | `{lines: [{unix, level, target, message}]}` |
 
 Apps may add their own methods (`ui.timeline.hit`…); list them in `UiHandler::methods` so they show
 in `app.version`.
+
+## Debugger methods
+
+Drive the UI the way a browser automation tool drives a page: snapshot the element tree with short
+refs, act on refs, wait, read, screenshot. Implemented by `ashlar_ui::devtools` (an egui plugin),
+so an app that does not use `ashlar-app` gets the same methods by passing requests to
+`devtools::handle(ctx, request)` (see that module's docs). `app.version` lists them when available.
+
+### Elements and refs
+
+The element tree is egui's AccessKit output (every egui widget: role, label, value, state, bounds)
+merged with the ashlar automation registry (dotted `id`s, component roles). An element:
+
+```json
+{"ref": "e12", "id": "notes.title", "role": "textbox", "name": "Title", "value": "Groceries",
+ "enabled": true, "focused": false, "selected": false, "checked": null, "visible": true,
+ "rect": [x, y, w, h], "parent": "e3"}
+```
+
+`id`, `value`, `selected`, `checked` and `parent` are omitted when they do not apply. `rect` is the
+on-screen part in logical points. Roles: `button checkbox switch radio radiogroup textbox searchbox
+slider spinbutton combobox link label image colorwell panel window dialog scrollbar separator
+progressbar menu menubar menuitem tab tablist list listitem tree treeitem table row cell
+columnheader toolbar status alert tooltip group generic`.
+
+A ref stays the same for an element across snapshots while it exists (keyed by its automation id,
+else by its egui widget id and role); every `ui.snapshot` increments the `generation`. The first
+debugger request turns egui's AccessKit output on for the rest of the session.
+
+### Targets
+
+Every method that acts on an element takes a target, as `target: {...}` or flat in the params:
+
+| Target | Matches |
+|---|---|
+| `{ref: "e12"}` (also `"@e12"`, `12`, or the bare string `"@e12"`) | the element of a snapshot |
+| `{id: "file.save"}` | the (first visible) element with that automation id |
+| `{text: "Save", role?: "button"}` | the first visible element with that name: exact, then ignoring case, then containing it; interactive elements first. Not accepted flat (`text` is the typed text of `ui.fill`/`ui.type`) |
+| `{x, y}` | that point (logical points); the element there, if any |
+
+Errors carry `detail.kind`: `stale_ref` (`{kind, ref, generation}`: the element of that ref is
+gone; take a new snapshot), `not_found` (`{kind, generation}`), `timeout` (`{kind, elapsed_ms}`).
+
+### Methods
+
+All answer once the frames they need have run; input methods return `{}` after the injected input
+has been processed by a frame.
+
+| Method | Params | Result |
+|---|---|---|
+| `ui.snapshot` | `{interactive?: false, compact?: false, scope?: target, depth?}` | `{generation, tree, elements: [element], focused: ref│null}` |
+| `ui.click` | target, `button?` (`primary`/`secondary`/`middle`), `count?` (1–3), `modifiers?` | `{}` |
+| `ui.hover` / `ui.move` | target (`ui.move`: `{x, y}`) | `{}` |
+| `ui.focus` | target | `{}`: AccessKit focus, or a click for text fields |
+| `ui.fill` | target?, `text`, `submit?` | `{}`: click the target, select all, type `text` (or delete when empty), Enter when `submit`; without a target, the focused field |
+| `ui.type` | target?, `text` | `{}`: typed into the target (clicked first) or the focused widget |
+| `ui.press` | `keys` (`"Mod+Shift+S"`, sequences `"G G"`; `ashlar_command::shortcut` syntax; `key` is accepted too) | `{}` |
+| `ui.key` | `{key, modifiers?}` | `{}` (one key; `modifiers`: `{command, shift, alt, ctrl}`, `command` = ⌘ on macOS, Ctrl elsewhere) |
+| `ui.scroll` | target? (default: the window centre), `dx`, `dy` | `{}` |
+| `ui.scroll_into_view` | target | `{}` |
+| `ui.drag` | `{from: target, to: target, steps?: 8, modifiers?}` | `{}` |
+| `ui.get` | target, `what`: `text` (a field's content, else the name), `name`, `value`, `rect`, `enabled`, `visible`, `focused`, `checked`, `selected`, `role`, `element` | `{value}` |
+| `ui.wait` | `{for: element│gone│text│enabled│idle, target?, text?, timeout_ms?: 5000}` (`for` defaults to `text` when `text` is given, else `element`) | `{elapsed_ms}`; error `timeout` |
+| `ui.screenshot` | target? (crop; also the legacy `{id}`), `pad?`, `annotate?`, `highlight?: target` | `{png: <base64>, width, height, annotations?: [{ref, rect}]}` |
+| `ui.highlight` | target, `ms?: 1500` | `{rect}`: the element is outlined in the live window |
+| `devtools.toggle` | `{open?}` | the state below |
+| `devtools.state` | — | `{open, generation, elements, pending: {input_frames, waits, screenshots}, repaints_while_open}` |
+
+The text outline of `ui.snapshot`, one element per line, two spaces of indent per level:
+
+```text
+- button "New Note" [ref=e5] [id=notes.add]
+- list [ref=e8] [id=notes.list]
+  - listitem "Groceries" [ref=e9] [id=notes.list.row.0] [selected]
+- textbox "Title" [ref=e14] [id=notes.title] [value="Groceries"] [focused]
+```
+
+Flags: `[disabled] [focused] [selected] [checked]│[unchecked] [offscreen]`; names and values are
+cut at 80 characters. `interactive` lists only visible controls; `compact` leaves out unnamed
+non-interactive and off-screen elements.
+
+Waits are checked on frames the app runs anyway plus one wake at the deadline: a pending wait
+never makes the app repaint in a loop. `idle` means a frame asked for no repaint within 200 ms, no
+injected input is pending and the app reports no work of its own (`devtools::set_busy`; the
+runtime reports its background jobs). Screenshot `annotations[].rect` is in image pixels relative
+to the returned image; annotate and highlight are painted into the captured frame. Pictures travel
+inline, never through a predictable temp file.
+
+### The inspector
+
+F12 (or `devtools.toggle`) opens an inspector window in the app: Pick (hover outlines an element
+with its role, name, ref, id and rect; a click selects it and copies `@eN`), the element tree,
+frame and wake counters with a live repaint counter, and panels the app provides
+(`devtools::section`: the runtime adds its recent logs and the undo history). The inspector is not
+part of snapshots. Closed, it costs nothing: no frames, no allocations.
 
 ## MCP tools
 

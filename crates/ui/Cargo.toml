@@ -10,10 +10,13 @@ workspace = true
 
 [dependencies]
 ashlar-command = { workspace = true }
+ashlar-control = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# screenshots travel as PNG (same encoder the runtime used before the debugger moved here)
+png = "0.18"
 # same version egui's epaint uses: validates app-supplied font bytes before egui would panic on them
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
