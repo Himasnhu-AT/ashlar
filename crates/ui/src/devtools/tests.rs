@@ -304,3 +304,34 @@ fn foreign_methods_are_handed_back() {
     assert!(handles("ui.snapshot") && !handles("ui.inspect"));
     let _ = pos2(0.0, 0.0);
 }
+
+#[test]
+fn drives_a_plain_egui_app_in_a_kittest_harness() {
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, clicks: &mut u32| {
+            if ui.button("Plain button").clicked() {
+                *clicks += 1;
+            }
+            ui.label(format!("clicked {clicks}"));
+        },
+        0,
+    );
+    install(&h.ctx);
+    let ask = |h: &mut egui_kittest::Harness<'_, u32>, method: &str, params: Value| -> Value {
+        let rx = call(&h.ctx, method, params);
+        for _ in 0..60 {
+            h.step();
+            if let Ok(r) = rx.try_recv() {
+                return r.into_result().unwrap();
+            }
+        }
+        panic!("{method} not answered");
+    };
+    let snap = ask(&mut h, "ui.snapshot", json!({"interactive": true}));
+    let tree = snap["tree"].as_str().unwrap();
+    assert!(tree.starts_with("- button \"Plain button\" [ref=e"), "{tree}");
+    let r = snap["elements"][0]["ref"].as_str().unwrap().to_string();
+    ask(&mut h, "ui.click", json!({"ref": r}));
+    assert_eq!(*h.state(), 1);
+    ask(&mut h, "ui.wait", json!({"text": "clicked 1", "timeout_ms": 500}));
+}

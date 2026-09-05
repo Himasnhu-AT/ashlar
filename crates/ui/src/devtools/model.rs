@@ -49,6 +49,8 @@ pub struct Node {
     pub children: Vec<usize>,
     pub depth: usize,
     order: f64,
+    /// A label that only repeats its parent's name (left out of the outline).
+    echo: bool,
 }
 
 impl Default for Node {
@@ -72,6 +74,7 @@ impl Default for Node {
             children: Vec::new(),
             depth: 0,
             order: 0.0,
+            echo: false,
         }
     }
 }
@@ -302,6 +305,7 @@ impl Model {
             m.add_accesskit(u, src);
         }
         m.merge_elements(src);
+        m.nest();
         m.link();
         for n in &mut m.nodes {
             n.ref_n = refs.get(n.key);
@@ -457,6 +461,42 @@ impl Model {
         }
     }
 
+    /// egui's tree is flat where ashlar's components draw their own rows: a list, row, dialog…
+    /// that ashlar registered takes the later siblings drawn inside its rect as children.
+    fn nest(&mut self) {
+        const CONTAINERS: &[&str] = &[
+            "list", "listitem", "tree", "treeitem", "table", "row", "dialog", "menu", "menubar", "toolbar", "tablist", "status", "panel", "window",
+            "group",
+        ];
+        let mut by_order: Vec<usize> = (0..self.nodes.len()).collect();
+        by_order.sort_by(|a, b| {
+            let o = |i: &usize| self.nodes.get(*i).map_or(0.0, |n| n.order);
+            o(a).total_cmp(&o(b))
+        });
+        let mut budget: usize = 4_000_000;
+        for (pos, &c) in by_order.iter().enumerate() {
+            let Some(container) = self.nodes.get(c) else { continue };
+            if container.id.is_none() || !CONTAINERS.contains(&container.role) || !container.rect.is_positive() {
+                continue;
+            }
+            let (parent, rect, name) = (container.parent, container.rect, container.name.clone());
+            for &j in by_order.get(pos + 1..).unwrap_or(&[]) {
+                budget = budget.saturating_sub(1);
+                if budget == 0 {
+                    return;
+                }
+                if let Some(n) = self.nodes.get_mut(j)
+                    && n.parent == parent
+                    && n.rect.is_positive()
+                    && rect.contains_rect(n.rect)
+                {
+                    n.parent = Some(c);
+                    n.echo = n.role == "label" && !name.is_empty() && n.name == name;
+                }
+            }
+        }
+    }
+
     /// Children lists (in order) and depths from the parent links.
     fn link(&mut self) {
         let n = self.nodes.len();
@@ -589,6 +629,9 @@ pub struct Outline {
 
 impl Outline {
     fn shows(&self, n: &Node) -> bool {
+        if n.echo {
+            return false;
+        }
         if self.interactive {
             return n.interactive && n.visible;
         }
