@@ -247,10 +247,18 @@ impl Ctx<'_, '_, '_> {
         Ok(Done::new(r, said))
     }
 
+    /// Whether screenshots must not raise the window: `ASHLAR_DEBUG_NO_RAISE`, or a session opened
+    /// with `--no-raise`.
+    fn no_raise(&self) -> bool {
+        self.env.no_raise
+            || (self.port.is_none() && self.app.is_none() && session::load(self.env, &self.session).ok().flatten().is_some_and(|s| s.no_raise))
+    }
+
     // ------------------------------------------------------------------ sessions
 
     fn open(&mut self, mut a: Args) -> Res {
         let wait = a.number::<u64>(&["--wait"]).map_err(usage("open"))?.unwrap_or(30_000);
+        let no_raise = a.flag(&["--no-raise"]);
         let exe = need(a.positional(), "the app to start", "open")?;
         let rest = a.rest();
         a.finish().map_err(usage("open"))?;
@@ -263,7 +271,8 @@ impl Ctx<'_, '_, '_> {
                 hint: Some("`ashlar-debug close` it first, or pick another name with --session".into()),
             });
         }
-        let (s, c) = session::launch(self.env, &self.session, &exe, &rest, Duration::from_millis(wait)).map_err(Fail::msg)?;
+        let (mut s, c) = session::launch(self.env, &self.session, &exe, &rest, Duration::from_millis(wait)).map_err(Fail::msg)?;
+        s.no_raise = no_raise;
         session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
         self.conn = Some(c);
         let text = format!("opened {exe} (pid {}) on 127.0.0.1:{} as session `{}`", s.pid.unwrap_or(0), s.port, self.session);
@@ -271,6 +280,7 @@ impl Ctx<'_, '_, '_> {
     }
 
     fn connect(&mut self, mut a: Args) -> Res {
+        let no_raise = a.flag(&["--no-raise"]);
         let port = need(a.positional(), "a port", "connect")?;
         a.finish().map_err(usage("connect"))?;
         let port: u16 = port.parse().map_err(|_| Fail::Usage(format!("`{port}` is not a port"), usage_of("connect")))?;
@@ -289,7 +299,7 @@ impl Ctx<'_, '_, '_> {
                 .or_else(|| session::find_keys(&self.env.config_roots, Some(port), self.app.as_deref()).into_iter().next().map(|k| k.dir))
                 .unwrap_or_default(),
         };
-        let s = Session { port, key_dir, pid: None, exe: None, log: None, launched: false, trace: None };
+        let s = Session { port, key_dir, pid: None, exe: None, log: None, launched: false, trace: None, no_raise };
         session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
         self.conn = Some(c);
         let name = info.get("name").and_then(Value::as_str).unwrap_or("app");
@@ -590,6 +600,7 @@ impl Ctx<'_, '_, '_> {
 
     fn screenshot(&mut self, mut a: Args) -> Res {
         let annotate = a.flag(&["--annotate", "-a"]);
+        let no_raise = a.flag(&["--no-raise"]);
         let tgt = a.value(&["--target", "--ref"]).map_err(usage("screenshot"))?;
         let highlight = a.value(&["--highlight"]).map_err(usage("screenshot"))?;
         let pad = a.number::<f64>(&["--pad"]).map_err(usage("screenshot"))?;
@@ -598,6 +609,9 @@ impl Ctx<'_, '_, '_> {
         let mut p = json!({});
         if annotate {
             p["annotate"] = json!(true);
+        }
+        if no_raise || self.no_raise() {
+            p["raise"] = json!(false);
         }
         if let Some(t) = tgt {
             p["target"] = parse_target(&t, "screenshot")?;
@@ -786,7 +800,8 @@ impl Ctx<'_, '_, '_> {
         let base = format!("{n:03}-{verb}");
         let mut problems = Vec::new();
         let png = dir.join(format!("{base}.png"));
-        match self.call("ui.screenshot", json!({})).map_err(|e| e.text()).and_then(|v| save_png(&v, &png)) {
+        let shot = if self.no_raise() { json!({"raise": false}) } else { json!({}) };
+        match self.call("ui.screenshot", shot).map_err(|e| e.text()).and_then(|v| save_png(&v, &png)) {
             Ok(()) => {}
             Err(e) => problems.push(format!("screenshot: {e}")),
         }

@@ -48,7 +48,8 @@ fill <T> <text> [--submit]    type <text>    press Mod+S | "Tab Tab Enter"
 scroll [T] [up|down|left|right] [px] | --dx N --dy N    scrollintoview <T>    drag <A> <B> [--steps N]
 get text|value|rect|enabled|visible|focused|checked <T>
 wait <T> | <ms> | --text S | --gone T | --enabled T | --idle   [--timeout MS]
-screenshot [out.png] [--target T] [--annotate] [--highlight T] [--pad N]    highlight <T> [--ms N]
+screenshot [out.png] [--target T] [--annotate] [--highlight T] [--pad N] [--no-raise]
+highlight <T> [--ms N]
 exec <command> [json|-]    commands [query]    menu [id]    logs [-n N]    stats    devtools [open|close|state]
 call <method> [json|-]     batch <file|-> [--verbose]    trace start <dir> | trace stop    demo
 ```
@@ -56,6 +57,11 @@ call <method> [json|-]     batch <file|-> [--verbose]    trace start <dir> | tra
 Global options: `--session NAME` (default `default`, or `ASHLAR_DEBUG_SESSION`), `--port N`
 `[--key-dir D]` or `--app NAME` (talk to a running app without a session), `--json` (one
 `{"ok":…}` line on stdout), `--call-timeout MS`. Exit codes: 0 ok, 1 failed, 2 usage.
+
+To take a screenshot, the app raises a covered window once. Automated runs that must not steal
+focus can pass `--no-raise` to `screenshot`, open the session with `open --no-raise` (or
+`connect --no-raise`), or set `ASHLAR_DEBUG_NO_RAISE=1`. Each of these sends `raise: false`, and
+traces respect them too.
 
 ## Sessions and the control key
 

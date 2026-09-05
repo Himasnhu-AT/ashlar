@@ -20,7 +20,7 @@ fn debug(env: &Env, args: &[String], stdin: &str) -> (Exit, String, String) {
 }
 
 fn env(root: &std::path::Path) -> Env {
-    Env { home: root.join("debug-home"), config_roots: vec![root.join("none")], session: "default".into(), key_dir: None }
+    Env { home: root.join("debug-home"), config_roots: vec![root.join("none")], ..Env::under(root) }
 }
 
 #[test]

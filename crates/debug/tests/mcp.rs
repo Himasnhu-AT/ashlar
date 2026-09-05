@@ -75,6 +75,12 @@ fn debugger_tools_drive_the_app_by_refs() {
     let r = call(&mut server, "screenshot", json!({"target": "@e3"}));
     assert_eq!(serde_json::from_str::<Value>(&text(&r, 1)).unwrap(), json!({"width": 56, "height": 24}));
 
+    // `raise: false` reaches the app (it never steals focus to paint).
+    let r = call(&mut server, "screenshot", json!({"raise": false}));
+    assert_eq!(r["isError"], false);
+    let stats = Client::connect(app.port, &dir).unwrap().call("app.stats", json!({})).unwrap();
+    assert_eq!(stats["screenshot_raise"], false);
+
     // Mistakes come back as tool errors, never protocol errors.
     let r = call(&mut server, "ui_click", json!({"target": "Save"}));
     assert_eq!(r["isError"], true);

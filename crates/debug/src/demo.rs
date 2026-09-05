@@ -89,6 +89,8 @@ struct Model {
     devtools: bool,
     log: Vec<String>,
     requests: u64,
+    /// The `raise` of the last `ui.screenshot` (null when not given).
+    screenshot_raise: Value,
     quit: bool,
 }
 
@@ -133,6 +135,7 @@ impl Model {
             devtools: false,
             log: Vec::new(),
             requests: 0,
+            screenshot_raise: Value::Null,
             quit: false,
         }
     }
@@ -450,6 +453,7 @@ impl Model {
     }
 
     fn screenshot(&mut self, p: &Value) -> Reply {
+        self.screenshot_raise = p.get("raise").cloned().unwrap_or(Value::Null);
         let mut img = vec![0u8; (W * H * 4) as usize];
         let fill = |img: &mut Vec<u8>, r: [f32; 4], c: [u8; 4], outline: bool| {
             let (x0, y0) = (r[0].max(0.0) as u32, r[1].max(0.0) as u32);
@@ -645,7 +649,9 @@ impl Model {
                 self.quit = true;
                 Reply::ok(json!({"closing": true}))
             }
-            "app.stats" => Reply::ok(json!({"requests": self.requests, "elements": self.els.len(), "generation": self.generation})),
+            "app.stats" => Reply::ok(
+                json!({"requests": self.requests, "elements": self.els.len(), "generation": self.generation, "screenshot_raise": self.screenshot_raise}),
+            ),
             "app.logs" => {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
                 let lines: Vec<Value> =
