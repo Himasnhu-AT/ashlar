@@ -513,7 +513,9 @@ impl State {
         if self.script.is_busy() || !self.inbox.is_empty() {
             wake::wake(ctx, Reason::CONTROL);
         }
-        if self.shots.iter().any(|s| !matches!(s.stage, ShotStage::Sent(_))) {
+        // a backend delivers the image with a later frame's input: keep frames coming until it
+        // has (a frame or two per screenshot)
+        if !self.shots.is_empty() {
             wake::wake(ctx, Reason::SCREENSHOT);
         }
         let mut next = self.waits.iter().map(|w| w.deadline).chain(self.highlights.iter().map(|h| h.1)).fold(f64::INFINITY, f64::min);
