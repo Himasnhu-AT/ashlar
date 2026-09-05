@@ -26,6 +26,8 @@ mod control;
 pub mod driver;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
 mod native_menu;
+#[cfg(not(target_arch = "wasm32"))]
+mod offscreen;
 pub mod runtime;
 pub mod session;
 pub mod stats;

@@ -184,10 +184,13 @@ Waits are checked on frames the app runs anyway plus one wake at the deadline: a
 never makes the app repaint in a loop. `idle` means a frame asked for no repaint within 200 ms, no
 injected input is pending and the app reports no work of its own (`devtools::set_busy`; the
 runtime reports its background jobs). Screenshot `annotations[].rect` is in image pixels relative
-to the returned image; annotate and highlight are painted into the captured frame. A screenshot
-needs a presented frame: the request is repeated every 0.5 s, the window is brought to the front
-once (unless `raise: false`), and after 5 s without a frame it fails with an error saying the
-window is covered, minimized, on another desktop or the screen is locked. It never hangs. Pictures travel
+to the returned image; annotate and highlight are painted into the captured frame. Screenshots are rendered off screen
+when the app provides a renderer (`devtools::set_offscreen`; `ashlar-app` uses eframe's wgpu
+device), so they work for a window that is covered, in the background, minimized behind others or
+on a locked screen. Otherwise the backend captures a presented frame: the request is repeated every
+0.25 s, the window is brought to the front once (unless `raise: false`), and after 1 s without a
+frame it fails with an error saying why. Either way it never hangs and never spins: a failed
+screenshot costs a bounded handful of frames. Pictures travel
 inline, never through a predictable temp file.
 
 ### The inspector
