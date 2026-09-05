@@ -19,6 +19,8 @@ struct App {
     show_button: bool,
     frames_until_extra: Option<u32>,
     last: Option<egui::FullOutput>,
+    /// Screenshot requests the "backend" drops (a window that presents no frame).
+    drop_shots: usize,
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl App {
             show_button: true,
             frames_until_extra: None,
             last: None,
+            drop_shots: 0,
         }
     }
 
@@ -86,6 +89,10 @@ impl App {
         out.textures_delta.clear();
         for c in out.viewport_output.get(&ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default() {
             if let ViewportCommand::Screenshot(user_data) = c {
+                if self.drop_shots > 0 {
+                    self.drop_shots -= 1;
+                    continue;
+                }
                 let image = Arc::new(egui::ColorImage::new([400, 300], vec![egui::Color32::from_gray(30); 400 * 300]));
                 self.pending.push(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data, image });
             }
@@ -334,4 +341,16 @@ fn drives_a_plain_egui_app_in_a_kittest_harness() {
     ask(&mut h, "ui.click", json!({"ref": r}));
     assert_eq!(*h.state(), 1);
     ask(&mut h, "ui.wait", json!({"text": "clicked 1", "timeout_ms": 500}));
+}
+
+#[test]
+fn a_dropped_screenshot_is_asked_again_and_a_window_that_never_draws_fails_fast() {
+    let mut app = App::new();
+    app.settle();
+    app.drop_shots = 2;
+    let shot = app.ok("ui.screenshot", json!({}));
+    assert_eq!(shot["width"].as_u64(), Some(400));
+    app.drop_shots = usize::MAX;
+    let Reply::Err { error, .. } = app.call("ui.screenshot", json!({"raise": false})) else { panic!("a screenshot from nowhere") };
+    assert!(error.contains("presented no frame"), "{error}");
 }

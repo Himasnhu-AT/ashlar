@@ -101,7 +101,8 @@ in `app.version`.
 
 Drive the UI the way a browser automation tool drives a page: snapshot the element tree with short
 refs, act on refs, wait, read, screenshot. Implemented by `ashlar_ui::devtools` (an egui plugin),
-so an app that does not use `ashlar-app` gets the same methods by passing requests to
+so an app that does not use `ashlar-app` gets the same methods (the `ashlar-debug` CLI and the
+MCP `ui_*` tools speak them; see [debugging-uis.md](debugging-uis.md)) by passing requests to
 `devtools::handle(ctx, request)` (see that module's docs). `app.version` lists them when available.
 
 ### Elements and refs
@@ -136,7 +137,8 @@ Every method that acts on an element takes a target, as `target: {...}` or flat 
 | `{text: "Save", role?: "button"}` | the first visible element with that name: exact, then ignoring case, then containing it; interactive elements first. Not accepted flat (`text` is the typed text of `ui.fill`/`ui.type`) |
 | `{x, y}` | that point (logical points); the element there, if any |
 
-Errors carry `detail.kind`: `stale_ref` (`{kind, ref, generation}`: the element of that ref is
+The error text starts with the kind (`stale_ref: …`, `not_found: …`, `timeout: …`) and `detail.kind`
+carries it: `stale_ref` (`{kind, ref, generation}`: the element of that ref is
 gone; take a new snapshot), `not_found` (`{kind, generation}`), `timeout` (`{kind, elapsed_ms}`).
 
 ### Methods
@@ -154,12 +156,12 @@ has been processed by a frame.
 | `ui.type` | target?, `text` | `{}`: typed into the target (clicked first) or the focused widget |
 | `ui.press` | `keys` (`"Mod+Shift+S"`, sequences `"G G"`; `ashlar_command::shortcut` syntax; `key` is accepted too) | `{}` |
 | `ui.key` | `{key, modifiers?}` | `{}` (one key; `modifiers`: `{command, shift, alt, ctrl}`, `command` = ⌘ on macOS, Ctrl elsewhere) |
-| `ui.scroll` | target? (default: the window centre), `dx`, `dy` | `{}` |
+| `ui.scroll` | target? (default: the window centre), `dx`, `dy` in points; `dy > 0` scrolls down (towards the end), `dx > 0` right | `{}` |
 | `ui.scroll_into_view` | target | `{}` |
 | `ui.drag` | `{from: target, to: target, steps?: 8, modifiers?}` | `{}` |
 | `ui.get` | target, `what`: `text` (a field's content, else the name), `name`, `value`, `rect`, `enabled`, `visible`, `focused`, `checked`, `selected`, `role`, `element` | `{value}` |
 | `ui.wait` | `{for: element│gone│text│enabled│idle, target?, text?, timeout_ms?: 5000}` (`for` defaults to `text` when `text` is given, else `element`) | `{elapsed_ms}`; error `timeout` |
-| `ui.screenshot` | target? (crop; also the legacy `{id}`), `pad?`, `annotate?`, `highlight?: target` | `{png: <base64>, width, height, annotations?: [{ref, rect}]}` |
+| `ui.screenshot` | target? (crop; also the legacy `{id}`), `pad?`, `annotate?`, `highlight?: target`, `raise?: true` | `{png: <base64>, width, height, annotations?: [{ref, rect}]}` |
 | `ui.highlight` | target, `ms?: 1500` | `{rect}`: the element is outlined in the live window |
 | `devtools.toggle` | `{open?}` | the state below |
 | `devtools.state` | — | `{open, generation, elements, pending: {input_frames, waits, screenshots}, repaints_while_open}` |
@@ -175,13 +177,17 @@ The text outline of `ui.snapshot`, one element per line, two spaces of indent pe
 
 Flags: `[disabled] [focused] [selected] [checked]│[unchecked] [offscreen]`; names and values are
 cut at 80 characters. `interactive` lists only visible controls; `compact` leaves out unnamed
-non-interactive and off-screen elements.
+non-interactive and off-screen elements. Both leave out unnamed `generic` elements (drag areas,
+click catchers) that have no automation id.
 
 Waits are checked on frames the app runs anyway plus one wake at the deadline: a pending wait
 never makes the app repaint in a loop. `idle` means a frame asked for no repaint within 200 ms, no
 injected input is pending and the app reports no work of its own (`devtools::set_busy`; the
 runtime reports its background jobs). Screenshot `annotations[].rect` is in image pixels relative
-to the returned image; annotate and highlight are painted into the captured frame. Pictures travel
+to the returned image; annotate and highlight are painted into the captured frame. A screenshot
+needs a presented frame: the request is repeated every 0.5 s, the window is brought to the front
+once (unless `raise: false`), and after 5 s without a frame it fails with an error saying the
+window is covered, minimized, on another desktop or the screen is locked. It never hangs. Pictures travel
 inline, never through a predictable temp file.
 
 ### The inspector
