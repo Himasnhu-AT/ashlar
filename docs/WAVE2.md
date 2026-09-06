@@ -25,3 +25,5 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
 - ashlar-control: optional public `KeyFile` constructor / configurable key path.
 - ashlar-command: let `Host::before` return `S::Error` through `execute_host` (an `ExecError::Host` path for
   before-hook errors), so hosts need no side stash to keep their error variant.
+- Annotated screenshots: ref labels still overlap the text of short elements on the top edge (menu bar
+  items, search field); place labels outside the element (above, or to the side when there is no room).
