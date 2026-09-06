@@ -37,6 +37,8 @@ pub struct Driver<D: Document> {
     frames: u64,
     closed: bool,
     close_requested: bool,
+    /// Deliver `ViewportCommand::Screenshot` captures (off: a window that presents no frame).
+    screenshots: bool,
 }
 
 impl<D: Document> Driver<D> {
@@ -61,6 +63,7 @@ impl<D: Document> Driver<D> {
             frames: 0,
             closed: false,
             close_requested: false,
+            screenshots: true,
         }
     }
 
@@ -98,6 +101,12 @@ impl<D: Document> Driver<D> {
         self.input.push_back(e);
     }
 
+    /// Whether screenshots are delivered (on by default). Off, the loop behaves like a window
+    /// that is covered or on a locked screen: capture requests are dropped.
+    pub fn set_screenshots(&mut self, deliver: bool) {
+        self.screenshots = deliver;
+    }
+
     /// Ask to close the window, as the window's close button does.
     pub fn request_close(&mut self) {
         self.close_requested = true;
@@ -127,6 +136,7 @@ impl<D: Document> Driver<D> {
             }
             for c in &vp.commands {
                 match c {
+                    ViewportCommand::Screenshot(_) if !self.screenshots => {}
                     ViewportCommand::Screenshot(user_data) => {
                         let [w, h] = [self.screen.width() as usize, self.screen.height() as usize];
                         let image = Arc::new(egui::ColorImage::new([w, h], vec![egui::Color32::from_gray(30); w * h]));

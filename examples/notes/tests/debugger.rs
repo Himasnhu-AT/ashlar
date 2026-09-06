@@ -226,3 +226,45 @@ fn the_inspector_opens_and_an_idle_app_draws_nothing_either_way() {
     d.advance(2.0);
     assert_eq!(d.advance(5.0), 0);
 }
+
+#[test]
+fn a_failed_screenshot_and_a_waiting_autosave_cost_bounded_frames() {
+    use ashlar::app::wake::{Reason, WakeStats};
+    let dir = tempfile::tempdir().unwrap();
+    let rt: Runtime<Notes> = notes::app().dirs(AppDirs::under(dir.path())).autosave(Some(std::time::Duration::from_secs(60))).runtime();
+    let mut d = Driver::new(rt);
+    d.settle(20);
+    // a dirty document waiting for its autosave, after a click like an agent's
+    d.call("ui.click", json!({"target": {"id": "notes.add"}})).unwrap();
+    assert!(d.runtime.session().is_dirty());
+    d.settle(20);
+
+    // a window that presents no frame: the screenshot fails within about a second…
+    d.set_screenshots(false);
+    let (before, t0) = (d.runtime.wakes(), d.time());
+    let (e, _) = error(d.request("ui.screenshot", json!({"raise": false})));
+    assert!(e.contains("presented no frame"), "{e}");
+    let after = d.runtime.wakes();
+    let requests = |r: Reason| after.requests_for(r) - before.requests_for(r);
+    let frames = after.frames - before.frames;
+    println!(
+        "bench: failed_screenshot {frames} frames in {:.2} s; requests: screenshot {}, devtools {}, autosave {}, settings {}",
+        d.time() - t0,
+        requests(Reason::SCREENSHOT),
+        requests(ashlar::ui::devtools::DEVTOOLS),
+        requests(Reason::AUTOSAVE),
+        requests(Reason::SETTINGS)
+    );
+    assert!(d.time() - t0 < 1.5, "gave up after {:.2} s", d.time() - t0);
+    assert!(frames <= 30, "{frames} frames for a failed screenshot: {after:?}");
+    assert!(requests(Reason::SCREENSHOT) <= 30 && requests(ashlar::ui::devtools::DEVTOOLS) <= 30, "{after:?}");
+    assert!(requests(Reason::AUTOSAVE) <= 1, "the autosave asked again while nothing changed: {after:?}");
+    assert!(requests(Reason::SETTINGS) <= 1, "{after:?}");
+
+    // …and the dirty document waits for its autosave without drawing or asking again
+    d.set_screenshots(true);
+    d.advance(2.0); // the settings write the click scheduled
+    let before: WakeStats = d.runtime.wakes();
+    assert_eq!(d.advance(5.0), 0, "{:?}", d.runtime.wakes());
+    assert_eq!(d.runtime.wakes().requests(), before.requests(), "an idle dirty app asks for nothing: {:?}", d.runtime.wakes());
+}
