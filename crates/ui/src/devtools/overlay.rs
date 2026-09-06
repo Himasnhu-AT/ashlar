@@ -76,7 +76,9 @@ impl Overlay {
 pub(super) fn tag(painter: &Painter, rect: Rect, label: &str, color: Color32) {
     painter.rect_stroke(rect, 1.0, Stroke::new(1.0, color), StrokeKind::Outside);
     let galley = painter.layout_no_wrap(label.to_string(), FontId::monospace(10.0), Color32::WHITE);
-    let at = rect.left_top();
+    // above the element when there is room, so the label does not cover what it labels
+    let h = galley.size().y;
+    let at = if rect.top() >= h { rect.left_top() - egui::vec2(0.0, h) } else { rect.left_top() };
     let bg = Rect::from_min_size(at, galley.size() + egui::vec2(4.0, 0.0));
     painter.rect_filled(bg, 2.0, color);
     painter.galley(at + egui::vec2(2.0, 0.0), galley, Color32::WHITE);

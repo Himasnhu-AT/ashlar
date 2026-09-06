@@ -111,10 +111,10 @@ const MAX_SHOTS: usize = 8;
 /// A frame that asks for no repaint sooner than this counts as idle.
 const IDLE_AFTER: Duration = Duration::from_millis(200);
 /// A screenshot not delivered within this long fails.
-const SHOT_TIMEOUT_S: f64 = 5.0;
+const SHOT_TIMEOUT_S: f64 = 1.0;
 /// A backend drops a screenshot request when it cannot present a frame (a window in the
 /// background on macOS gets no drawable): ask again this often until it arrives.
-const SHOT_RESEND_S: f64 = 0.5;
+const SHOT_RESEND_S: f64 = 0.25;
 
 /// What [`handle`] did with a request.
 #[derive(Debug)]
@@ -216,6 +216,27 @@ pub fn section(ctx: &egui::Context, title: &'static str, lines: impl FnOnce() ->
     });
 }
 
+/// One frame for an [`Offscreen`] renderer: what the backend would paint, already tessellated.
+pub struct OffscreenFrame<'a> {
+    pub primitives: &'a [egui::ClippedPrimitive],
+    /// This frame's texture changes (apply `set`; the backend applies them again, and frees).
+    pub textures: &'a egui::TexturesDelta,
+    pub size_in_pixels: [u32; 2],
+    pub pixels_per_point: f32,
+    /// What to clear to (the window background).
+    pub clear: egui::Color32,
+}
+
+/// Renders a frame without presenting it: screenshots then work for a window that is covered,
+/// in the background or on a locked screen. `ashlar-app` installs one for its wgpu renderer.
+pub type Offscreen = Arc<dyn Fn(&OffscreenFrame<'_>) -> Result<egui::ColorImage, String> + Send + Sync>;
+
+/// Render screenshots with `render` instead of asking the backend to capture a presented frame
+/// (`None`: the backend's `ViewportCommand::Screenshot`).
+pub fn set_offscreen(ctx: &egui::Context, render: Option<Offscreen>) {
+    with(ctx, |s| s.offscreen = render);
+}
+
 // ---------------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------------
@@ -227,6 +248,8 @@ struct ShotToken(u64);
 enum ShotStage {
     /// Paint annotations and ask for the screenshot on the next frame.
     Paint,
+    /// Painted this frame: render it off screen at the end of the frame.
+    Render,
     /// Asked at this time; annotations stay painted until the image arrives.
     Sent(f64),
     Got(Arc<egui::ColorImage>),
@@ -240,6 +263,8 @@ struct Shot {
     asked: Option<f64>,
     /// Bring the window to the front when no frame is presented (the request's `raise`).
     raise: bool,
+    /// Off-screen rendering failed for it: use the backend's capture.
+    offscreen_failed: bool,
     crop: Option<Rect>,
     highlight: Option<Rect>,
     /// (ref, rect) of interactive elements, painted on the image.
@@ -314,6 +339,7 @@ struct State {
     busy: bool,
     hotkey: Option<Key>,
     overlay: overlay::Overlay,
+    offscreen: Option<Offscreen>,
 }
 
 impl Default for State {
@@ -331,6 +357,7 @@ impl Default for State {
             busy: false,
             hotkey: Some(Key::F12),
             overlay: overlay::Overlay::default(),
+            offscreen: None,
         }
     }
 }
@@ -425,16 +452,21 @@ impl State {
                 overlay::tag(&painter, *r, label, accent);
             }
             let now = ctx.input(|i| i.time);
+            if matches!(s.stage, ShotStage::Paint) && !discard && self.offscreen.is_some() && !s.offscreen_failed {
+                s.stage = ShotStage::Render;
+                continue;
+            }
             let due = match s.stage {
                 ShotStage::Paint => true,
                 ShotStage::Sent(at) => now - at >= SHOT_RESEND_S,
-                ShotStage::Got(_) => false,
+                ShotStage::Render | ShotStage::Got(_) => false,
             };
             if due && !discard {
                 // asked before and nothing came: the window presents no frames (in the background
                 // or covered); bring it to the front once so it does
                 if matches!(s.stage, ShotStage::Sent(_)) && std::mem::take(&mut s.raise) {
                     ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(ViewportCommand::Focus);
                 }
                 ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::new(ShotToken(s.token))));
@@ -486,6 +518,7 @@ impl State {
             let idle = self.is_idle(out);
             self.check_waits(now, idle);
         }
+        self.render_offscreen(ctx, out);
         self.finish_shots(ctx, now);
         self.highlights.retain(|(_, until)| *until > now);
         self.schedule(ctx, now);
@@ -535,15 +568,31 @@ impl State {
         }
         // a backend delivers the image with a later frame's input: keep frames coming until it
         // has (a frame or two per screenshot)
-        if !self.shots.is_empty() {
+        // a screenshot to paint or to ask for again needs a frame; one in flight comes back with
+        // a frame of its own (the backend wakes the app), so only its resend and its deadline do
+        let mut next_shot = f64::INFINITY;
+        for s in &self.shots {
+            match s.stage {
+                ShotStage::Paint | ShotStage::Render | ShotStage::Got(_) => next_shot = now,
+                ShotStage::Sent(at) => next_shot = next_shot.min(at + SHOT_RESEND_S),
+            }
+        }
+        if next_shot <= now {
             wake::wake(ctx, Reason::SCREENSHOT);
+        } else if next_shot.is_finite() {
+            wake::reschedule(ctx, Reason::SCREENSHOT, Duration::try_from_secs_f64(next_shot - now).unwrap_or_default());
+        } else {
+            wake::Scheduler::of(ctx).cancel(Reason::SCREENSHOT);
         }
         let mut next = self.waits.iter().map(|w| w.deadline).chain(self.highlights.iter().map(|h| h.1)).fold(f64::INFINITY, f64::min);
         if let Some(t) = self.shots.iter().filter_map(|s| s.asked).map(|t| t + SHOT_TIMEOUT_S).reduce(f64::min) {
             next = next.min(t);
         }
         if next.is_finite() {
-            wake::wake_after(ctx, DEVTOOLS, Duration::try_from_secs_f64((next - now).max(0.0)).unwrap_or_default());
+            wake::reschedule(ctx, DEVTOOLS, Duration::try_from_secs_f64((next - now).max(0.0)).unwrap_or_default());
+        } else {
+            // the wait or highlight it was for is over: no frame at its old deadline
+            wake::Scheduler::of(ctx).cancel(DEVTOOLS);
         }
     }
 
@@ -590,7 +639,17 @@ impl State {
                     let token = self.shot_seq;
                     let (crop, highlight, annotations) = shot;
                     let raise = p.get("raise").and_then(Value::as_bool).unwrap_or(true);
-                    self.shots.push(Shot { req, token, stage: ShotStage::Paint, asked: None, raise, crop, highlight, annotations });
+                    self.shots.push(Shot {
+                        req,
+                        token,
+                        stage: ShotStage::Paint,
+                        asked: None,
+                        raise,
+                        offscreen_failed: false,
+                        crop,
+                        highlight,
+                        annotations,
+                    });
                     return;
                 }
                 Err(e) => Err(e),
@@ -842,6 +901,39 @@ impl State {
             }
         }
         Ok((crop, highlight, annotations))
+    }
+
+    /// Render the screenshots painted this frame off screen (no presented frame needed).
+    fn render_offscreen(&mut self, ctx: &egui::Context, out: &egui::FullOutput) {
+        let Some(render) = self.offscreen.clone() else { return };
+        if !self.shots.iter().any(|s| matches!(s.stage, ShotStage::Render)) {
+            return;
+        }
+        let ppp = ctx.pixels_per_point();
+        let size = ctx.content_rect().size() * ppp;
+        let primitives = ctx.tessellate(out.shapes.clone(), ppp);
+        let frame = OffscreenFrame {
+            primitives: &primitives,
+            textures: &out.textures_delta,
+            size_in_pixels: [size.x.round().clamp(1.0, 16384.0) as u32, size.y.round().clamp(1.0, 16384.0) as u32],
+            pixels_per_point: ppp,
+            clear: ctx.global_style().visuals.panel_fill,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(&frame)))
+            .unwrap_or_else(|_| Err("the off-screen renderer panicked".into()));
+        for s in &mut self.shots {
+            if !matches!(s.stage, ShotStage::Render) {
+                continue;
+            }
+            match &result {
+                Ok(img) => s.stage = ShotStage::Got(Arc::new(img.clone())),
+                Err(e) => {
+                    log::warn!("off-screen screenshot failed, using the window's: {e}");
+                    s.offscreen_failed = true;
+                    s.stage = ShotStage::Paint;
+                }
+            }
+        }
     }
 
     fn finish_shots(&mut self, ctx: &egui::Context, now: f64) {

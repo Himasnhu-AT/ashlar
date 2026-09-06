@@ -121,6 +121,8 @@ pub struct Autosave {
     written: Option<Revision>,
     in_flight: Option<Revision>,
     wake: Option<AutosaveWake>,
+    /// The `last` time the pending autosave was asked for (once per scheduled autosave).
+    asked: Option<Duration>,
 }
 
 impl std::fmt::Debug for Autosave {
@@ -152,7 +154,7 @@ impl Autosave {
         // Unsupported locking only weakens stale detection; it must not stop the app.
         let _ = lock.try_lock();
         let meta = SessionMeta { pid, started_unix: started, label: "Untitled".into(), slots: cfg.slots, ..SessionMeta::default() };
-        let a = Autosave { cfg, dir, meta, _lock: Some(lock), last: None, written: None, in_flight: None, wake: None };
+        let a = Autosave { cfg, dir, meta, _lock: Some(lock), last: None, written: None, in_flight: None, wake: None, asked: None };
         a.write_meta()?;
         let candidates = scan(&a.cfg.root, Some(&a.dir));
         Ok((a, candidates))
@@ -189,10 +191,17 @@ impl Autosave {
         if !dirty || self.in_flight.is_some() || self.written == Some(revision) {
             return false;
         }
+        // the frame asked for may start a little early (clock rounding): within a couple of
+        // milliseconds counts as due, since it is asked for once
         let waited = now.saturating_sub(since);
-        if waited >= self.cfg.interval {
+        if waited.saturating_add(Duration::from_millis(2)) >= self.cfg.interval {
             return true;
         }
+        // ask once per scheduled autosave (the host keeps the wake until it is due), not per tick
+        if self.asked == Some(since) {
+            return false;
+        }
+        self.asked = Some(since);
         if let Some(w) = &self.wake {
             let left = self.cfg.interval.saturating_sub(waited);
             // the host's hook must not take the UI thread down
