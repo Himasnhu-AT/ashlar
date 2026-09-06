@@ -354,11 +354,17 @@ mod tests {
         assert!(matches!(SingleInstance::new("a/b").claim(&[], |_| {}), Err(NativeError::Invalid(_))));
     }
 
+    /// Socket paths are capped near 100 bytes: short folder and app names keep the tests passing
+    /// under a long `$TMPDIR` too.
+    fn short_dir() -> tempfile::TempDir {
+        tempfile::Builder::new().prefix("").rand_bytes(4).tempdir().unwrap()
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn a_second_launch_forwards_its_arguments_to_the_first() {
-        let dir = tempfile::tempdir().unwrap();
-        let instance = SingleInstance::new("com.example.ashlar-test").in_dir(dir.path());
+        let dir = short_dir();
+        let instance = SingleInstance::new("t.fwd").in_dir(dir.path());
         let (tx, rx) = channel();
         let first = instance.claim(&["first.txt".into()], move |m| tx.send(m).unwrap()).unwrap();
         assert!(matches!(first, Launch::Primary(_)));
@@ -386,8 +392,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_stale_socket_from_a_crash_is_taken_over() {
-        let dir = tempfile::tempdir().unwrap();
-        let instance = SingleInstance::new("com.example.stale").in_dir(dir.path());
+        let dir = short_dir();
+        let instance = SingleInstance::new("t.stale").in_dir(dir.path());
         let ep = instance.endpoint().unwrap();
         // A socket file nobody listens on.
         drop(std::os::unix::net::UnixListener::bind(&ep).unwrap());

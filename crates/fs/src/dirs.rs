@@ -163,10 +163,9 @@ mod tests {
 
     #[test]
     fn ensure_creates_all() {
-        let root = std::env::temp_dir().join(format!("ashlar-dirs-{}", std::process::id()));
-        let d = AppDirs::under(&root);
+        let root = tempfile::tempdir().unwrap();
+        let d = AppDirs::under(root.path());
         d.ensure().unwrap();
         assert!(d.config.is_dir() && d.data.is_dir() && d.cache.is_dir() && d.logs.is_dir());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 }

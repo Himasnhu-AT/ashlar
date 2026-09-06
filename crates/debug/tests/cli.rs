@@ -3,34 +3,30 @@
 //! against the real binary.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use ashlar_debug::demo::{self, Running};
 use ashlar_debug::{Env, Exit, Io, run};
 use serde_json::{Value, json};
+use tempfile::TempDir;
 
-static N: AtomicU32 = AtomicU32::new(0);
-
-fn temp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ashlar-debug-cli-{tag}-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// A fresh folder, removed with everything in it when the test ends, also on failure.
+fn temp(tag: &str) -> TempDir {
+    tempfile::Builder::new().prefix(&format!("ashlar-debug-cli-{tag}-")).tempdir().unwrap()
 }
 
 /// A demo app whose key sits where an app keeps its settings, and a private state folder.
 struct Fixture {
     env: Env,
-    root: PathBuf,
+    root: TempDir,
     demo: Running,
 }
 
 impl Fixture {
     fn new(tag: &str) -> Self {
         let root = temp(tag);
-        let key_dir = root.join("config/org.example.Demo");
+        let key_dir = root.path().join("config/org.example.Demo");
         let demo = demo::start(0, &key_dir).unwrap();
-        let env = Env::under(&root);
+        let env = Env::under(root.path());
         let f = Self { env, root, demo };
         f.ok(&["connect", &f.demo.port.to_string()]);
         f
@@ -52,12 +48,6 @@ impl Fixture {
         a.extend_from_slice(args);
         let (_, out, _) = self.run(&a);
         serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{args:?}: {e}: {out}"))
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -204,7 +194,7 @@ fn waits_for_text_elements_and_idle() {
 #[test]
 fn screenshots_are_written_as_png_files() {
     let f = Fixture::new("shot");
-    let path = f.root.join("shots/full.png");
+    let path = f.root.path().join("shots/full.png");
     let out = f.ok(&["screenshot", path.to_str().unwrap()]);
     assert_eq!(out, format!("{}\n", path.display()));
     let bytes = std::fs::read(&path).unwrap();
@@ -228,7 +218,7 @@ fn screenshots_can_be_kept_from_raising_the_window() {
         let (_, out, _) = cli(env, &["--json", "stats"], "");
         serde_json::from_str::<Value>(out.trim()).unwrap()["result"]["screenshot_raise"].clone()
     };
-    let shot = f.root.join("s.png");
+    let shot = f.root.path().join("s.png");
     let shot = shot.to_str().unwrap();
     assert_eq!(raised(&f.env, &["screenshot", shot]), Value::Null, "the app's default");
     assert_eq!(raised(&f.env, &["screenshot", shot, "--no-raise"]), json!(false));
@@ -237,7 +227,7 @@ fn screenshots_can_be_kept_from_raising_the_window() {
     // A session connected with --no-raise keeps it, traces included.
     f.ok(&["connect", &f.demo.port.to_string(), "--no-raise"]);
     assert_eq!(raised(&f.env, &["screenshot", shot]), json!(false));
-    f.ok(&["trace", "start", f.root.join("t").to_str().unwrap()]);
+    f.ok(&["trace", "start", f.root.path().join("t").to_str().unwrap()]);
     assert_eq!(raised(&f.env, &["click", "@e3"]), json!(false));
     f.ok(&["connect", &f.demo.port.to_string()]);
     assert_eq!(raised(&f.env, &["screenshot", shot]), Value::Null);
@@ -246,7 +236,7 @@ fn screenshots_can_be_kept_from_raising_the_window() {
 #[test]
 fn batch_runs_a_ui_test_and_stops_at_the_first_failure() {
     let f = Fixture::new("batch");
-    let script = f.root.join("test.txt");
+    let script = f.root.path().join("test.txt");
     std::fs::write(
         &script,
         r#"# a small UI test
@@ -310,7 +300,7 @@ assert disabled button=Nope  # not there: fails below if reached
 #[test]
 fn a_trace_records_every_action() {
     let f = Fixture::new("trace");
-    let dir = f.root.join("trace");
+    let dir = f.root.path().join("trace");
     assert!(f.ok(&["trace", "start", dir.to_str().unwrap()]).starts_with("tracing to "));
     f.ok(&["fill", "@e2", "a b"]);
     f.ok(&["snapshot"]); // not an action: not recorded
@@ -343,7 +333,7 @@ fn port_and_app_name_reach_an_app_without_a_session() {
     let (code, _, err) = cli(&none, &["--app", "paint", "snapshot"], "");
     assert_eq!(code, Exit::Failed);
     assert!(err.contains("no running app matching `paint`"), "{err}");
-    let key_dir = f.root.join("config/org.example.Demo");
+    let key_dir = f.root.path().join("config/org.example.Demo");
     let (code, _, _) = cli(&none, &["--port", &port, "--key-dir", key_dir.to_str().unwrap(), "snapshot"], "");
     assert_eq!(code, Exit::Ok);
     let (code, _, err) = cli(&none, &["--port", &port, "--key-dir", "/nonexistent", "snapshot"], "");
@@ -375,7 +365,7 @@ fn wait_gone(pid_alive: impl Fn() -> bool) -> bool {
 #[test]
 fn open_launches_an_app_and_close_quits_it() {
     let root = temp("open");
-    let env = Env::under(&root);
+    let env = Env::under(root.path());
     let (code, out, err) = cli(&env, &["--session", "s1", "open", binary(), "--", "demo"], "");
     assert_eq!(code, Exit::Ok, "{err}");
     assert!(out.starts_with(&format!("opened {} (pid ", binary())) && out.ends_with("as session `s1`\n"), "{out}");
@@ -403,5 +393,4 @@ fn open_launches_an_app_and_close_quits_it() {
     let (code, _, err) = cli(&env, &["open", "/nonexistent/app"], "");
     assert_eq!(code, Exit::Failed);
     assert!(err.contains("cannot start /nonexistent/app"), "{err}");
-    let _ = std::fs::remove_dir_all(&root);
 }

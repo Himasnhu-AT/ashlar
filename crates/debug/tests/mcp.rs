@@ -19,9 +19,9 @@ fn text(r: &Value, i: usize) -> String {
 
 #[test]
 fn debugger_tools_drive_the_app_by_refs() {
-    let dir = std::env::temp_dir().join(format!("ashlar-debug-mcp-{}", std::process::id()));
-    let app = demo::start(0, &dir).unwrap();
-    let client = Client::connect(app.port, &dir).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let app = demo::start(0, dir.path()).unwrap();
+    let client = Client::connect(app.port, dir.path()).unwrap();
     let mut server = McpServer::new(Backend::Remote(client), ServerOptions::new("demo", "0.1.0"));
     let list: Value = serde_json::from_str(&server.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap()).unwrap();
     let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -78,7 +78,7 @@ fn debugger_tools_drive_the_app_by_refs() {
     // `raise: false` reaches the app (it never steals focus to paint).
     let r = call(&mut server, "screenshot", json!({"raise": false}));
     assert_eq!(r["isError"], false);
-    let stats = Client::connect(app.port, &dir).unwrap().call("app.stats", json!({})).unwrap();
+    let stats = Client::connect(app.port, dir.path()).unwrap().call("app.stats", json!({})).unwrap();
     assert_eq!(stats["screenshot_raise"], false);
 
     // Mistakes come back as tool errors, never protocol errors.
@@ -89,5 +89,4 @@ fn debugger_tools_drive_the_app_by_refs() {
     assert_eq!(r["isError"], true);
     assert!(text(&r, 0).starts_with("stale_ref"), "{r}");
     drop(app);
-    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4,7 +4,6 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
@@ -13,6 +12,7 @@ use std::time::{Duration, Instant};
 use ashlar_command::{CommandError, CommandInfo, Dispatch};
 use ashlar_control::{AppInfo, Client, Config, ControlError, NoUi, Request, Server, handle};
 use serde_json::{Value, json};
+use tempfile::TempDir;
 
 /// A counter app: `count.add {by?}`, `count.get`, `count.fail`.
 #[derive(Default)]
@@ -48,10 +48,22 @@ impl Dispatch for Counter {
     }
 }
 
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ashlar-control-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+/// A fresh key folder, removed with everything in it when the test ends, also on failure.
+fn temp_dir(name: &str) -> TempDir {
+    tempfile::Builder::new().prefix(&format!("ashlar-control-{name}-")).tempdir().unwrap()
+}
+
+/// A running server and its key folder; the server goes first, then the folder.
+struct Booted {
+    server: Server,
+    _dir: TempDir,
+}
+
+impl std::ops::Deref for Booted {
+    type Target = Server;
+    fn deref(&self) -> &Server {
+        &self.server
+    }
 }
 
 /// The app thread: answers every request from a counter until the server is gone.
@@ -65,8 +77,9 @@ fn app_thread(rx: Receiver<Request>) {
     });
 }
 
-fn boot(name: &str, tweak: impl FnOnce(&mut Config)) -> (Server, Arc<AtomicUsize>) {
-    let mut config = Config::new(0, temp_dir(name));
+fn boot(name: &str, tweak: impl FnOnce(&mut Config)) -> (Booted, Arc<AtomicUsize>) {
+    let dir = temp_dir(name);
+    let mut config = Config::new(0, dir.path());
     tweak(&mut config);
     let wakes = Arc::new(AtomicUsize::new(0));
     let w = wakes.clone();
@@ -75,7 +88,7 @@ fn boot(name: &str, tweak: impl FnOnce(&mut Config)) -> (Server, Arc<AtomicUsize
     })
     .unwrap();
     app_thread(rx);
-    (server, wakes)
+    (Booted { server, _dir: dir }, wakes)
 }
 
 /// One raw connection, several lines.
@@ -298,7 +311,7 @@ fn the_first_request_deadline_is_one_overall_deadline() {
 #[test]
 fn an_app_that_does_not_answer_times_out_and_a_dropped_request_errors() {
     let dir = temp_dir("timeout");
-    let mut config = Config::new(0, &dir);
+    let mut config = Config::new(0, dir.path());
     config.reply_timeout = Duration::from_millis(200);
     let (server, rx) = Server::start(config, || {}).unwrap();
     std::thread::spawn(move || {
@@ -321,15 +334,15 @@ fn an_app_that_does_not_answer_times_out_and_a_dropped_request_errors() {
 #[test]
 fn the_client_follows_an_app_restart_on_the_same_port() {
     let dir = temp_dir("restart");
-    let (a, rx) = Server::start(Config::new(0, &dir), || {}).unwrap();
+    let (a, rx) = Server::start(Config::new(0, dir.path()), || {}).unwrap();
     app_thread(rx);
     let port = a.port();
-    let mut c = Client::connect(port, &dir).unwrap();
+    let mut c = Client::connect(port, dir.path()).unwrap();
     assert_eq!(c.call("app.ping", json!({})).unwrap(), "pong");
     let old_key = a.key().to_string();
     drop(a);
     std::thread::sleep(Duration::from_millis(100));
-    let (b, rx) = Server::start(Config::new(port, &dir), || {}).unwrap();
+    let (b, rx) = Server::start(Config::new(port, dir.path()), || {}).unwrap();
     app_thread(rx);
     assert_ne!(b.key(), old_key);
     // The kept connection is dead; the client reconnects once and reads the new key.
@@ -339,12 +352,12 @@ fn the_client_follows_an_app_restart_on_the_same_port() {
 #[test]
 fn no_app_listening_fails_fast() {
     let dir = temp_dir("none");
-    let (s, _rx) = Server::start(Config::new(0, &dir), || {}).unwrap();
+    let (s, _rx) = Server::start(Config::new(0, dir.path()), || {}).unwrap();
     let port = s.port();
     drop(s);
     std::thread::sleep(Duration::from_millis(100));
     let t0 = Instant::now();
-    let e = Client::connect(port, &dir).unwrap_err();
+    let e = Client::connect(port, dir.path()).unwrap_err();
     assert!(t0.elapsed() < Duration::from_secs(2));
     assert!(matches!(e, ControlError::Key(_) | ControlError::Io(_)), "{e:?}");
 }

@@ -144,11 +144,11 @@ fn run_lines_stops_at_the_first_failure_unless_keep_going() {
     let o = run_in(&mut cli(), &["run", "-"], "{\"params\":{}}\n");
     assert!(o.reply()["error"].as_str().unwrap().starts_with("line 1: expected"));
     // From a file; all ok.
-    let path = std::env::temp_dir().join(format!("ashlar-cli-run-{}.jsonl", std::process::id()));
-    std::fs::write(&path, "{\"command\":\"count.add\"}\n{\"command\":\"count.add\"}\n").unwrap();
+    let file = tempfile::Builder::new().suffix(".jsonl").tempfile().unwrap();
+    let path = file.path();
+    std::fs::write(path, "{\"command\":\"count.add\"}\n{\"command\":\"count.add\"}\n").unwrap();
     let o = run(&["run", path.to_str().unwrap()]);
     assert_eq!((o.exit, o.lines().len()), (Exit::Ok, 2));
-    let _ = std::fs::remove_file(&path);
     assert_eq!(run(&["run", "/nonexistent/x.jsonl"]).exit, Exit::Usage);
 }
 
@@ -227,7 +227,9 @@ fn serve_speaks_the_control_protocol_on_stdio() {
 
 #[test]
 fn connect_drives_the_running_app() {
-    let (server, rx) = Server::start(Config::new(0, key_dir()), || {}).unwrap();
+    let keys = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| run_in(&mut cli().key_dir(keys.path()), args, "");
+    let (server, rx) = Server::start(Config::new(0, keys.path()), || {}).unwrap();
     std::thread::spawn(move || {
         let mut c = Counter(100);
         let info = AppInfo::new("counter", "1.2.3");

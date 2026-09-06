@@ -342,11 +342,8 @@ pub fn kill(pid: u32) {
 mod tests {
     use super::*;
 
-    fn temp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ashlar-debug-session-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    fn temp(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("ashlar-debug-session-{tag}-")).tempdir().unwrap()
     }
 
     fn env(home: &Path) -> Env {
@@ -355,8 +352,9 @@ mod tests {
 
     #[test]
     fn sessions_round_trip_and_are_listed() {
-        let home = temp("store");
-        let env = env(&home);
+        let tmp = temp("store");
+        let home = tmp.path();
+        let env = env(home);
         assert_eq!(load(&env, "default").unwrap(), None);
         let s = Session { port: 7, key_dir: home.join("k"), pid: Some(3), exe: None, log: None, launched: true, trace: None, no_raise: false };
         save(&env, "default", &s).unwrap();
@@ -371,12 +369,12 @@ mod tests {
         for bad in ["", "../x", "a b", &"x".repeat(65)] {
             assert!(load(&env, bad).is_err(), "{bad}");
         }
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
     fn keys_are_found_by_port_and_app() {
-        let home = temp("keys");
+        let tmp = temp("keys");
+        let home = tmp.path();
         let notes = home.join("config/org.example.Notes/config");
         let other = home.join("config/Paint");
         std::fs::create_dir_all(&notes).unwrap();
@@ -398,7 +396,6 @@ mod tests {
         std::fs::create_dir_all(&deep).unwrap();
         std::fs::write(deep.join("control-key.local-7003"), "k").unwrap();
         assert_eq!(ports(Some(7003), None), Vec::<u16>::new());
-        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -413,12 +410,12 @@ mod tests {
 
     #[test]
     fn tail_keeps_the_last_lines() {
-        let home = temp("tail");
+        let tmp = temp("tail");
+        let home = tmp.path();
         let p = home.join("log");
         std::fs::write(&p, "a\nb\nc\n").unwrap();
         assert_eq!(tail(&p, 2), "b\nc");
         assert_eq!(tail(&p, 9), "a\nb\nc");
         assert_eq!(tail(&home.join("missing"), 2), "");
-        let _ = std::fs::remove_dir_all(&home);
     }
 }

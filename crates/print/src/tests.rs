@@ -104,17 +104,14 @@ fn print_jobs_reach_lp_on_stdin_never_through_a_shared_temp_folder() {
     // by name. In a shared /tmp another local user can predict that folder, create it first (or
     // plant a symlink there) and so read every printed document or swap the file before `lp`
     // reads it. Piping the job to `lp` leaves nothing on disk.
-    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let record =
-        std::env::temp_dir().join(format!("ashlar-print-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    std::fs::create_dir(&record).unwrap();
+    let tmp = tempfile::Builder::new().prefix("ashlar-print-test-").tempdir().unwrap();
+    let record = tmp.path();
     // Bigger than any pipe buffer, so the spooler must read while the job is still being written.
     let pdf: Vec<u8> = b"%PDF-1.7 synthetic print job\n".iter().copied().cycle().take(3 << 20).collect();
     let job = Job { title: "memo.pdf".into(), ..Job::default() };
     let sent = spool::submit_via(stand_in_lp(record.as_os_str()), &pdf, &job);
     let args = std::fs::read_to_string(record.join("args"));
     let stdin = std::fs::read(record.join("stdin"));
-    let _ = std::fs::remove_dir_all(&record);
     assert!(sent.is_ok(), "{sent:?}");
     assert_eq!(args.unwrap(), "-n 1 -t memo.pdf -o collate=true -o fit-to-page=false", "no file argument: lp reads the job from stdin");
     assert!(stdin.unwrap() == pdf, "lp receives the whole job on stdin");
@@ -228,13 +225,13 @@ fn windows_lists_the_printers_the_system_knows() {
 #[cfg(windows)]
 #[test]
 fn the_windows_print_script_parses() {
-    let path = std::env::temp_dir().join(format!("ashlar-print-script-{}.ps1", std::process::id()));
-    std::fs::write(&path, spool::WINDOWS_PRINT_SCRIPT).unwrap();
+    let file = tempfile::Builder::new().suffix(".ps1").tempfile().unwrap();
+    let path = file.path();
+    std::fs::write(path, spool::WINDOWS_PRINT_SCRIPT).unwrap();
     let errors = windows_powershell(
         "$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:ASHLAR_TEST_SCRIPT, [ref]$tokens, [ref]$errors) > $null; $errors.Count",
         &[("ASHLAR_TEST_SCRIPT", path.to_str().unwrap())],
     );
-    let _ = std::fs::remove_file(&path);
     assert_eq!(errors.as_deref().map(str::trim), Ok("0"), "parse errors: {errors:?}");
 }
 

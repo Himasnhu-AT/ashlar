@@ -15,3 +15,6 @@ thiserror = { workspace = true }
 log = { workspace = true }
 ashlar-command = { workspace = true }
 ashlar-control = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

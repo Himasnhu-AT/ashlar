@@ -216,10 +216,8 @@ pub(crate) fn now_or_epoch() -> SystemTime {
 mod tests {
     use super::*;
 
-    fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ashlar-backend-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+    fn tmpdir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("ashlar-backend-{tag}-")).tempdir().unwrap()
     }
 
     fn exercise(s: &dyn ConfigStore) {
@@ -246,10 +244,10 @@ mod tests {
 
     #[test]
     fn dir_config() {
-        let d = tmpdir("cfg");
-        exercise(&DirConfig::new(&d));
+        let tmp = tmpdir("cfg");
+        let d = tmp.path();
+        exercise(&DirConfig::new(d));
         assert!(!d.parent().unwrap().join("x").exists());
-        std::fs::remove_dir_all(&d).unwrap();
     }
 
     fn exercise_files(f: &dyn FileOps, root: &Path) {
@@ -275,8 +273,8 @@ mod tests {
 
     #[test]
     fn std_files() {
-        let d = tmpdir("files");
-        exercise_files(&StdFiles, &d);
-        std::fs::remove_dir_all(&d).unwrap();
+        let tmp = tmpdir("files");
+        let d = tmp.path();
+        exercise_files(&StdFiles, d);
     }
 }

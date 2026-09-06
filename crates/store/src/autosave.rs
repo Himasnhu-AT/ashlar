@@ -485,10 +485,8 @@ mod background {
 mod tests {
     use super::*;
 
-    fn root(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ashlar-autosave-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        d
+    fn root(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("ashlar-autosave-{tag}-")).tempdir().unwrap()
     }
 
     fn cfg(root: &Path, slots: u32) -> AutosaveConfig {
@@ -501,8 +499,9 @@ mod tests {
 
     #[test]
     fn writes_only_when_dirty_new_and_after_interval() {
-        let r = root("tick");
-        let (mut a, c) = Autosave::start(cfg(&r, 3)).unwrap();
+        let tmp = root("tick");
+        let r = tmp.path();
+        let (mut a, c) = Autosave::start(cfg(r, 3)).unwrap();
         assert!(c.is_empty());
         let rev1 = Revision::next();
         let mut encodes = 0;
@@ -522,14 +521,14 @@ mod tests {
         assert!(a.tick(s(20), rev2, true, || enc(&mut encodes)).unwrap().is_some());
         assert_eq!(a.meta().revision, rev2.0);
         a.close(false).unwrap();
-        assert_eq!(fs::read_dir(&r).unwrap().count(), 0, "clean exit leaves nothing");
-        fs::remove_dir_all(&r).unwrap();
+        assert_eq!(fs::read_dir(r).unwrap().count(), 0, "clean exit leaves nothing");
     }
 
     #[test]
     fn ring_overwrites_oldest() {
-        let r = root("ring");
-        let (mut a, _) = Autosave::start(cfg(&r, 3)).unwrap();
+        let tmp = root("ring");
+        let r = tmp.path();
+        let (mut a, _) = Autosave::start(cfg(r, 3)).unwrap();
         a.tick(s(0), Revision::NONE, true, Vec::new).unwrap();
         for i in 1..=5u8 {
             let p = a.tick(i as u32 * s(10), Revision::next(), true, || vec![i]).unwrap().unwrap();
@@ -540,15 +539,15 @@ mod tests {
         let contents: Vec<u8> = slots.iter().map(|p| fs::read(p).unwrap()[0]).collect();
         assert_eq!(contents, [5, 4, 3], "newest first");
         drop(a);
-        fs::remove_dir_all(&r).unwrap();
     }
 
     #[test]
     fn crash_is_recovered_and_clean_sessions_are_not() {
-        let r = root("recover");
+        let tmp = root("recover");
+        let r = tmp.path();
         // A session that crashed with unsaved work: never closed, lock released by drop.
         {
-            let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+            let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
             a.set_document("Plan", Some(Path::new("/docs/plan.doc"))).unwrap();
             a.tick(s(0), Revision::NONE, true, Vec::new).unwrap();
             a.tick(s(10), Revision::next(), true, || b"v1".to_vec()).unwrap();
@@ -557,48 +556,48 @@ mod tests {
         }
         // A session that saved its document before dying: nothing to offer.
         {
-            let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+            let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
             a.tick(s(0), Revision::NONE, true, Vec::new).unwrap();
             a.tick(s(10), Revision::next(), true, || b"w".to_vec()).unwrap();
             a.mark_clean().unwrap();
         }
         // A session that never wrote anything.
-        drop(Autosave::start(cfg(&r, 2)).unwrap());
-        let (live, c) = Autosave::start(cfg(&r, 2)).unwrap();
+        drop(Autosave::start(cfg(r, 2)).unwrap());
+        let (live, c) = Autosave::start(cfg(r, 2)).unwrap();
         assert_eq!(c.len(), 1, "{c:?}");
         assert_eq!(c[0].meta.label, "Plan");
         assert_eq!(c[0].meta.doc_path.as_deref(), Some("/docs/plan.doc"));
         assert_eq!(fs::read(c[0].latest().unwrap()).unwrap(), b"v3");
         assert_eq!(c[0].slots.len(), 2);
         // Only the candidate and the live session remain.
-        assert_eq!(fs::read_dir(&r).unwrap().count(), 2);
+        assert_eq!(fs::read_dir(r).unwrap().count(), 2);
         // A second instance does not offer the live session's work.
-        let (other, c2) = Autosave::start(cfg(&r, 2)).unwrap();
+        let (other, c2) = Autosave::start(cfg(r, 2)).unwrap();
         assert_eq!(c2.len(), 1);
         c2[0].discard().unwrap();
         live.close(false).unwrap();
         other.close(false).unwrap();
-        assert_eq!(fs::read_dir(&r).unwrap().count(), 0);
-        fs::remove_dir_all(&r).unwrap();
+        assert_eq!(fs::read_dir(r).unwrap().count(), 0);
     }
 
     #[test]
     fn close_keep_leaves_a_candidate() {
-        let r = root("keep");
-        let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+        let tmp = root("keep");
+        let r = tmp.path();
+        let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
         a.tick(s(0), Revision::NONE, true, Vec::new).unwrap();
         a.tick(s(10), Revision::next(), true, || b"k".to_vec()).unwrap();
         a.close(true).unwrap();
-        let (b, c) = Autosave::start(cfg(&r, 2)).unwrap();
+        let (b, c) = Autosave::start(cfg(r, 2)).unwrap();
         assert_eq!(c.len(), 1);
         b.close(false).unwrap();
-        fs::remove_dir_all(&r).unwrap();
     }
 
     #[test]
     fn hostile_session_dirs() {
-        let r = root("hostile");
-        fs::create_dir_all(&r).unwrap();
+        let tmp = root("hostile");
+        let r = tmp.path();
+        fs::create_dir_all(r).unwrap();
         // Corrupt meta but a slot on disk: still offered.
         let d1 = r.join("junk-1");
         fs::create_dir_all(&d1).unwrap();
@@ -613,18 +612,18 @@ mod tests {
         fs::write(d2.join("slot-x.doc"), b"c").unwrap();
         // A stray file in the root.
         fs::write(r.join("stray"), b"").unwrap();
-        let (a, c) = Autosave::start(cfg(&r, 0)).unwrap();
+        let (a, c) = Autosave::start(cfg(r, 0)).unwrap();
         assert_eq!(c.len(), 2, "{c:?}");
         let j2 = c.iter().find(|c| c.id == "junk-2").unwrap();
         assert_eq!(j2.slots.len(), 1);
         a.close(false).unwrap();
-        fs::remove_dir_all(&r).unwrap();
     }
 
     #[test]
     fn failed_write_is_reported_and_retried() {
-        let r = root("fail");
-        let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+        let tmp = root("fail");
+        let r = tmp.path();
+        let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
         let rev = Revision::next();
         let w = a.begin(s(0), rev);
         assert!(!a.due(s(100), rev, true), "in flight");
@@ -632,13 +631,13 @@ mod tests {
         assert!(a.due(s(100), rev, true), "retried later");
         assert_eq!(a.meta().slot, None);
         a.close(false).unwrap();
-        fs::remove_dir_all(&r).unwrap();
     }
 
     #[test]
     fn background_writer() {
-        let r = root("bg");
-        let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+        let tmp = root("bg");
+        let r = tmp.path();
+        let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
         let mut w = BackgroundWriter::start().unwrap();
         let rev = Revision::next();
         assert!(!w.tick(&mut a, s(0), rev, true, || b"a".to_vec()));
@@ -654,13 +653,13 @@ mod tests {
         let errors = w.shutdown(&mut a);
         assert_eq!(errors.len(), 1);
         a.close(false).unwrap();
-        fs::remove_dir_all(&r).unwrap();
     }
 
     #[test]
     fn the_wake_hooks_say_when_to_tick_next() {
-        let r = root("wake");
-        let (mut a, _) = Autosave::start(cfg(&r, 2)).unwrap();
+        let tmp = root("wake");
+        let r = tmp.path();
+        let (mut a, _) = Autosave::start(cfg(r, 2)).unwrap();
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let q = Arc::clone(&asked);
         a.set_wake(move |d| q.lock().unwrap().push(d));
@@ -685,6 +684,5 @@ mod tests {
         assert_eq!(asked.lock().unwrap().len(), n, "nothing pending once written");
         drop(w);
         a.close(false).unwrap();
-        fs::remove_dir_all(&r).unwrap();
     }
 }

@@ -101,11 +101,8 @@ pub fn pid() -> u32 {
 mod tests {
     use super::*;
 
-    fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ashlar-atomic-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn tmpdir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new().prefix(&format!("ashlar-atomic-{tag}-")).tempdir().unwrap()
     }
 
     fn names(d: &Path) -> Vec<String> {
@@ -116,18 +113,19 @@ mod tests {
 
     #[test]
     fn replaces_and_leaves_no_temp_files() {
-        let d = tmpdir("replace");
+        let tmp = tmpdir("replace");
+        let d = tmp.path();
         let p = d.join("a.doc");
         atomic_write(&p, b"one").unwrap();
         atomic_write(&p, b"two").unwrap();
         assert_eq!(fs::read(&p).unwrap(), b"two");
-        assert_eq!(names(&d), vec!["a.doc"]);
-        fs::remove_dir_all(&d).unwrap();
+        assert_eq!(names(d), vec!["a.doc"]);
     }
 
     #[test]
     fn failed_rename_keeps_old_file_and_cleans_temp() {
-        let d = tmpdir("fail");
+        let tmp = tmpdir("fail");
+        let d = tmp.path();
         let p = d.join("a.doc");
         atomic_write(&p, b"good").unwrap();
         // Renaming a file over a non-empty directory fails.
@@ -135,13 +133,13 @@ mod tests {
         fs::create_dir_all(dir_target.join("x")).unwrap();
         assert!(atomic_write(&dir_target, b"bad").is_err());
         assert_eq!(fs::read(&p).unwrap(), b"good");
-        assert!(!names(&d).iter().any(|n| is_temp_name(n)), "{:?}", names(&d));
-        fs::remove_dir_all(&d).unwrap();
+        assert!(!names(d).iter().any(|n| is_temp_name(n)), "{:?}", names(d));
     }
 
     #[test]
     fn writer_error_mid_write_keeps_original() {
-        let d = tmpdir("midwrite");
+        let tmp = tmpdir("midwrite");
+        let d = tmp.path();
         let p = d.join("a.doc");
         atomic_write(&p, b"original").unwrap();
         let r = atomic_write_with(&p, |f| {
@@ -150,28 +148,27 @@ mod tests {
         });
         assert!(r.is_err());
         assert_eq!(fs::read(&p).unwrap(), b"original");
-        assert_eq!(names(&d), vec!["a.doc"]);
-        fs::remove_dir_all(&d).unwrap();
+        assert_eq!(names(d), vec!["a.doc"]);
     }
 
     #[test]
     fn missing_directory_is_an_error() {
-        let d = tmpdir("missing");
+        let tmp = tmpdir("missing");
+        let d = tmp.path();
         assert!(atomic_write(&d.join("nope/a.doc"), b"x").is_err());
-        assert!(names(&d).is_empty());
-        fs::remove_dir_all(&d).unwrap();
+        assert!(names(d).is_empty());
     }
 
     #[test]
     fn empty_and_large_payloads() {
-        let d = tmpdir("sizes");
+        let tmp = tmpdir("sizes");
+        let d = tmp.path();
         let p = d.join("a.bin");
         atomic_write(&p, b"").unwrap();
         assert_eq!(fs::read(&p).unwrap().len(), 0);
         let big = vec![7u8; 8 << 20];
         atomic_write(&p, &big).unwrap();
         assert_eq!(fs::read(&p).unwrap(), big);
-        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
@@ -189,7 +186,8 @@ mod tests {
     #[test]
     fn keeps_permissions_and_follows_symlinks() {
         use std::os::unix::fs::PermissionsExt;
-        let d = tmpdir("perm");
+        let tmp = tmpdir("perm");
+        let d = tmp.path();
         let real = d.join("real.doc");
         atomic_write(&real, b"one").unwrap();
         fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
@@ -199,12 +197,12 @@ mod tests {
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link survives");
         assert_eq!(fs::read(&real).unwrap(), b"two");
         assert_eq!(fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
-        fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
     fn concurrent_writers_never_tear() {
-        let d = tmpdir("race");
+        let tmp = tmpdir("race");
+        let d = tmp.path();
         let p = d.join("a.doc");
         let handles: Vec<_> = (0..8u8)
             .map(|i| {
@@ -222,7 +220,6 @@ mod tests {
         let bytes = fs::read(&p).unwrap();
         assert_eq!(bytes.len(), 64 * 1024);
         assert!(bytes.iter().all(|b| *b == bytes[0]), "one writer's content, whole");
-        assert_eq!(names(&d), vec!["a.doc"]);
-        fs::remove_dir_all(&d).unwrap();
+        assert_eq!(names(d), vec!["a.doc"]);
     }
 }

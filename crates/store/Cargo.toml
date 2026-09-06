@@ -15,3 +15,6 @@ thiserror = { workspace = true }
 log = { workspace = true }
 ashlar-fs = { workspace = true }
 arc-swap = "1"
+
+[dev-dependencies]
+tempfile = "3"

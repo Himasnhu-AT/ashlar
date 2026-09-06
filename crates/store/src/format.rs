@@ -751,14 +751,13 @@ mod tests {
 
     #[test]
     fn save_and_load_files() {
-        let dir = std::env::temp_dir().join(format!("ashlar-format-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let p = dir.join("a.testdoc");
         let f = fmt();
         f.save(&p, &doc()).unwrap();
         assert_eq!(f.load(&p).unwrap().doc, doc());
         assert!(matches!(f.load(&dir.join("missing")), Err(FormatError::Io(_))));
         assert!(matches!(fmt().max_bytes(5).load(&p), Err(FormatError::Corrupt(_))));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

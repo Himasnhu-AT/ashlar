@@ -153,10 +153,8 @@ mod tests {
 
     #[test]
     fn a_stale_key_file_is_replaced_with_mode_0600() {
-        let dir = std::env::temp_dir().join(format!("ashlar-control-key-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("control-key.test");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("control-key.test");
         std::fs::write(&p, "old").unwrap();
         #[cfg(unix)]
         {
@@ -173,6 +171,5 @@ mod tests {
         drop(KeyFile::new(p.clone()));
         assert!(!p.exists());
         assert!(read_key_file(&p).unwrap_err().contains("no control key"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

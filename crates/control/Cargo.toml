@@ -17,3 +17,6 @@ ashlar-command = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

@@ -306,6 +306,7 @@ dependencies = [
  "ashlar-control",
  "ashlar-mcp",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -326,6 +327,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -341,6 +343,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -374,6 +377,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -405,6 +409,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -454,6 +459,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

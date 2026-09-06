@@ -148,10 +148,10 @@ fn app_thread(rx: Receiver<Request>) {
 
 #[test]
 fn remote_backend_drives_a_running_app_with_ui() {
-    let dir = std::env::temp_dir().join(format!("ashlar-mcp-remote-{}", std::process::id()));
-    let (app, rx) = Server::start(Config::new(0, &dir), || {}).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let (app, rx) = Server::start(Config::new(0, dir.path()), || {}).unwrap();
     app_thread(rx);
-    let client = Client::connect(app.port(), &dir).unwrap();
+    let client = Client::connect(app.port(), dir.path()).unwrap();
     let mut server = McpServer::new(Backend::Remote(client), options());
     let names = tool_names(&mut server);
     assert_eq!(names, ["list_commands", "describe_command", "execute", "batch", "screenshot", "ui_inspect", "ui_click"]);

@@ -23,3 +23,4 @@ png = "0.18"
 
 [dev-dependencies]
 ashlar-mcp = { workspace = true }
+tempfile = "3"
