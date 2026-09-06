@@ -27,3 +27,6 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
   before-hook errors), so hosts need no side stash to keep their error variant.
 - Annotated screenshots: ref labels still overlap the text of short elements on the top edge (menu bar
   items, search field); place labels outside the element (above, or to the side when there is no room).
+- ashlar-app on a hidden window: snapshots and ui input are refused and a screenshot raises the window.
+  Better: while debugger requests wait, run one UI pass from `logic` (nothing presented; screenshots
+  through the offscreen renderer), so agents can drive a covered window without taking focus.
