@@ -100,6 +100,15 @@ impl KeyFile {
         Self(p)
     }
 
+    /// Write `key` to `path` (as [`write_key_file`] does) and keep the file until this is dropped:
+    /// for an app that serves the protocol itself instead of through [`crate::Server`]
+    /// ([`key_path`] gives the path clients look at).
+    pub fn create(path: impl Into<PathBuf>, key: &str) -> Result<KeyFile, String> {
+        let path = path.into();
+        write_key_file(&path, key)?;
+        Ok(Self(path))
+    }
+
     pub fn path(&self) -> &Path {
         &self.0
     }
@@ -171,5 +180,10 @@ mod tests {
         drop(KeyFile::new(p.clone()));
         assert!(!p.exists());
         assert!(read_key_file(&p).unwrap_err().contains("no control key"));
+        // an app serving the protocol itself owns its key file the same way
+        let own = KeyFile::create(p.clone(), KEY).unwrap();
+        assert_eq!((own.path(), read_key_file(&p).unwrap().as_str()), (p.as_path(), KEY));
+        drop(own);
+        assert!(!p.exists());
     }
 }

@@ -280,8 +280,10 @@ pub trait Host: Sized {
     type Error: Into<CommandError>;
     /// The execution state: nesting depth and journal.
     fn journal(&mut self) -> &mut Journal;
-    /// Rewrite params before validation (resolve names to ids, settle an ongoing gesture…).
-    fn before(&mut self, _spec: &CommandSpec<Self>, _params: &mut Value, _depth: usize) -> Result<(), CommandError> {
+    /// Rewrite params before validation (resolve names to ids, settle an ongoing gesture…). An
+    /// `Err` refuses the call: [`Host::rejected`] sees it converted, and
+    /// [`Registry::execute_host`] hands it back unchanged as [`ExecError::Host`].
+    fn before(&mut self, _spec: &CommandSpec<Self>, _params: &mut Value, _depth: usize) -> Result<(), Self::Error> {
         Ok(())
     }
     /// Extra parameter checks after the registry's [`Validation`] policy and before

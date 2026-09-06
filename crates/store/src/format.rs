@@ -52,9 +52,10 @@ const GENERATOR: &str = "generator";
 pub enum FormatError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
-    /// For malformed or truncated JSON the message is serde's, position included.
-    #[error("the file is damaged: {0}")]
-    Corrupt(String),
+    /// For malformed or truncated JSON the message is serde's, position included, and `detail`
+    /// has it structured (also for valid JSON a payload could not be read from).
+    #[error("the file is damaged: {message}")]
+    Corrupt { message: String, detail: Option<JsonError> },
     #[error("not a {expected} file: {why}")]
     NotThisFormat {
         expected: String,
@@ -93,11 +94,22 @@ impl JsonError {
 }
 
 impl FormatError {
-    /// The serde error behind a [`FormatError::NotThisFormat`], with its position. (A
-    /// [`FormatError::Corrupt`] from malformed JSON is serde's message verbatim, position included.)
+    /// A damaged file, for a reason that is not a serde error.
+    pub fn corrupt(message: impl Into<String>) -> FormatError {
+        FormatError::Corrupt { message: message.into(), detail: None }
+    }
+
+    /// A damaged file: serde's error, its message after `context` when there is one.
+    pub fn corrupt_json(context: &str, e: &serde_json::Error) -> FormatError {
+        let message = if context.is_empty() { e.to_string() } else { format!("{context}: {e}") };
+        FormatError::Corrupt { message, detail: Some(JsonError::new(e)) }
+    }
+
+    /// The serde error behind a [`FormatError::NotThisFormat`] or a [`FormatError::Corrupt`], with
+    /// its position.
     pub fn json(&self) -> Option<&JsonError> {
         match self {
-            FormatError::NotThisFormat { detail, .. } => detail.as_ref(),
+            FormatError::NotThisFormat { detail, .. } | FormatError::Corrupt { detail, .. } => detail.as_ref(),
             _ => None,
         }
     }
@@ -264,7 +276,7 @@ impl<D: Serialize + DeserializeOwned> Format<D> {
     pub fn load(&self, path: &Path) -> Result<Loaded<D>, FormatError> {
         let len = std::fs::metadata(path)?.len();
         if len > self.max_bytes {
-            return Err(FormatError::Corrupt(format!("file is {len} bytes, more than the {} allowed", self.max_bytes)));
+            return Err(FormatError::corrupt(format!("file is {len} bytes, more than the {} allowed", self.max_bytes)));
         }
         let bytes = std::fs::read(path)?;
         self.decode(&bytes)
@@ -273,7 +285,7 @@ impl<D: Serialize + DeserializeOwned> Format<D> {
     /// Read file bytes (any supported schema).
     pub fn decode(&self, bytes: &[u8]) -> Result<Loaded<D>, FormatError> {
         if bytes.len() as u64 > self.max_bytes {
-            return Err(FormatError::Corrupt(format!("{} bytes, more than the {} allowed", bytes.len(), self.max_bytes)));
+            return Err(FormatError::corrupt(format!("{} bytes, more than the {} allowed", bytes.len(), self.max_bytes)));
         }
         let mut de = serde_json::Deserializer::from_slice(bytes);
         let probe = ProbeSeed { key: &self.payload_key }.deserialize(&mut de).and_then(|p| de.end().map(|()| p)).map_err(|e| self.parse_error(e))?;
@@ -292,8 +304,8 @@ impl<D: Serialize + DeserializeOwned> Format<D> {
                     let mut de = serde_json::Deserializer::from_slice(bytes);
                     let (doc, extras, generator) = EnvelopeSeed::<D> { key: &self.payload_key, _d: PhantomData }
                         .deserialize(&mut de)
-                        .map_err(|e| FormatError::Corrupt(e.to_string()))?;
-                    let doc = doc.ok_or_else(|| FormatError::Corrupt(format!("missing `{}`", self.payload_key)))?;
+                        .map_err(|e| FormatError::corrupt_json("", &e))?;
+                    let doc = doc.ok_or_else(|| FormatError::corrupt(format!("missing `{}`", self.payload_key)))?;
                     let envelope = Envelope { format: self.id.clone(), schema_version: found, generator };
                     return Ok(Loaded { doc, envelope, extras });
                 }
@@ -315,11 +327,11 @@ impl<D: Serialize + DeserializeOwned> Format<D> {
         let format = value.get(FORMAT).and_then(Value::as_str).unwrap_or(&self.id).to_string();
         let envelope = Envelope { format, schema_version: found, generator };
         let mut out = migrate(&self.migrations, value, found)?;
-        let Some(obj) = out.as_object_mut() else { return Err(FormatError::Corrupt("not a JSON object".into())) };
+        let Some(obj) = out.as_object_mut() else { return Err(FormatError::corrupt("not a JSON object")) };
         let payload = obj
             .remove(&self.payload_key)
-            .ok_or_else(|| FormatError::Corrupt(format!("after upgrading from schema v{found}: missing `{}`", self.payload_key)))?;
-        let doc = D::deserialize(payload).map_err(|e| FormatError::Corrupt(format!("after upgrading from schema v{found}: {e}")))?;
+            .ok_or_else(|| FormatError::corrupt(format!("after upgrading from schema v{found}: missing `{}`", self.payload_key)))?;
+        let doc = D::deserialize(payload).map_err(|e| FormatError::corrupt_json(&format!("after upgrading from schema v{found}"), &e))?;
         for k in [FORMAT, SCHEMA, GENERATOR] {
             obj.remove(k);
         }
@@ -342,7 +354,7 @@ impl<D: Serialize + DeserializeOwned> Format<D> {
 
     fn parse_error(&self, e: serde_json::Error) -> FormatError {
         if e.is_syntax() || e.is_eof() {
-            FormatError::Corrupt(e.to_string())
+            FormatError::corrupt_json("", &e)
         } else {
             FormatError::NotThisFormat { expected: self.id.clone(), why: e.to_string(), detail: Some(JsonError::new(&e)) }
         }
@@ -380,7 +392,7 @@ fn version_of(v: &Value) -> Result<u64, FormatError> {
     }
     match v.as_f64() {
         Some(f) if f >= u64::MAX as f64 && f.fract() == 0.0 => Ok(u64::MAX),
-        _ => Err(FormatError::Corrupt(format!("`schema_version` is not a version number: {v}"))),
+        _ => Err(FormatError::corrupt(format!("`schema_version` is not a version number: {v}"))),
     }
 }
 
@@ -658,11 +670,12 @@ mod tests {
         let broken = b"{\n  \"format\": \"test.doc\",\n  \"schema_version\": 3,,\n}";
         let expected = serde_json::from_slice::<Value>(broken).unwrap_err().to_string();
         let e = f.decode(broken).unwrap_err();
-        assert!(matches!(&e, FormatError::Corrupt(m) if *m == expected), "{e}");
+        assert!(matches!(&e, FormatError::Corrupt { message, .. } if *message == expected), "{e}");
         assert!(expected.ends_with("at line 3 column 23"), "{expected}");
-        assert!(e.json().is_none());
+        let j = e.json().expect("structured detail");
+        assert_eq!((j.line, j.column, j.syntax), (3, 23, true));
         let e = f.decode(br#"{"format":"test.doc","schema_version":3,"document":{}} trailing"#).unwrap_err();
-        assert!(matches!(e, FormatError::Corrupt(_)), "{e}");
+        assert!(matches!(e, FormatError::Corrupt { .. }), "{e}");
     }
 
     #[test]
@@ -733,7 +746,7 @@ mod tests {
             format!(r#"{{"format":"test.doc","schema_version":3,"document":{{"title":"x","tags":{}{}}}}}"#, "[".repeat(100_000), "]".repeat(100_000));
         assert!(f.decode(deep.as_bytes()).is_err());
         let small = Format::<Doc>::new("test.doc", "t").max_bytes(10);
-        assert!(matches!(small.decode(&good), Err(FormatError::Corrupt(_))));
+        assert!(matches!(small.decode(&good), Err(FormatError::Corrupt { .. })));
     }
 
     #[test]
@@ -758,6 +771,6 @@ mod tests {
         f.save(&p, &doc()).unwrap();
         assert_eq!(f.load(&p).unwrap().doc, doc());
         assert!(matches!(f.load(&dir.join("missing")), Err(FormatError::Io(_))));
-        assert!(matches!(fmt().max_bytes(5).load(&p), Err(FormatError::Corrupt(_))));
+        assert!(matches!(fmt().max_bytes(5).load(&p), Err(FormatError::Corrupt { .. })));
     }
 }

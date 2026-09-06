@@ -210,7 +210,7 @@ impl Host for Session {
         &mut self.journal
     }
 
-    fn before(&mut self, spec: &CommandSpec<Self>, params: &mut Value, depth: usize) -> std::result::Result<(), CommandError> {
+    fn before(&mut self, spec: &CommandSpec<Self>, params: &mut Value, depth: usize) -> Result<()> {
         // another edit arrives while a trim gesture plays: commit it first (one undo step)
         if depth == 0 && spec.mutates && self.trim_active && !spec.id.starts_with("trim.") {
             self.trim_active = false;
@@ -218,12 +218,7 @@ impl Host for Session {
         }
         // a clip given by its name instead of its id becomes the id here
         if let Some(name) = params.get("clip").and_then(Value::as_str) {
-            let id = self
-                .clips
-                .iter()
-                .find(|c| c.name == name)
-                .map(|c| c.id)
-                .ok_or_else(|| CommandError::bad_params("", format!("no clip named `{name}`")))?;
+            let id = self.clips.iter().find(|c| c.name == name).map(|c| c.id).ok_or_else(|| EngineError::Bad(format!("no clip named `{name}`")))?;
             params["clip"] = json!(id);
         }
         Ok(())
@@ -546,6 +541,9 @@ fn execute_host_keeps_the_hosts_error_variant() {
     assert_eq!(r, Err(ExecError::Command(CommandError::Unknown { id: "no.such".into() })));
     let r = REGISTRY.execute_host(&mut s, "sequence.close", json!({}));
     assert!(matches!(r, Err(ExecError::Command(CommandError::Disabled { .. }))), "{r:?}");
+    // an error from `before` (a clip name nothing has) is the host's own too
+    let r = REGISTRY.execute_host(&mut s, "clip.rename", json!({"clip": "nope", "name": "x"}));
+    assert_eq!(r, Err(ExecError::Host(EngineError::Bad("no clip named `nope`".into()))));
     let r = REGISTRY.execute_host(&mut s, "file.newProject", json!({"nmae": 1}));
     assert!(r.as_ref().unwrap_err().command().is_some_and(|e| matches!(e, CommandError::BadParams { .. })), "{r:?}");
     // success: same value and journal entry as `execute`

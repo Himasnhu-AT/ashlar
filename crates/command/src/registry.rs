@@ -149,8 +149,8 @@ impl<S: Host> Registry<S> {
 
     /// [`Registry::execute`] for a host whose callers match on its own error type: an error a
     /// command body returned comes back unchanged as [`ExecError::Host`]; a refusal or failure of
-    /// the chokepoint itself (unknown, too deep, `before`, validation, disabled, panic) is
-    /// [`ExecError::Command`]. Same steps and hooks; [`Host::after`] still sees the error converted
+    /// the chokepoint itself (unknown, too deep, validation, disabled, panic) is
+    /// [`ExecError::Command`]. An error from [`Host::before`] is the host's too: `Host`. Same steps and hooks; [`Host::after`] still sees the error converted
     /// into a `CommandError` (hence `Clone`: the original is kept for the caller).
     pub fn execute_host(&self, state: &mut S, id: &str, params: Value) -> Result<Value, ExecError<S::Error>>
     where
@@ -178,7 +178,9 @@ impl<S: Host> Registry<S> {
         }
         let mut params = params;
         if let Err(e) = state.before(spec, &mut params, depth) {
-            return reject(state, id, e.or_id(id), depth);
+            let (seen, host) = host_error(e);
+            state.rejected(id, &seen, depth);
+            return Err(ExecError::Host(host));
         }
         if let Err(e) = self.validate_by_policy(spec, &params) {
             return reject(state, id, e, depth);
