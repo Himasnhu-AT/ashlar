@@ -110,10 +110,10 @@ impl<D: Document> Driver<D> {
         self.screenshots = deliver;
     }
 
-    /// Minimize the window (or show it again). Hidden, a frame runs only [`Runtime::logic`], with
-    /// no egui pass, the way eframe treats a minimized or covered window; input waits for the
-    /// next shown frame. A raise from the app (`Focus`, `Minimized(false)`, `Visible(true)`)
-    /// shows it again.
+    /// Minimize the window (or show it again). Hidden, a frame runs [`Runtime::logic`] with no
+    /// egui pass, the way eframe treats a minimized or covered window, then the runtime's
+    /// [`Runtime::hidden_pass`] for pending debugger work; other input waits for the next shown
+    /// frame. A raise from the app (`Focus`, `Minimized(false)`, `Visible(true)`) shows it again.
     pub fn set_hidden(&mut self, hidden: bool) {
         self.hidden = hidden;
         self.next = Some(self.time);
@@ -177,12 +177,31 @@ impl<D: Document> Driver<D> {
     fn logic_only(&mut self) {
         let mut raw = egui::RawInput { screen_rect: Some(self.screen), time: Some(self.time), focused: false, ..Default::default() };
         raw.viewports.entry(ViewportId::ROOT).or_default().minimized = Some(true);
-        let rt = &mut self.runtime;
-        let out = self.ctx.run_logic(&raw, |ctx| rt.logic(ctx));
+        // screenshots the last pass asked for arrive with this one (a hidden window has none to
+        // present; this stands in for the debugger's off-screen renderer)
+        let (shots, rest): (Vec<Event>, Vec<Event>) = self.input.drain(..).partition(|e| matches!(e, Event::Screenshot { .. }));
+        self.input.extend(rest);
+        // wakes asked for from here on (also by a hidden pass, which has no repaint delay to
+        // report) stay pending
+        let done = self.ctx.cumulative_pass_nr();
+        let (rt, time) = (&mut self.runtime, self.time);
+        let out = self.ctx.run_logic(&raw, |ctx| {
+            rt.logic(ctx);
+            // nothing to upload textures to
+            if let Some(mut out) = rt.hidden_pass(ctx, Some(time), shots) {
+                out.textures_delta.clear();
+            }
+        });
         self.frames = self.frames.saturating_add(1);
         self.next = None;
         for c in out.viewport_commands.get(&ViewportId::ROOT).into_iter().flatten() {
             match c {
+                ViewportCommand::Screenshot(user_data) if self.screenshots => {
+                    let [w, h] = [self.screen.width() as usize, self.screen.height() as usize];
+                    let image = Arc::new(egui::ColorImage::new([w, h], vec![egui::Color32::from_gray(30); w * h]));
+                    self.input.push_back(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data: user_data.clone(), image });
+                    self.next = Some(self.time);
+                }
                 ViewportCommand::Focus | ViewportCommand::Minimized(false) | ViewportCommand::Visible(true) => {
                     self.hidden = false;
                     self.next = Some(self.time);
@@ -191,7 +210,6 @@ impl<D: Document> Driver<D> {
                 _ => {}
             }
         }
-        let done = self.ctx.cumulative_pass_nr();
         self.wakes.lock().unwrap_or_else(PoisonError::into_inner).pending.retain(|(_, nr)| *nr >= done);
     }
 

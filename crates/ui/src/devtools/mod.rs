@@ -187,6 +187,14 @@ pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.with_plugin::<Plugin, _>(|p| p.st.overlay.open).unwrap_or(false)
 }
 
+/// Whether debugger work waits for frames: requests not yet read, injected input still playing,
+/// waits and screenshots. An app whose window is hidden (eframe then runs no UI pass) runs one
+/// itself while this holds, so agents can drive a covered or minimized window.
+pub fn has_pending(ctx: &egui::Context) -> bool {
+    ctx.with_plugin::<Plugin, _>(|p| !p.st.inbox.is_empty() || p.st.script.is_busy() || !p.st.waits.is_empty() || !p.st.shots.is_empty())
+        .unwrap_or(false)
+}
+
 /// Tell `ui.wait {for: "idle"}` whether the app has work of its own pending (background jobs,
 /// a save in flight). Cheap: call it every frame.
 pub fn set_busy(ctx: &egui::Context, busy: bool) {
@@ -448,8 +456,9 @@ impl State {
             if let Some(r) = s.highlight {
                 painter.rect_stroke(r, 2.0, egui::Stroke::new(2.0, accent), egui::StrokeKind::Outside);
             }
+            let mut placed = Vec::with_capacity(s.annotations.len());
             for (label, r) in &s.annotations {
-                overlay::tag(&painter, *r, label, accent);
+                overlay::tag_among(&painter, *r, label, accent, &mut placed);
             }
             let now = ctx.input(|i| i.time);
             if matches!(s.stage, ShotStage::Paint) && !discard && self.offscreen.is_some() && !s.offscreen_failed {

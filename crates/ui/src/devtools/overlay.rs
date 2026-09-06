@@ -74,14 +74,36 @@ impl Overlay {
 
 /// A small ref label at the top-left corner of `rect`, with an outline.
 pub(super) fn tag(painter: &Painter, rect: Rect, label: &str, color: Color32) {
+    tag_among(painter, rect, label, color, &mut Vec::new());
+}
+
+/// [`tag`] for one of many labels: placed where it covers neither what it labels nor a label
+/// already in `placed` (above the element, below it, at its right end above or below), else
+/// where it at least stays outside the element, else inside its top-left corner.
+pub(super) fn tag_among(painter: &Painter, rect: Rect, label: &str, color: Color32, placed: &mut Vec<Rect>) {
     painter.rect_stroke(rect, 1.0, Stroke::new(1.0, color), StrokeKind::Outside);
     let galley = painter.layout_no_wrap(label.to_string(), FontId::monospace(10.0), Color32::WHITE);
-    // above the element when there is room, so the label does not cover what it labels
-    let h = galley.size().y;
-    let at = if rect.top() >= h { rect.left_top() - egui::vec2(0.0, h) } else { rect.left_top() };
-    let bg = Rect::from_min_size(at, galley.size() + egui::vec2(4.0, 0.0));
+    let size = galley.size() + egui::vec2(4.0, 0.0);
+    let (h, clip) = (size.y, painter.clip_rect());
+    let right = (rect.right() - size.x).max(rect.left());
+    let outside = [
+        egui::pos2(rect.left(), rect.top() - h),
+        egui::pos2(rect.left(), rect.bottom()),
+        egui::pos2(right, rect.top() - h),
+        egui::pos2(right, rect.bottom()),
+    ]
+    .map(|at| Rect::from_min_size(at, size));
+    let fits = |r: &Rect| clip.contains_rect(*r);
+    let free = |r: &Rect| !placed.iter().any(|p| p.intersects(*r));
+    let bg = outside
+        .iter()
+        .find(|r| fits(r) && free(r))
+        .or_else(|| outside.iter().find(|r| fits(r)))
+        .copied()
+        .unwrap_or_else(|| Rect::from_min_size(rect.left_top(), size));
+    placed.push(bg);
     painter.rect_filled(bg, 2.0, color);
-    painter.galley(at + egui::vec2(2.0, 0.0), galley, Color32::WHITE);
+    painter.galley(bg.min + egui::vec2(2.0, 0.0), galley, Color32::WHITE);
 }
 
 fn describe(n: &super::model::Node) -> String {

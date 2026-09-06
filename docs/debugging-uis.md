@@ -100,12 +100,15 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   not match: a disabled element shows `[disabled]` and a focused one `[focused]`.
 - `highlight @e3` flashes an outline in the app window, which helps when you are pairing with a
   human.
-- `screenshot --annotate` draws each interactive element's ref on the picture. The app paints no
-  frames while its window is covered, minimized or the screen is locked, so to take a screenshot it
-  raises the window once and fails after a few seconds if that does not help. Use
-  `screenshot --no-raise`, a session opened with `open --no-raise` (or `connect --no-raise`), or
-  `ASHLAR_DEBUG_NO_RAISE=1` for CI and background runs that must never steal focus. The MCP
-  `screenshot` tool takes `raise: false` for the same purpose.
+- `screenshot --annotate` draws each interactive element's ref on the picture, next to the element
+  rather than over its text. A covered or minimized window, or one on a locked screen, presents no
+  frames; `ashlar-app` then runs a UI pass of its own while debugger work waits and renders
+  screenshots off screen, so snapshots, input and screenshots work without bringing it to the
+  front. An app without an off-screen renderer has its window raised once for a screenshot, and
+  the request fails after a few seconds if that does not help. Use `screenshot --no-raise`, a
+  session opened with `open --no-raise` (or `connect --no-raise`), or `ASHLAR_DEBUG_NO_RAISE=1` for
+  CI and background runs that must never steal focus. The MCP `screenshot` tool takes
+  `raise: false` for the same purpose.
 - `logs -n 50`, `stats` and `devtools open` show the app's recent log lines, its frame and job
   statistics, and the in-app inspector.
 - `call <method> '{json}'` sends any control method as is.

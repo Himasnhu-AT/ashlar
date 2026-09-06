@@ -202,8 +202,9 @@ fn help(out: &mut dyn Write) {
         "\nTargets (T): @e3 or e3 (a ref from the latest snapshot), id=<automation id>, text=<label>,\n\
          <role>=<label> (button=Save), or x,y in window points.\n\
          Exit codes: 0 ok, 1 failed, 2 usage. --json prints one {{\"ok\":…}} line.\n\
-         A covered window is raised once to take a screenshot; --no-raise (on open, connect or screenshot)\n\
-         or ASHLAR_DEBUG_NO_RAISE=1 never raises it, for runs that must not steal focus."
+         Apps that render screenshots off screen (ashlar-app does) are driven while covered or minimized;\n\
+         others have a covered window raised once for a screenshot. --no-raise (on open, connect or\n\
+         screenshot) or ASHLAR_DEBUG_NO_RAISE=1 never raises it, for runs that must not steal focus."
     );
 }
 

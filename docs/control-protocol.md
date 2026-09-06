@@ -187,7 +187,8 @@ runtime reports its background jobs). Screenshot `annotations[].rect` is in imag
 to the returned image; annotate and highlight are painted into the captured frame. Screenshots are rendered off screen
 when the app provides a renderer (`devtools::set_offscreen`; `ashlar-app` uses eframe's wgpu
 device), so they work for a window that is covered, in the background, minimized behind others or
-on a locked screen. Otherwise the backend captures a presented frame: the request is repeated every
+on a locked screen; `ashlar-app` also runs the UI passes other `ui.*` requests need while such a
+window draws none (`Runtime::hidden_pass`). Otherwise the backend captures a presented frame: the request is repeated every
 0.25 s, the window is brought to the front once (unless `raise: false`), and after 1 s without a
 frame it fails with an error saying why. Either way it never hangs and never spins: a failed
 screenshot costs a bounded handful of frames. Pictures travel

@@ -39,12 +39,6 @@ use crate::telemetry::Telemetry;
 /// Top-level menus in this order; menus the app adds follow in first-seen order.
 pub const MENU_ORDER: &[&str] = &["File", "Edit", "View"];
 
-/// Why a request that needs frames fails on a minimized or covered window.
-const COVERED: &str = "the window is minimized or covered, so it draws no frames: bring it to the front for ui input, snapshots and screenshots (engine.execute works regardless)";
-
-/// How long a screenshot that raised a covered window waits for its frames.
-const RAISE_WAIT: Duration = Duration::from_secs(2);
-
 /// What `run()` found out before the window opened.
 #[derive(Default)]
 pub struct Launch {
@@ -182,8 +176,6 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
-    /// Screenshots of a covered window that raised it, waiting for its frames (since when).
-    raising: Vec<(Request, std::time::Instant)>,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -251,7 +243,6 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
-            raising: Vec::new(),
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -445,6 +436,47 @@ impl<D: Document> Runtime<D> {
             self.run_ui_command(ctx, &id, json!({}));
         }
         self.launch.telemetry.end_turn();
+    }
+
+    /// eframe runs no UI pass while the window is minimized or covered. While debugger work waits
+    /// (ui input, snapshots, waits, screenshots), run one here, after [`Runtime::logic`]: what it
+    /// draws is not presented (screenshots render off screen) and nothing raises the window, so
+    /// agents drive a covered window without taking the focus. Its window commands go to the
+    /// context; the output is returned for the caller to hand its texture changes to the renderer.
+    /// `time` and `events` are for the pass (eframe gives none: the wall clock goes on; the
+    /// headless driver passes its virtual clock and delivers its screenshots this way).
+    pub fn hidden_pass(&mut self, ctx: &egui::Context, time: Option<f64>, events: Vec<egui::Event>) -> Option<egui::FullOutput> {
+        if ctx.input(|i| i.viewport().visible()) != Some(false) || !devtools::has_pending(ctx) {
+            return None;
+        }
+        let mut raw = ctx.input(|i| i.raw.clone());
+        raw.events = events;
+        raw.hovered_files.clear();
+        raw.dropped_files.clear();
+        raw.viewport_id = egui::ViewportId::ROOT;
+        // eframe hands no time to a hidden window: go on from the last pass on the wall clock
+        let last = ctx.input(|i| i.time);
+        raw.time = Some(time.unwrap_or_else(|| self.created.map_or(last, |c| c.elapsed().as_secs_f64())).max(last));
+        if raw.screen_rect.is_none()
+            && let Some(r) = raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.inner_rect)
+        {
+            raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, r.size()));
+        }
+        self.raw_input_hook(ctx, &mut raw);
+        let out = ctx.run_ui(raw, |ui| self.ui(ui));
+        for (id, vo) in &out.viewport_output {
+            for c in &vo.commands {
+                ctx.send_viewport_cmd_to(*id, c.clone());
+            }
+            if *id == egui::ViewportId::ROOT && vo.repaint_delay < Duration::from_secs(3600) {
+                wake::wake_after(ctx, Reason::CONTROL, vo.repaint_delay);
+            }
+        }
+        if !out.platform_output.commands.is_empty() {
+            let commands = out.platform_output.commands.clone();
+            ctx.output_mut(|o| o.commands.extend(commands));
+        }
+        Some(out)
     }
 
     /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
@@ -978,8 +1010,7 @@ impl<D: Document> Runtime<D> {
         if let Some((_, rx)) = &self.control {
             reqs.extend(rx.try_iter().take(256));
         }
-        let raised = self.raised_screenshots(ctx);
-        if reqs.is_empty() && raised.is_empty() {
+        if reqs.is_empty() {
             return;
         }
         let info = self.info();
@@ -989,55 +1020,17 @@ impl<D: Document> Runtime<D> {
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
             self.apply_effects(ctx);
         }
-        for req in raised.into_iter().chain(std::mem::take(&mut queue.pending)) {
+        for req in std::mem::take(&mut queue.pending) {
             self.answer_ui(ctx, req);
         }
         wake::wake(ctx, Reason::CONTROL);
-    }
-
-    /// The raised-window screenshots whose window now draws frames; the ones still covered after
-    /// [`RAISE_WAIT`] fail.
-    fn raised_screenshots(&mut self, ctx: &egui::Context) -> Vec<Request> {
-        if self.raising.is_empty() {
-            return Vec::new();
-        }
-        let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
-        let mut ready = Vec::new();
-        for (req, since) in std::mem::take(&mut self.raising) {
-            if visible {
-                ready.push(req);
-            } else if since.elapsed() >= RAISE_WAIT {
-                req.fail(COVERED);
-            } else {
-                self.raising.push((req, since));
-            }
-        }
-        if !self.raising.is_empty() {
-            wake::wake_after(ctx, Reason::CONTROL, Duration::from_millis(50));
-        }
-        ready
     }
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
         let p = req.params().clone();
         let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
         if devtools::handles(req.method()) {
-            let needs_frames = !matches!(req.method(), "devtools.toggle" | "devtools.state");
-            if needs_frames && !visible {
-                // eframe draws no frames for a minimized or fully covered window. A screenshot
-                // raises it once (unless `raise: false`) and waits for its frames; eframe applies
-                // viewport commands from `logic` while the window is hidden.
-                let raise = req.method() == "ui.screenshot" && p.get("raise").and_then(Value::as_bool).unwrap_or(true);
-                if raise && let Some(since) = now() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    self.raising.push((req, since));
-                    wake::wake_after(ctx, Reason::CONTROL, Duration::from_millis(50));
-                    return;
-                }
-                return req.fail(COVERED);
-            }
+            // on a minimized or covered window, [`Runtime::hidden_pass`] runs the frames these need
             if let devtools::Outcome::NotMine(req) = devtools::handle(ctx, req) {
                 req.unknown();
             }
@@ -1202,20 +1195,44 @@ struct EframeApp<D: Document> {
     offscreen: bool,
 }
 
+impl<D: Document> EframeApp<D> {
+    /// Hand the debugger its off-screen renderer once eframe's wgpu device is known.
+    fn install_offscreen(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if std::mem::replace(&mut self.offscreen, true) {
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rs) = frame.wgpu_render_state() {
+            devtools::set_offscreen(ctx, Some(crate::offscreen::renderer(rs.clone())));
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (ctx, frame);
+    }
+}
+
 impl<D: Document> eframe::App for EframeApp<D> {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.rt.logic(ctx);
+        self.install_offscreen(ctx, frame);
+        let Some(mut out) = self.rt.hidden_pass(ctx, None, Vec::new()) else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rs) = frame.wgpu_render_state() {
+            let mut r = rs.renderer.write();
+            for (id, deltas) in &out.textures_delta.set {
+                for delta in deltas {
+                    r.update_texture(&rs.device, &rs.queue, *id, delta);
+                }
+            }
+            for id in &out.textures_delta.free {
+                r.free_texture(id);
+            }
+        }
+        // handed to the renderer (or, with no wgpu device, nowhere to hand them)
+        out.textures_delta.clear();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        if !std::mem::replace(&mut self.offscreen, true) {
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(rs) = frame.wgpu_render_state() {
-                devtools::set_offscreen(ui.ctx(), Some(crate::offscreen::renderer(rs.clone())));
-            }
-            #[cfg(target_arch = "wasm32")]
-            let _ = frame;
-        }
+        self.install_offscreen(ui.ctx(), frame);
         self.rt.ui(ui);
     }
 

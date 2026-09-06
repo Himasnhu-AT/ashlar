@@ -196,21 +196,22 @@ fn screenshots_crop_annotate_and_highlight() {
 }
 
 #[test]
-fn a_screenshot_raises_a_minimized_window_once_and_other_ui_requests_refuse() {
+fn a_minimized_window_is_driven_without_raising_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut d = with_two_notes(dir.path());
     d.set_hidden(true);
-    let (e, _) = error(d.request("ui.snapshot", json!({})));
-    assert!(e.contains("minimized or covered"), "{e}");
-    assert_eq!(count(&mut d), 2, "engine.execute works while hidden");
-    let (e, _) = error(d.request("ui.screenshot", json!({"raise": false})));
-    assert!(e.contains("minimized or covered"), "{e}");
-    assert!(d.is_hidden(), "raise: false leaves the window where it is");
-
+    let snap = d.call("ui.snapshot", json!({})).unwrap();
+    assert!(element(&snap, "notes.add")["ref"].is_string(), "{}", snap["tree"]);
+    d.call("ui.click", json!({"target": {"id": "notes.add"}})).unwrap();
+    d.settle(20);
+    assert_eq!(count(&mut d), 3, "the click reached the hidden window");
     let shot = d.call("ui.screenshot", json!({})).unwrap();
     assert_eq!(shot["width"].as_u64(), Some(1280));
-    assert!(!d.is_hidden(), "the screenshot raised the window");
-    assert!(d.call("ui.snapshot", json!({})).is_ok());
+    assert!(d.is_hidden(), "nothing raised the window");
+    // with no debugger work pending, a hidden window runs no UI passes
+    let before = d.runtime.passes();
+    d.advance(5.0);
+    assert_eq!(d.runtime.passes(), before, "an idle hidden window draws nothing");
 }
 
 #[test]
