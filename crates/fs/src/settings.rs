@@ -45,6 +45,9 @@ pub enum LoadState {
 /// Asks the owner to call [`Settings::tick`] again after the given delay.
 pub type SettingsWake = Arc<dyn Fn(Duration) + Send + Sync>;
 
+/// A tick this close to the end of the debounce counts as due (wakes start a frame a hair early).
+const DUE_SLACK: Duration = Duration::from_millis(2);
+
 /// Keyed settings persisted in a [`ConfigStore`].
 pub struct Settings {
     store: Arc<dyn ConfigStore>,
@@ -56,8 +59,11 @@ pub struct Settings {
     /// Bumped by every change; `saved_gen` is the one on disk.
     generation: u64,
     saved_gen: u64,
-    /// The generation seen by the last tick and when it was first seen.
+    /// The generation seen by the last tick and when its quiet period started.
     seen: Option<(u64, Duration)>,
+    /// `now` of the last tick: a change between ticks is dated to it, so the wake the change asks
+    /// for (`debounce` after the change) never comes before the save is due.
+    last_tick: Option<Duration>,
     wake: Option<SettingsWake>,
 }
 
@@ -82,6 +88,7 @@ impl Settings {
             generation: 0,
             saved_gen: 0,
             seen: None,
+            last_tick: None,
             wake: None,
         };
         let Some(text) = s.store.read(name) else { return s };
@@ -202,22 +209,29 @@ impl Settings {
     /// Save if there are changes and none happened for the debounce period. Call it every frame or
     /// on a timer with a monotonic `now`. Returns `Ok(true)` when it wrote.
     pub fn tick(&mut self, now: Duration) -> std::io::Result<bool> {
+        let last = self.last_tick.replace(now);
         if !self.is_dirty() {
             self.seen = None;
             return Ok(false);
         }
         match self.seen {
             Some((g, since)) if g == self.generation => {
-                let waited = now.saturating_sub(since);
+                // the frame asked for may start a little early (clock rounding): within a couple of
+                // milliseconds counts as due
+                let waited = now.saturating_sub(since).saturating_add(DUE_SLACK);
                 if waited >= self.debounce {
                     self.flush()?;
                     return Ok(true);
                 }
-                self.wake(self.debounce.saturating_sub(waited));
+                // asked when the save was scheduled; the host keeps that wake until it is due
             }
+            // a change since the last tick (it asked for its wake when it happened)
             _ => {
-                self.seen = Some((self.generation, now));
-                self.wake(self.debounce);
+                let since = last.filter(|l| *l <= now).unwrap_or(now);
+                self.seen = Some((self.generation, since));
+                if last.is_none() {
+                    self.wake(self.debounce);
+                }
             }
         }
         Ok(false)
@@ -292,11 +306,11 @@ mod tests {
         s.set("a", &1).unwrap();
         assert!(!s.tick(Duration::ZERO).unwrap());
         assert!(!s.tick(50 * MS).unwrap());
-        s.set("a", &2).unwrap(); // restarts the quiet period
+        s.set("a", &2).unwrap(); // restarts the quiet period, dated to the last tick (50 ms)
         assert!(!s.tick(60 * MS).unwrap());
-        assert!(!s.tick(150 * MS).unwrap());
+        assert!(!s.tick(140 * MS).unwrap());
         assert!(store.read("s.json").is_none());
-        assert!(s.tick(160 * MS).unwrap());
+        assert!(s.tick(150 * MS).unwrap());
         assert!(!s.is_dirty());
         let back = Settings::load(store, "s.json", &[]);
         assert_eq!(back.get::<i32>("a"), Some(2));
@@ -316,7 +330,7 @@ mod tests {
         assert_eq!(*asked.lock().unwrap(), vec![100 * MS], "a change asks for a tick after the debounce");
         assert!(!s.tick(10 * MS).unwrap());
         assert!(!s.tick(40 * MS).unwrap());
-        assert_eq!(asked.lock().unwrap()[1..], [100 * MS, 70 * MS], "each tick asks for the time left");
+        assert_eq!(asked.lock().unwrap().len(), 1, "the save is asked for once, when the change happens, not per tick");
         // driving ticks only when asked saves on time
         assert!(s.tick(110 * MS).unwrap());
         assert!(store.read("s.json").is_some());

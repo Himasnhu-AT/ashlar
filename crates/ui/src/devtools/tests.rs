@@ -21,12 +21,17 @@ struct App {
     last: Option<egui::FullOutput>,
     /// Screenshot requests the "backend" drops (a window that presents no frame).
     drop_shots: usize,
+    /// Repaint requests made outside a pass: (delay, pass number), as a backend's callback sees them.
+    asked: Arc<std::sync::Mutex<Vec<(Duration, u64)>>>,
 }
 
 impl App {
     fn new() -> Self {
         let ctx = egui::Context::default();
         ctx.global_style_mut(|s| s.animation_time = 0.0);
+        let asked: Arc<std::sync::Mutex<Vec<(Duration, u64)>>> = Arc::default();
+        let a = Arc::clone(&asked);
+        ctx.set_request_repaint_callback(move |info| a.lock().unwrap().push((info.delay, info.current_cumulative_pass_nr)));
         install(&ctx);
         App {
             ctx,
@@ -42,6 +47,7 @@ impl App {
             frames_until_extra: None,
             last: None,
             drop_shots: 0,
+            asked,
         }
     }
 
@@ -109,6 +115,30 @@ impl App {
             }
         }
         panic!("{method} not answered")
+    }
+
+    /// Like [`App::call`], but runs only the frames something asked for (as an event-driven
+    /// backend does), on a virtual clock: `(reply, frames run)`.
+    fn call_honestly(&mut self, method: &str, params: Value) -> (Reply, u32) {
+        let rx = call(&self.ctx, method, params);
+        let mut frames = 0;
+        let start = self.time;
+        loop {
+            if let Ok(r) = rx.try_recv() {
+                return (r, frames);
+            }
+            let done = self.ctx.cumulative_pass_nr();
+            let from_output = self.last.as_ref().and_then(|o| o.viewport_output.get(&ViewportId::ROOT)).map_or(Duration::MAX, |v| v.repaint_delay);
+            let later = self.asked.lock().unwrap().iter().filter(|(_, nr)| *nr >= done).map(|(d, _)| *d).min().unwrap_or(Duration::MAX);
+            let delay = from_output.min(later);
+            self.asked.lock().unwrap().clear();
+            assert!(delay < Duration::MAX || !self.pending.is_empty(), "{method}: no frame pending and no answer");
+            assert!(self.time - start < 30.0, "{method}: not answered in 30 s");
+            // `frame` adds 1/60 s itself
+            self.time += delay.as_secs_f64().min(30.0);
+            self.frame();
+            frames += 1;
+        }
     }
 
     fn ok(&mut self, method: &str, params: Value) -> Value {
@@ -353,4 +383,46 @@ fn a_dropped_screenshot_is_asked_again_and_a_window_that_never_draws_fails_fast(
     app.drop_shots = usize::MAX;
     let Reply::Err { error, .. } = app.call("ui.screenshot", json!({"raise": false})) else { panic!("a screenshot from nowhere") };
     assert!(error.contains("presented no frame"), "{error}");
+}
+
+#[test]
+fn a_screenshot_that_never_arrives_does_not_spin_the_frame_loop() {
+    let mut app = App::new();
+    app.settle();
+    app.drop_shots = usize::MAX;
+    let (r, frames) = app.call_honestly("ui.screenshot", json!({"raise": false}));
+    let Reply::Err { error, .. } = r else { panic!("a screenshot from nowhere") };
+    assert!(error.contains("presented no frame"), "{error}");
+    println!("bench: failed_screenshot_frames {frames}");
+    assert!(frames <= 16, "{frames} frames for one failed screenshot");
+    // and it gave up within about a second
+    app.drop_shots = 0;
+    let (r, frames) = app.call_honestly("ui.screenshot", json!({}));
+    assert!(r.is_ok());
+    println!("bench: screenshot_frames {frames}");
+    assert!(frames <= 6, "{frames} frames for one screenshot");
+}
+
+#[test]
+fn an_offscreen_renderer_needs_no_presented_frame_and_a_failing_one_falls_back() {
+    let mut app = App::new();
+    app.settle();
+    let seen = Arc::new(std::sync::Mutex::new(0usize));
+    let s2 = Arc::clone(&seen);
+    set_offscreen(
+        &app.ctx,
+        Some(Arc::new(move |f: &OffscreenFrame<'_>| {
+            *s2.lock().unwrap() = f.primitives.len();
+            let [w, h] = f.size_in_pixels;
+            Ok(egui::ColorImage::new([w as usize, h as usize], vec![f.clear; (w * h) as usize]))
+        })),
+    );
+    app.drop_shots = usize::MAX; // the window never presents
+    let shot = app.ok("ui.screenshot", json!({"target": {"id": "toolbar.save"}, "annotate": true}));
+    assert!(shot["width"].as_u64().unwrap() > 10);
+    assert!(*seen.lock().unwrap() > 0, "the frame's shapes were rendered");
+    set_offscreen(&app.ctx, Some(Arc::new(|_: &OffscreenFrame<'_>| Err("no gpu".into()))));
+    app.drop_shots = 0;
+    assert_eq!(app.ok("ui.screenshot", json!({}))["width"].as_u64(), Some(400), "falls back to the backend's capture");
+    set_offscreen(&app.ctx, None);
 }

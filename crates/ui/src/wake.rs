@@ -6,13 +6,13 @@
 //! thread) instead of `Context::request_repaint`. The context's [`Scheduler`] counts requests per
 //! reason and credits each frame to every reason whose wake was due when it started; a frame
 //! nobody asked for (pointer and keyboard input, a resize, egui's own animations) counts as
-//! [`Reason::INPUT`]. Requests made during a frame are for the frames after it, as in egui: a
-//! timed wake that was not due by the next frame is dropped (the code that wanted it asks again if
-//! it still does).
+//! [`Reason::INPUT`]. Requests made during a frame are for the frames after it. A timed wake that
+//! is not due yet when another frame runs stays pending: the scheduler asks egui for it again
+//! ([`Scheduler::rearm`]), so code asks once per deadline, not once per frame.
 //!
 //! The host calls [`Scheduler::begin_frame`] once per frame, before the frame's logic runs (in
-//! eframe: `App::raw_input_hook`). `ashlar-app`'s runtime does this; a host of its own does it
-//! too.
+//! eframe: `App::raw_input_hook`), and [`Scheduler::rearm`] during the frame. `ashlar-app`'s
+//! runtime does both; a host of its own does them too.
 //!
 //! ```
 //! use std::time::Duration;
@@ -90,13 +90,19 @@ impl std::fmt::Display for Reason {
     }
 }
 
+/// Pending wake times kept per reason (one code path asks again for the same deadline; distinct
+/// deadlines are few).
+const MAX_DUE: usize = 8;
+
 /// Due times are egui input times (seconds); a frame starting this much early still counts.
 const SLACK_S: f64 = 1e-3;
 
 #[derive(Debug, Default)]
 struct State {
     /// The egui time each reason asked to run at (`-inf` = now).
-    due: BTreeMap<&'static str, f64>,
+    /// The egui times each reason asked to run at, earliest first (`-inf` = now); at most
+    /// [`MAX_DUE`] per reason.
+    due: BTreeMap<&'static str, Vec<f64>>,
     requests: BTreeMap<&'static str, u64>,
     frames: BTreeMap<&'static str, u64>,
     total: u64,
@@ -165,26 +171,63 @@ impl Scheduler {
     pub fn request(&self, reason: Reason, due: f64) {
         let mut s = self.lock();
         bump(&mut s.requests, reason.0);
-        let d = s.due.entry(reason.0).or_insert(due);
-        *d = d.min(due);
+        let list = s.due.entry(reason.0).or_default();
+        // the same deadline asked again (within the slack) is one wake
+        if list.iter().any(|d| (d - due).abs() <= SLACK_S || (d.is_infinite() && due.is_infinite())) {
+            return;
+        }
+        let at = list.partition_point(|d| *d < due);
+        list.insert(at, due);
+        if list.len() > MAX_DUE {
+            // keep the earliest ones and the latest: every pending deadline still gets a frame
+            // by then
+            list.remove(MAX_DUE - 1);
+        }
     }
 
-    /// Start of a frame at egui time `now`: credit it to the reasons that were due, and forget
-    /// every request (the frame asks again for what it still needs).
+    /// Start of a frame at egui time `now`: credit it to the reasons that were due and forget
+    /// them; wakes not due yet stay pending (see [`Scheduler::rearm`]).
     pub fn begin_frame(&self, now: f64) {
         let mut s = self.lock();
         let due = std::mem::take(&mut s.due);
         let mut any = false;
-        for (r, d) in due {
-            if d <= now + SLACK_S {
+        for (r, mut list) in due {
+            let n = list.partition_point(|d| *d <= now + SLACK_S);
+            if n > 0 {
                 bump(&mut s.frames, r);
                 any = true;
+                list.drain(..n);
+            }
+            if !list.is_empty() {
+                s.due.insert(r, list);
             }
         }
         if !any {
             bump(&mut s.frames, Reason::INPUT.0);
         }
         s.total = s.total.saturating_add(1);
+    }
+
+    /// Forget a pending wake for `reason` (the work it was for finished early).
+    pub fn cancel(&self, reason: Reason) {
+        self.lock().due.remove(reason.0);
+    }
+
+    /// Ask egui again for the timed wakes still pending (egui forgets a timed repaint when another
+    /// frame runs first). Call it during each frame; it does not count as a request.
+    pub fn rearm(&self, ctx: &egui::Context) {
+        let next = self.lock().due.values().filter_map(|l| l.first().copied()).fold(f64::INFINITY, f64::min);
+        if !next.is_finite() {
+            return;
+        }
+        let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
+        let delay = Duration::try_from_secs_f64((next - now).max(0.0)).unwrap_or_default();
+        if delay.is_zero() {
+            ctx.request_repaint();
+        } else {
+            let early = Duration::try_from_secs_f32(predicted_dt).unwrap_or_default();
+            ctx.request_repaint_after(delay.saturating_add(early).saturating_add(Duration::from_millis(1)));
+        }
     }
 
     pub fn stats(&self) -> WakeStats {
@@ -204,10 +247,20 @@ pub fn wake(ctx: &egui::Context, reason: Reason) {
 /// Ask for a frame after `delay` (measured from the current frame's time). The frame starts no
 /// earlier than that (egui's `request_repaint_after` starts one predicted frame early).
 pub fn wake_after(ctx: &egui::Context, reason: Reason, delay: Duration) {
-    request_after(ctx, &Scheduler::of(ctx), reason, delay);
+    request_after(ctx, &Scheduler::of(ctx), reason, delay, false);
 }
 
-fn request_after(ctx: &egui::Context, s: &Scheduler, reason: Reason, delay: Duration) {
+/// Like [`wake_after`], but this becomes the reason's only pending wake: for code that owns one
+/// deadline and moves it (a debounced save restarting its quiet period), so the deadlines it
+/// gave up on cost no frames.
+pub fn reschedule(ctx: &egui::Context, reason: Reason, delay: Duration) {
+    request_after(ctx, &Scheduler::of(ctx), reason, delay, true);
+}
+
+fn request_after(ctx: &egui::Context, s: &Scheduler, reason: Reason, delay: Duration, replace: bool) {
+    if replace {
+        s.cancel(reason);
+    }
     if delay.is_zero() {
         s.request(reason, f64::NEG_INFINITY);
         ctx.request_repaint();
@@ -243,9 +296,14 @@ impl Waker {
         self.ctx.request_repaint();
     }
 
+    /// Make a frame after `delay` this reason's only pending wake (see [`reschedule`]).
+    pub fn reschedule(&self, delay: Duration) {
+        request_after(&self.ctx, &self.scheduler, self.reason, delay, true);
+    }
+
     /// Ask for a frame after `delay`.
     pub fn wake_after(&self, delay: Duration) {
-        request_after(&self.ctx, &self.scheduler, self.reason, delay);
+        request_after(&self.ctx, &self.scheduler, self.reason, delay, false);
     }
 
     pub fn reason(&self) -> Reason {
@@ -266,7 +324,7 @@ mod tests {
         s.request(PLAYBACK, f64::NEG_INFINITY);
         s.request(STATUS, 1.0);
         s.begin_frame(0.5);
-        // the status wake was not due: dropped, as egui drops it
+        // the status wake was not due: it stays pending and is credited when it is
         s.begin_frame(1.0);
         s.request(STATUS, 2.0);
         s.request(Reason::JOB, 1.15);
@@ -274,13 +332,13 @@ mod tests {
         let st = s.stats();
         assert_eq!(st.frames, 3);
         assert_eq!(st.frames_for(PLAYBACK), 1);
-        assert_eq!(st.frames_for(STATUS), 0);
+        assert_eq!(st.frames_for(STATUS), 1);
         assert_eq!(st.frames_for(Reason::JOB), 1);
-        assert_eq!(st.frames_for(Reason::INPUT), 1);
+        assert_eq!(st.frames_for(Reason::INPUT), 0);
         assert_eq!(st.requests_for(STATUS), 2);
         assert_eq!(st.requests(), 4);
         let v = serde_json::to_value(&st).unwrap_or_default();
-        assert_eq!(v["frames_by"], serde_json::json!({"input": 1, "playback": 1, "job": 1}));
+        assert_eq!(v["frames_by"], serde_json::json!({"status": 1, "playback": 1, "job": 1}));
         assert_eq!(v["requests_by"], serde_json::json!({"playback": 1, "status": 2, "job": 1}));
         assert_eq!(v["frames"], serde_json::json!(3));
         let back: WakeStats = serde_json::from_value(v).unwrap_or_default();
@@ -296,6 +354,29 @@ mod tests {
         s.begin_frame(1.0);
         let st = s.stats();
         assert_eq!((st.frames_for(Reason::TIMER), st.requests_for(Reason::TIMER), st.frames), (1, 3, 1));
+    }
+
+    #[test]
+    fn deadlines_not_yet_due_stay_pending_each_one_gets_its_frame() {
+        let s = Scheduler::default();
+        s.request(Reason::SETTINGS, 1.0);
+        s.request(Reason::SETTINGS, 1.0); // the same deadline asked again
+        s.request(Reason::SETTINGS, 1.4);
+        s.begin_frame(0.2); // input came first: both stay pending
+        s.begin_frame(1.0);
+        s.begin_frame(1.2);
+        s.begin_frame(1.4);
+        let st = s.stats();
+        assert_eq!((st.frames_for(Reason::SETTINGS), st.frames_for(Reason::INPUT), st.requests_for(Reason::SETTINGS)), (2, 2, 3));
+        s.request(Reason::TIMER, 9.0);
+        s.cancel(Reason::TIMER);
+        s.begin_frame(9.0);
+        assert_eq!(s.stats().frames_for(Reason::TIMER), 0);
+        for i in 0..100 {
+            s.request(Reason::JOB, 20.0 + f64::from(i));
+        }
+        s.begin_frame(200.0);
+        assert_eq!(s.stats().frames_for(Reason::JOB), 1, "a capped list still ends with the latest deadline");
     }
 
     #[test]

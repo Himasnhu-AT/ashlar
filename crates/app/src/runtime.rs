@@ -390,10 +390,10 @@ impl<D: Document> Runtime<D> {
         let w = wake::waker(ctx, Reason::JOB);
         self.jobs.set_wake(move || w.wake());
         let w = wake::waker(ctx, Reason::SETTINGS);
-        self.settings.set_wake(move |d| w.wake_after(d));
+        self.settings.set_wake(move |d| w.reschedule(d));
         if let Some(a) = &mut self.autosave {
             let w = wake::waker(ctx, Reason::AUTOSAVE);
-            a.autosave.set_wake(move |d| w.wake_after(d));
+            a.autosave.set_wake(move |d| w.reschedule(d));
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(writer) = &a.writer {
                 let w = wake::waker(ctx, Reason::AUTOSAVE);
@@ -454,6 +454,8 @@ impl<D: Document> Runtime<D> {
         self.launch.telemetry.begin_turn();
         self.ensure_started(&ctx);
         self.passes = self.passes.saturating_add(1);
+        // timed wakes not yet due when this frame ran (input came first) stay scheduled
+        self.wakes.rearm(&ctx);
         let rev_before = self.session.revision();
         let (focused, active) = ctx.input(|i| (i.focused, !i.events.is_empty()));
         self.launch.telemetry.input(focused, active);
@@ -1152,6 +1154,8 @@ fn native_pick<D: Document>(_shared: &Shared<D>, _session: &Session<D>, _kind: P
 
 struct EframeApp<D: Document> {
     rt: Runtime<D>,
+    /// The debugger renders screenshots on eframe's wgpu device (set on the first frame).
+    offscreen: bool,
 }
 
 impl<D: Document> eframe::App for EframeApp<D> {
@@ -1159,7 +1163,15 @@ impl<D: Document> eframe::App for EframeApp<D> {
         self.rt.logic(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if !std::mem::replace(&mut self.offscreen, true) {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(rs) = frame.wgpu_render_state() {
+                devtools::set_offscreen(ui.ctx(), Some(crate::offscreen::renderer(rs.clone())));
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = frame;
+        }
         self.rt.ui(ui);
     }
 
@@ -1225,7 +1237,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         .ok_or_else(|| Error::Window(format!("no <canvas id=\"{}\"> in the page", shared.name)))?;
     wasm_bindgen_futures::spawn_local(async move {
         let creator: eframe::AppCreator<'static> =
-            Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()) })));
+            Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()), offscreen: false })));
         if let Err(e) = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), creator).await {
             log::error!("the app could not start: {e:?}");
         }
@@ -1282,7 +1294,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         Box::new(move |_cc| {
             let mut rt = Runtime::new(shared, view, setup, launch);
             rt.native = true;
-            Ok(Box::new(EframeApp { rt }))
+            Ok(Box::new(EframeApp { rt, offscreen: false }))
         }),
     )
     .map_err(|e| Error::Window(e.to_string()))
