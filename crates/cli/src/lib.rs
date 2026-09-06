@@ -61,11 +61,12 @@ impl From<Exit> for std::process::ExitCode {
     }
 }
 
-/// The streams a verb uses (real stdio in [`Cli::run`], buffers in tests).
+/// The streams a verb uses (real stdio in [`Cli::run`], buffers in tests). `Send`, so `mcp` can
+/// read and write on their own threads.
 pub struct Io<'a> {
-    pub input: &'a mut dyn BufRead,
-    pub out: &'a mut dyn Write,
-    pub err: &'a mut dyn Write,
+    pub input: &'a mut (dyn BufRead + Send),
+    pub out: &'a mut (dyn Write + Send),
+    pub err: &'a mut (dyn Write + Send),
 }
 
 impl Io<'_> {
@@ -155,8 +156,8 @@ impl Cli {
     /// Run with the process arguments and real stdio.
     pub fn run(mut self) -> std::process::ExitCode {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        let (stdin, stdout, stderr) = (std::io::stdin(), std::io::stdout(), std::io::stderr());
-        let (mut i, mut o, mut e) = (stdin.lock(), stdout.lock(), stderr.lock());
+        // the handles, not their locks: those cannot move to another thread
+        let (mut i, mut o, mut e) = (std::io::BufReader::new(std::io::stdin()), std::io::stdout(), std::io::stderr());
         self.run_with(args, &mut Io { input: &mut i, out: &mut o, err: &mut e }).into()
     }
 

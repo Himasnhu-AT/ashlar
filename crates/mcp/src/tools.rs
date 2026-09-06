@@ -54,13 +54,30 @@ fn obj(props: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": props, "required": required})
 }
 
-fn tool(name: &str, title: &str, description: &str, schema: Value, read_only: bool) -> Value {
+/// What a tool may do, for the MCP tool annotations clients use to decide what needs a
+/// confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// Reads only; calling it again gives the same answer for the same state.
+    Read,
+    /// Changes the document through a command, which is journaled and undoable: not destructive.
+    Undoable,
+    /// May do anything a command or a user's input can (save over a file, quit): destructive.
+    Any,
+}
+
+fn tool(name: &str, title: &str, description: &str, schema: Value, access: Access) -> Value {
+    let annotations = match access {
+        Access::Read => json!({"title": title, "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false}),
+        Access::Undoable => json!({"title": title, "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}),
+        Access::Any => json!({"title": title, "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false}),
+    };
     json!({
         "name": name,
         "title": title,
         "description": description,
         "inputSchema": schema,
-        "annotations": {"title": title, "readOnlyHint": read_only, "openWorldHint": false},
+        "annotations": annotations,
     })
 }
 
@@ -73,14 +90,14 @@ pub fn core_tools() -> Vec<Value> {
             "List commands",
             "Every command of the app: id, label, whether it is enabled now and whether it changes the document. Filter with `query` (matches id, label and menu). Use describe_command for parameters.",
             obj(json!({"query": {"type": "string", "description": "Case-insensitive filter on id, label and menu path"}}), &[]),
-            true,
+            Access::Read,
         ),
         tool(
             "describe_command",
             "Describe a command",
             "One command in full: label, menu, shortcut, parameter schema, why it is disabled.",
             obj(json!({"command": {"type": "string", "description": "Command id"}}), &["command"]),
-            true,
+            Access::Read,
         ),
         tool(
             "execute",
@@ -90,14 +107,14 @@ pub fn core_tools() -> Vec<Value> {
                 json!({"command": {"type": "string", "description": "Command id"}, "params": {"type": "object", "description": "Command parameters"}}),
                 &["command"],
             ),
-            false,
+            Access::Any,
         ),
         tool(
             "batch",
             "Run several commands",
             "Run commands in order; stops at the first error unless keepGoing. Returns each step's result.",
             obj(json!({"commands": {"type": "array", "items": step}, "keepGoing": {"type": "boolean"}}), &["commands"]),
-            false,
+            Access::Any,
         ),
     ]
 }
@@ -115,8 +132,8 @@ fn target_schema(what: &str) -> Value {
     })
 }
 
-/// `(tool, method, title, description, schema, read-only)` for the UI vocabulary.
-fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Value, bool)> {
+/// `(tool, method, title, description, schema, access)` for the UI vocabulary.
+fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Value, Access)> {
     let point = json!({"type": "object", "description": "{id} (element centre) or {x, y} (window points)",
         "properties": {"id": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}});
     let mods = json!({"type": "object", "properties": {"command": {"type": "boolean"}, "shift": {"type": "boolean"}, "alt": {"type": "boolean"}, "ctrl": {"type": "boolean"}}});
@@ -133,9 +150,9 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                     "raise": {"type": "boolean", "description": "Bring a covered window to the front to paint it (default true; false never steals focus)"}}),
                 &[],
             ),
-            true,
+            Access::Read,
         ),
-        ("ui_inspect", "ui.inspect", "Inspect UI", "UI state and every element: id, label, rect [x,y,w,h].", obj(json!({}), &[]), true),
+        ("ui_inspect", "ui.inspect", "Inspect UI", "UI state and every element: id, label, rect [x,y,w,h].", obj(json!({}), &[]), Access::Read),
         (
             "ui_snapshot",
             "ui.snapshot",
@@ -146,7 +163,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                     "compact": {"type": "boolean"}, "elements": {"type": "boolean", "description": "Also return the element list as JSON"}}),
                 &[],
             ),
-            true,
+            Access::Read,
         ),
         (
             "ui_click",
@@ -158,17 +175,17 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                     "button": {"type": "string", "enum": ["primary", "secondary", "middle"]}, "count": {"type": "integer", "minimum": 1, "maximum": 3}, "modifiers": mods}),
                 &[],
             ),
-            false,
+            Access::Any,
         ),
-        ("ui_hover", "ui.hover", "Hover", "Move the pointer over an element.", obj(json!({"target": target}), &["target"]), false),
-        ("ui_focus", "ui.focus", "Focus", "Give an element keyboard focus.", obj(json!({"target": target}), &["target"]), false),
+        ("ui_hover", "ui.hover", "Hover", "Move the pointer over an element.", obj(json!({"target": target}), &["target"]), Access::Any),
+        ("ui_focus", "ui.focus", "Focus", "Give an element keyboard focus.", obj(json!({"target": target}), &["target"]), Access::Any),
         (
             "ui_fill",
             "ui.fill",
             "Fill",
             "Replace a text field's contents (focus, select all, type); `submit` presses Enter after.",
             obj(json!({"target": target, "text": {"type": "string"}, "submit": {"type": "boolean"}}), &["target", "text"]),
-            false,
+            Access::Any,
         ),
         (
             "ui_press",
@@ -176,7 +193,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "Press keys",
             "Press a chord, e.g. \"Mod+S\" (Mod = Cmd on macOS, Ctrl elsewhere), or a sequence \"Tab Tab Enter\".",
             obj(json!({"keys": {"type": "string"}}), &["keys"]),
-            false,
+            Access::Any,
         ),
         (
             "ui_drag",
@@ -184,7 +201,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "Drag",
             "Press, move and release: from one element or point to another.",
             obj(json!({"from": point, "to": point, "steps": {"type": "integer"}, "modifiers": mods}), &["from", "to"]),
-            false,
+            Access::Any,
         ),
         (
             "ui_scroll",
@@ -195,7 +212,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                 json!({"target": target, "x": {"type": "number"}, "y": {"type": "number"}, "dx": {"type": "number"}, "dy": {"type": "number"}}),
                 &["dx", "dy"],
             ),
-            false,
+            Access::Any,
         ),
         (
             "ui_scroll_into_view",
@@ -203,7 +220,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "Scroll into view",
             "Scroll until an element is visible.",
             obj(json!({"target": target}), &["target"]),
-            false,
+            Access::Any,
         ),
         (
             "ui_get",
@@ -214,7 +231,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                 json!({"target": target, "what": {"type": "string", "enum": ["text", "value", "name", "role", "rect", "enabled", "visible", "focused", "checked", "selected", "element"]}}),
                 &["target", "what"],
             ),
-            true,
+            Access::Read,
         ),
         (
             "ui_wait",
@@ -226,7 +243,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
                     "timeout_ms": {"type": "integer", "minimum": 0}}),
                 &["for"],
             ),
-            true,
+            Access::Read,
         ),
         (
             "ui_highlight",
@@ -234,7 +251,7 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "Highlight",
             "Flash an outline around an element in the live app (to show a human what you mean).",
             obj(json!({"target": target, "ms": {"type": "integer"}}), &["target"]),
-            true,
+            Access::Read,
         ),
         (
             "ui_key",
@@ -242,19 +259,19 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
             "Press key",
             "Press a key, e.g. {key: \"S\", modifiers: {command: true}}.",
             obj(json!({"key": {"type": "string"}, "modifiers": mods}), &["key"]),
-            false,
+            Access::Any,
         ),
-        ("ui_type", "ui.type", "Type text", "Type text into the focused field.", obj(json!({"text": {"type": "string"}}), &["text"]), false),
-        ("ui_menu_list", "ui.menu.list", "List menus", "The menu tree with enablement.", obj(json!({}), &[]), true),
+        ("ui_type", "ui.type", "Type text", "Type text into the focused field.", obj(json!({"text": {"type": "string"}}), &["text"]), Access::Any),
+        ("ui_menu_list", "ui.menu.list", "List menus", "The menu tree with enablement.", obj(json!({}), &[]), Access::Read),
         (
             "ui_menu_invoke",
             "ui.menu.invoke",
             "Invoke menu item",
             "Invoke a menu item by command id.",
             obj(json!({"id": {"type": "string"}}), &["id"]),
-            false,
+            Access::Any,
         ),
-        ("ui_set", "ui.set", "Set view state", "Change view state (theme, workspace…; app-defined keys).", json!({"type": "object"}), false),
+        ("ui_set", "ui.set", "Set view state", "Change view state (theme, workspace…; app-defined keys).", json!({"type": "object"}), Access::Any),
     ]
 }
 
@@ -315,6 +332,16 @@ pub fn ui_tools(methods: &[String]) -> Vec<Value> {
     ui_table().into_iter().filter(|t| methods.iter().any(|m| m == t.1)).map(|(n, _, title, d, s, ro)| tool(n, title, d, s, ro)).collect()
 }
 
+/// Every control method the UI tools use (to know their names whatever the backend answers).
+pub fn all_ui_methods() -> Vec<String> {
+    ui_table().into_iter().map(|t| t.1.to_string()).collect()
+}
+
+/// The definition of an app's own tool.
+pub fn custom_tool(name: &str, title: &str, description: &str, schema: Value, access: Access) -> Value {
+    tool(name, title, description, schema, access)
+}
+
 /// The control method behind a UI tool name.
 pub fn ui_method(tool: &str) -> Option<&'static str> {
     ui_table().into_iter().find(|t| t.0 == tool).map(|t| t.1)
@@ -353,7 +380,7 @@ pub fn command_tools(commands: &[CommandInfo], taken: &[String]) -> (Vec<Value>,
         {
             description.push_str(&format!(" (currently unavailable: {r})"));
         }
-        tools.push(tool(&name, &c.label, &description, input_schema(c), !c.mutates));
+        tools.push(tool(&name, &c.label, &description, input_schema(c), if c.mutates { Access::Undoable } else { Access::Read }));
         names.push((name, c.id.clone()));
     }
     (tools, names)

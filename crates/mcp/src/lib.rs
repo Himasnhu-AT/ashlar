@@ -15,7 +15,7 @@
 //! # fn session() -> Box<dyn ashlar_command::Dispatch> { unimplemented!() }
 //! let opts = ServerOptions::new("notes", "0.1.0").instructions("A note-taking app.");
 //! let mut server = McpServer::new(Backend::Headless(session()), opts);
-//! server.serve(std::io::stdin().lock(), std::io::stdout().lock())?;
+//! server.serve(std::io::BufReader::new(std::io::stdin()), std::io::stdout())?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -26,4 +26,4 @@ pub mod tools;
 
 pub use backend::{Backend, Subprocess};
 pub use server::{MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
-pub use tools::{ToolMode, ToolResult};
+pub use tools::{Access, ToolMode, ToolResult};

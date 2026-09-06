@@ -1,14 +1,21 @@
-//! JSON-RPC 2.0 framing and the MCP lifecycle and tool methods. Hand-rolled, synchronous, one
+//! JSON-RPC 2.0 framing and the MCP lifecycle, tool and resource methods. Hand-rolled, one
 //! message per line on stdin/stdout. Nothing but protocol is ever written to the output.
+//!
+//! Requests are handled one at a time, in order. While one runs, a reader thread still answers
+//! `ping` and takes `notifications/cancelled`: a cancelled request gets no response, and a
+//! stepwise `batch` stops before its next step.
 
+use std::collections::HashSet;
 use std::io::{BufRead, Write};
+use std::sync::mpsc::{Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ashlar_command::CommandInfo;
 use ashlar_control::{AppInfo, Reply, matches_query};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
-use crate::tools::{self, ToolMode, ToolResult};
+use crate::tools::{self, Access, ToolMode, ToolResult};
 
 /// The newest MCP revision implemented; older ones are accepted when a client asks for them.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -21,6 +28,10 @@ const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
+const RESOURCE_NOT_FOUND: i64 = -32002;
+
+/// Most cancellations remembered for requests that have not arrived or finished yet.
+const MAX_CANCELLED: usize = 1024;
 
 /// How the server presents itself.
 #[derive(Debug, Clone)]
@@ -58,6 +69,14 @@ impl ServerOptions {
 const DEFAULT_INSTRUCTIONS: &str = "Every action in this app is a command. Find ids with list_commands, read parameters with \
 describe_command, run one with execute or several with batch.";
 
+/// A tool of the app's own, beyond the command vocabulary ([`McpServer::tool`]).
+type RunTool = Box<dyn FnMut(&Value, &mut Backend) -> ToolResult>;
+
+struct CustomTool {
+    def: Value,
+    run: RunTool,
+}
+
 /// An MCP server bound to one backend.
 pub struct McpServer {
     backend: Backend,
@@ -66,6 +85,13 @@ pub struct McpServer {
     initialized: bool,
     /// `(tool name, command id)` of the per-command tools last listed.
     command_tools: Vec<(String, String)>,
+    custom: Vec<CustomTool>,
+    /// Ids (as JSON text) of requests the client cancelled.
+    cancelled: Arc<Mutex<HashSet<String>>>,
+    /// The request being handled (its id as JSON text).
+    current: Option<String>,
+    /// Lines to write while a request runs (progress notifications), when serving.
+    notify: Option<Sender<String>>,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -81,7 +107,50 @@ type RpcResult = Result<Value, (i64, String)>;
 impl McpServer {
     pub fn new(backend: Backend, opts: ServerOptions) -> Self {
         let app = AppInfo::new(&opts.name, &opts.version);
-        Self { backend, opts, app, initialized: false, command_tools: Vec::new() }
+        Self {
+            backend,
+            opts,
+            app,
+            initialized: false,
+            command_tools: Vec::new(),
+            custom: Vec::new(),
+            cancelled: Arc::default(),
+            current: None,
+            notify: None,
+        }
+    }
+
+    /// Add a tool of the app's own: `run` gets the call's arguments and the backend (to call app
+    /// methods). A name the fixed or UI vocabulary already uses is refused (logged) and the tool
+    /// is not added.
+    pub fn tool(
+        mut self,
+        name: &str,
+        title: &str,
+        description: &str,
+        input_schema: Value,
+        access: Access,
+        run: impl FnMut(&Value, &mut Backend) -> ToolResult + 'static,
+    ) -> Self {
+        let fixed = tools::core_tools().into_iter().chain(tools::ui_tools(&tools::all_ui_methods()));
+        let taken = fixed.chain(self.custom.iter().map(|t| t.def.clone())).any(|t| t.get("name").and_then(Value::as_str) == Some(name));
+        if taken || name.is_empty() {
+            log::warn!("tool `{name}` not added: the name is empty or taken");
+            return self;
+        }
+        let def = tools::custom_tool(name, title, description, input_schema, access);
+        self.custom.push(CustomTool { def, run: Box::new(run) });
+        self
+    }
+
+    /// Whether the client cancelled the request being handled.
+    fn is_cancelled(&self) -> bool {
+        self.current.as_ref().is_some_and(|k| self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(k))
+    }
+
+    /// Forget a cancellation; whether there was one.
+    fn take_cancelled(&self, key: &str) -> bool {
+        self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).remove(key)
     }
 
     pub fn backend(&mut self) -> &mut Backend {
@@ -93,31 +162,39 @@ impl McpServer {
         self.initialized
     }
 
-    /// Serve newline-delimited JSON-RPC until `input` ends. Only replies are written to `output`.
-    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        let mut buf = Vec::new();
-        loop {
-            buf.clear();
-            let limit = u64::try_from(MAX_MESSAGE).unwrap_or(u64::MAX).saturating_add(1);
-            let n = std::io::Read::take(&mut input, limit).read_until(b'\n', &mut buf)?;
-            if n == 0 {
-                return Ok(());
-            }
-            let reply = if buf.len() > MAX_MESSAGE && buf.last() != Some(&b'\n') {
-                skip_line(&mut input)?;
-                Some(error(Value::Null, PARSE_ERROR, format!("message longer than {MAX_MESSAGE} bytes")).to_string())
-            } else {
-                match std::str::from_utf8(&buf) {
-                    Ok(line) => self.handle_line(line),
-                    Err(_) => Some(error(Value::Null, PARSE_ERROR, "parse error: not UTF-8").to_string()),
+    /// Serve newline-delimited JSON-RPC until `input` ends. Only protocol is written to `output`.
+    /// Reading and writing run on their own threads, so `ping` and cancellations are taken while
+    /// a request runs.
+    pub fn serve(&mut self, input: impl BufRead + Send, output: impl Write + Send) -> std::io::Result<()> {
+        let (out_tx, out_rx) = channel::<String>();
+        let (in_tx, in_rx) = channel::<std::io::Result<String>>();
+        let cancelled = Arc::clone(&self.cancelled);
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(move || write_lines(output, out_rx));
+            let direct = out_tx.clone();
+            scope.spawn(move || read_lines(input, &in_tx, &direct, &cancelled));
+            self.notify = Some(out_tx.clone());
+            let mut result = Ok(());
+            for line in in_rx {
+                match line {
+                    Ok(line) => {
+                        if let Some(r) = self.handle_line(&line)
+                            && out_tx.send(r).is_err()
+                        {
+                            break; // the writer stopped: its error is reported below
+                        }
+                    }
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
                 }
-            };
-            if let Some(r) = reply {
-                output.write_all(r.as_bytes())?;
-                output.write_all(b"\n")?;
-                output.flush()?;
             }
-        }
+            self.notify = None;
+            drop(out_tx);
+            let written = writer.join().unwrap_or_else(|_| Err(std::io::Error::other("the output thread panicked")));
+            result.and(written)
+        })
     }
 
     /// Handle one line; the reply line, or `None` for notifications, responses and blank lines.
@@ -168,7 +245,18 @@ impl McpServer {
         if !valid_id {
             return Some(error(Value::Null, INVALID_REQUEST, "`id` must be a string or an integer"));
         }
-        Some(match self.request(method, &params) {
+        // a cancelled request gets no response, whether it was cancelled before or while it ran
+        let key = id.to_string();
+        if self.take_cancelled(&key) {
+            return None;
+        }
+        self.current = Some(key.clone());
+        let r = self.request(method, &params);
+        self.current = None;
+        if self.take_cancelled(&key) {
+            return None;
+        }
+        Some(match r {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
         })
@@ -187,6 +275,9 @@ impl McpServer {
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": self.list_tools()})),
             "tools/call" => self.call_tool(params),
+            "resources/list" => Ok(json!({"resources": self.list_resources()})),
+            "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
+            "resources/read" => self.read_resource(params),
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
     }
@@ -201,7 +292,7 @@ impl McpServer {
         let base = if self.opts.instructions.is_empty() { DEFAULT_INSTRUCTIONS } else { self.opts.instructions.as_str() };
         json!({
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": false}},
+            "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}},
             "serverInfo": info,
             "instructions": format!("{base} Backend: {}.", self.backend.describe()),
         })
@@ -239,6 +330,7 @@ impl McpServer {
             list.extend(more);
             self.command_tools = names;
         }
+        list.extend(self.custom.iter().map(|t| t.def.clone()));
         list
     }
 
@@ -273,7 +365,10 @@ impl McpServer {
                 }
                 None => ToolResult::error("execute needs a string `command`"),
             },
-            "batch" => ToolResult::from_reply(self.call("engine.batch", args)),
+            "batch" => match params.get("_meta").and_then(|m| m.get("progressToken")).filter(|t| t.is_string() || t.is_i64() || t.is_u64()) {
+                Some(token) => self.batch_in_steps(&args, token),
+                None => ToolResult::from_reply(self.call("engine.batch", args)),
+            },
             "screenshot" => match tools::normalize_targets(args) {
                 Ok(a) => tools::screenshot_result(self.call("ui.screenshot", a)),
                 Err(e) => ToolResult::error(e),
@@ -292,6 +387,8 @@ impl McpServer {
                         Ok(a) => ToolResult::from_reply(self.call(method, a)),
                         Err(e) => ToolResult::error(e),
                     }
+                } else if let Some(t) = self.custom.iter_mut().find(|t| t.def.get("name").and_then(Value::as_str) == Some(other)) {
+                    (t.run)(&args, &mut self.backend)
                 } else if let Some(id) = self.command_for_tool(other) {
                     ToolResult::from_reply(self.call("engine.execute", json!({"command": id, "params": args})))
                 } else {
@@ -300,6 +397,110 @@ impl McpServer {
             }
         };
         Ok(r.to_value())
+    }
+
+    /// `batch` one step at a time, for a client that asked for progress: a
+    /// `notifications/progress` before each step and at the end, and a cancellation stops it
+    /// before the next step. Same steps, results and errors as `engine.batch`.
+    fn batch_in_steps(&mut self, args: &Value, token: &Value) -> ToolResult {
+        let Some(steps) = args.get("commands").and_then(Value::as_array) else {
+            return ToolResult::from_reply(self.call("engine.batch", args.clone()));
+        };
+        let keep_going = args.get("keepGoing").and_then(Value::as_bool).unwrap_or(false);
+        let total = steps.len();
+        let mut out = Vec::with_capacity(total);
+        let (mut first, mut failed) = (None::<String>, 0usize);
+        for (i, step) in steps.iter().enumerate() {
+            if self.is_cancelled() {
+                return ToolResult::error("cancelled");
+            }
+            let id = step.get("command").and_then(Value::as_str).unwrap_or("?");
+            self.progress(token, i, total, &format!("step {} of {total}: {id}", i.saturating_add(1)));
+            let entry = match self.call("engine.batch", json!({"commands": [step]})) {
+                Reply::Ok(Value::Array(mut v)) if v.len() == 1 => v.remove(0),
+                Reply::Ok(other) => json!({"command": id, "ok": false, "error": format!("unexpected batch reply: {other}")}),
+                Reply::Err { error, detail } => {
+                    let e = detail
+                        .and_then(|d| d.get("steps").and_then(|s| s.get(0)).cloned())
+                        .unwrap_or_else(|| json!({"command": id, "ok": false, "error": error}));
+                    let msg = e.get("error").and_then(Value::as_str).unwrap_or("failed").to_string();
+                    first.get_or_insert(format!("step {} (`{id}`) failed: {msg}", i.saturating_add(1)));
+                    failed = failed.saturating_add(1);
+                    e
+                }
+            };
+            let ok = entry.get("ok").and_then(Value::as_bool).unwrap_or(false);
+            out.push(entry);
+            if !ok && !keep_going {
+                break;
+            }
+        }
+        self.progress(token, total, total, "done");
+        ToolResult::from_reply(match first {
+            None => Reply::ok(Value::Array(out)),
+            Some(f) if keep_going => Reply::err_with(format!("{failed} of {total} steps failed; first: {f}"), json!({"steps": out})),
+            Some(f) => Reply::err_with(f, json!({"steps": out})),
+        })
+    }
+
+    fn progress(&self, token: &Value, done: usize, total: usize, message: &str) {
+        if let Some(tx) = &self.notify {
+            let n = json!({"jsonrpc": "2.0", "method": "notifications/progress",
+                "params": {"progressToken": token, "progress": done, "total": total, "message": message}});
+            let _ = tx.send(n.to_string());
+        }
+    }
+
+    /// What the app offers to read: its identity, its command table, and its UI (when the
+    /// backend draws one).
+    fn list_resources(&mut self) -> Vec<Value> {
+        let res = |uri: &str, name: &str, title: &str, description: &str, mime: &str, priority: f64| {
+            json!({"uri": uri, "name": name, "title": title, "description": description, "mimeType": mime,
+                "annotations": {"audience": ["assistant"], "priority": priority}})
+        };
+        let mut list = vec![
+            res(RES_APP, "app", "App", "Name, version and the control methods the app answers.", "application/json", 0.5),
+            res(
+                RES_COMMANDS,
+                "commands",
+                "Commands",
+                "Every command: id, label, enabled now, whether it changes the document.",
+                "application/json",
+                0.8,
+            ),
+        ];
+        if self.methods().iter().any(|m| m == "ui.snapshot") {
+            list.push(res(
+                RES_UI,
+                "ui",
+                "UI snapshot",
+                "The window as an accessibility tree with element refs (changes as the app is used).",
+                "text/plain",
+                0.6,
+            ));
+        }
+        list
+    }
+
+    fn read_resource(&mut self, params: &Value) -> RpcResult {
+        let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "resources/read needs a string `uri`".to_string()))?;
+        let failed = |e: String| (INVALID_PARAMS, format!("reading {uri}: {e}"));
+        let (mime, text) = match uri {
+            RES_APP => match self.call("app.version", json!({})) {
+                Reply::Ok(v) => ("application/json", v.to_string()),
+                Reply::Err { error, .. } => return Err(failed(error)),
+            },
+            RES_COMMANDS => match self.commands() {
+                Ok(list) => ("application/json", Value::Array(list.iter().map(tools::compact).collect()).to_string()),
+                Err(e) => return Err(failed(e)),
+            },
+            RES_UI => match self.call("ui.snapshot", json!({})) {
+                Reply::Ok(v) => ("text/plain", v.get("tree").and_then(Value::as_str).map_or_else(|| v.to_string(), str::to_string)),
+                Reply::Err { error, .. } => return Err(failed(error)),
+            },
+            _ => return Err((RESOURCE_NOT_FOUND, format!("no resource {uri}; see resources/list"))),
+        };
+        Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]}))
     }
 
     /// The command behind a per-command tool (listing the tools again once when unknown).
@@ -313,6 +514,90 @@ impl McpServer {
             find(&self.command_tools)
         })
     }
+}
+
+const RES_APP: &str = "app://info";
+const RES_COMMANDS: &str = "app://commands";
+const RES_UI: &str = "app://ui/snapshot";
+
+/// Read lines until `input` ends. `ping` is answered here (also while a request runs) and a
+/// `notifications/cancelled` recorded; everything else goes to the server, in order.
+fn read_lines(mut input: impl BufRead, to_server: &Sender<std::io::Result<String>>, direct: &Sender<String>, cancelled: &Mutex<HashSet<String>>) {
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let limit = u64::try_from(MAX_MESSAGE).unwrap_or(u64::MAX).saturating_add(1);
+        let n = match std::io::Read::take(&mut input, limit).read_until(b'\n', &mut buf) {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = to_server.send(Err(e));
+                return;
+            }
+        };
+        if n == 0 {
+            return;
+        }
+        if buf.len() > MAX_MESSAGE && buf.last() != Some(&b'\n') {
+            if let Err(e) = skip_line(&mut input) {
+                let _ = to_server.send(Err(e));
+                return;
+            }
+            let _ = direct.send(error(Value::Null, PARSE_ERROR, format!("message longer than {MAX_MESSAGE} bytes")).to_string());
+            continue;
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            let _ = direct.send(error(Value::Null, PARSE_ERROR, "parse error: not UTF-8").to_string());
+            continue;
+        };
+        if take_out_of_band(line, direct, cancelled) {
+            continue;
+        }
+        if to_server.send(Ok(line.to_string())).is_err() {
+            return;
+        }
+    }
+}
+
+/// Answer a `ping` or record a cancellation right away; whether the line was one of them.
+fn take_out_of_band(line: &str, direct: &Sender<String>, cancelled: &Mutex<HashSet<String>>) -> bool {
+    // cheap test first: most lines are neither
+    if !line.contains("ping") && !line.contains("notifications/cancelled") {
+        return false;
+    }
+    let Ok(Value::Object(o)) = serde_json::from_str::<Value>(line) else { return false };
+    if o.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return false;
+    }
+    match o.get("method").and_then(Value::as_str) {
+        Some("ping") => match o.get("id") {
+            Some(id) if id.is_string() || id.is_i64() || id.is_u64() => {
+                let _ = direct.send(response(id.clone(), json!({})).to_string());
+                true
+            }
+            _ => false,
+        },
+        Some("notifications/cancelled") if !o.contains_key("id") => {
+            if let Some(id) = o.get("params").and_then(|p| p.get("requestId")) {
+                let mut set = cancelled.lock().unwrap_or_else(PoisonError::into_inner);
+                if set.len() >= MAX_CANCELLED {
+                    set.clear();
+                }
+                set.insert(id.to_string());
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Write each line as it comes, until every sender is gone.
+fn write_lines(mut output: impl Write, lines: std::sync::mpsc::Receiver<String>) -> std::io::Result<()> {
+    for line in lines {
+        output.write_all(line.as_bytes())?;
+        output.write_all(b"\n")?;
+        output.flush()?;
+    }
+    Ok(())
 }
 
 /// Drop input up to and including the next newline.

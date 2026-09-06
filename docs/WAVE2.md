@@ -16,6 +16,4 @@ Carry-overs from wave 1 reports, to resolve in ashlar-app / follow-ups:
   (one undo step per mutating top-level command) and to tracer.
 
 ## Open after wave 2
-- ashlar-mcp gaps before a large app can drop rmcp: `notifications/progress`, `notifications/cancelled`,
-  answering `ping` while a call runs (server is synchronous), resources (+ cache hints), destructive/idempotent
-  tool annotations (only read-only today), app-defined custom tools beyond the command vocabulary.
+- (none)
