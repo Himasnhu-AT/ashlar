@@ -293,7 +293,7 @@ impl KeymapEditor {
         }
         if self.recording.is_some() {
             // keep listening without input arriving
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            crate::wake::wake_after(ui.ctx(), crate::wake::Reason::TIMER, std::time::Duration::from_millis(250));
         }
         change
     }

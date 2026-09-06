@@ -290,7 +290,7 @@ fn open_editor(ui: &Ui, editing_id: egui::Id, format: &dyn ValueFormat, value: f
     let mut text = String::new();
     format.format(value, &mut text);
     ui.data_mut(|d| d.insert_temp(editing_id, text));
-    ui.ctx().request_repaint();
+    crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
     Edit::begin(value)
 }
 

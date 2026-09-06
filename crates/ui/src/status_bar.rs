@@ -117,7 +117,7 @@ pub fn progress(ui: &mut Ui, id: &str, label: &str, fraction: Option<f32>) -> eg
             if s.width() > 0.0 {
                 ui.painter().rect_filled(s, 3.0, t.accent);
             }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+            crate::wake::wake_after(ui.ctx(), crate::wake::Reason::ANIMATION, std::time::Duration::from_millis(33));
             ""
         }
     };

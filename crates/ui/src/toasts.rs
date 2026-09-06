@@ -212,9 +212,9 @@ impl Toasts {
         }
         self.entries.retain(|e| Some(e.id) != dismiss && e.remaining.is_none_or(|r| r > 0.0));
         if dismiss.is_some() {
-            ctx.request_repaint();
+            crate::wake::wake(ctx, crate::wake::Reason::INPUT);
         } else if let Some(secs) = next_expiry {
-            ctx.request_repaint_after(Duration::from_secs_f64(secs.max(0.016)));
+            crate::wake::wake_after(ctx, crate::wake::Reason::TIMER, Duration::from_secs_f64(secs.max(0.016)));
         }
     }
 }

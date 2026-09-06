@@ -145,7 +145,7 @@ impl State {
             }
         }
         if self.discovering() || self.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            crate::wake::wake_after(ctx, crate::wake::Reason::JOB, std::time::Duration::from_millis(100));
         }
     }
 
