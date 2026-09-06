@@ -41,6 +41,7 @@ Items marked `CONTRACT` in `ashlar-command` are shared across crates built in pa
 them only additively.
 
 ## 6. Working in parallel
-One git worktree per agent under `../ashlar-wt/<name>`, branch `wt/<name>`, own `CARGO_TARGET_DIR`
-(`target/agent-<name>` inside the worktree). Never commit on `main`; the integrator merges.
+One git worktree per agent under `.claude/worktrees/<name>` (inside the checkout, kept out of git),
+branch `wt/<name>`, own `CARGO_TARGET_DIR` (`target/agent-<name>` inside the worktree); remove the
+worktree and its branch once merged. Never commit on `main`; the integrator merges.
 Build and test only your crates (`cargo test -p <crate>`); the full gate runs at integration.

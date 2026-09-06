@@ -1,4 +1,6 @@
 target/
+# agent worktrees (docs/contributing.md)
+/.claude/worktrees/
 *.orig
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).

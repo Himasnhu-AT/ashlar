@@ -48,5 +48,5 @@ target; cargo-deny is optional locally and installed on CI.
 
 ## Parallel work
 
-One git worktree per contributor under `../ashlar-wt/<name>`, branch `wt/<name>`, with its own
-`CARGO_TARGET_DIR=$PWD/target/agent-<name>`. Never commit on `main`; the integrator merges.
+One git worktree per contributor under `.claude/worktrees/<name>` (ignored by git), branch
+`wt/<name>`, with its own `CARGO_TARGET_DIR=$PWD/target/agent-<name>`; remove both once merged. Never commit on `main`; the integrator merges.
