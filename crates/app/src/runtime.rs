@@ -39,6 +39,12 @@ use crate::telemetry::Telemetry;
 /// Top-level menus in this order; menus the app adds follow in first-seen order.
 pub const MENU_ORDER: &[&str] = &["File", "Edit", "View"];
 
+/// Why a request that needs frames fails on a minimized or covered window.
+const COVERED: &str = "the window is minimized or covered, so it draws no frames: bring it to the front for ui input, snapshots and screenshots (engine.execute works regardless)";
+
+/// How long a screenshot that raised a covered window waits for its frames.
+const RAISE_WAIT: Duration = Duration::from_secs(2);
+
 /// What `run()` found out before the window opened.
 #[derive(Default)]
 pub struct Launch {
@@ -176,6 +182,8 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
+    /// Screenshots of a covered window that raised it, waiting for its frames (since when).
+    raising: Vec<(Request, std::time::Instant)>,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -243,6 +251,7 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
+            raising: Vec::new(),
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -969,7 +978,8 @@ impl<D: Document> Runtime<D> {
         if let Some((_, rx)) = &self.control {
             reqs.extend(rx.try_iter().take(256));
         }
-        if reqs.is_empty() {
+        let raised = self.raised_screenshots(ctx);
+        if reqs.is_empty() && raised.is_empty() {
             return;
         }
         let info = self.info();
@@ -979,10 +989,33 @@ impl<D: Document> Runtime<D> {
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
             self.apply_effects(ctx);
         }
-        for req in std::mem::take(&mut queue.pending) {
+        for req in raised.into_iter().chain(std::mem::take(&mut queue.pending)) {
             self.answer_ui(ctx, req);
         }
         wake::wake(ctx, Reason::CONTROL);
+    }
+
+    /// The raised-window screenshots whose window now draws frames; the ones still covered after
+    /// [`RAISE_WAIT`] fail.
+    fn raised_screenshots(&mut self, ctx: &egui::Context) -> Vec<Request> {
+        if self.raising.is_empty() {
+            return Vec::new();
+        }
+        let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
+        let mut ready = Vec::new();
+        for (req, since) in std::mem::take(&mut self.raising) {
+            if visible {
+                ready.push(req);
+            } else if since.elapsed() >= RAISE_WAIT {
+                req.fail(COVERED);
+            } else {
+                self.raising.push((req, since));
+            }
+        }
+        if !self.raising.is_empty() {
+            wake::wake_after(ctx, Reason::CONTROL, Duration::from_millis(50));
+        }
+        ready
     }
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
@@ -991,8 +1024,19 @@ impl<D: Document> Runtime<D> {
         if devtools::handles(req.method()) {
             let needs_frames = !matches!(req.method(), "devtools.toggle" | "devtools.state");
             if needs_frames && !visible {
-                // eframe draws no frames for a minimized or fully covered window
-                return req.fail("the window is minimized or covered, so it draws no frames: bring it to the front for ui input, snapshots and screenshots (engine.execute works regardless)");
+                // eframe draws no frames for a minimized or fully covered window. A screenshot
+                // raises it once (unless `raise: false`) and waits for its frames; eframe applies
+                // viewport commands from `logic` while the window is hidden.
+                let raise = req.method() == "ui.screenshot" && p.get("raise").and_then(Value::as_bool).unwrap_or(true);
+                if raise && let Some(since) = now() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    self.raising.push((req, since));
+                    wake::wake_after(ctx, Reason::CONTROL, Duration::from_millis(50));
+                    return;
+                }
+                return req.fail(COVERED);
             }
             if let devtools::Outcome::NotMine(req) = devtools::handle(ctx, req) {
                 req.unknown();

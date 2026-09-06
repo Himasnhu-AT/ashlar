@@ -196,6 +196,24 @@ fn screenshots_crop_annotate_and_highlight() {
 }
 
 #[test]
+fn a_screenshot_raises_a_minimized_window_once_and_other_ui_requests_refuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = with_two_notes(dir.path());
+    d.set_hidden(true);
+    let (e, _) = error(d.request("ui.snapshot", json!({})));
+    assert!(e.contains("minimized or covered"), "{e}");
+    assert_eq!(count(&mut d), 2, "engine.execute works while hidden");
+    let (e, _) = error(d.request("ui.screenshot", json!({"raise": false})));
+    assert!(e.contains("minimized or covered"), "{e}");
+    assert!(d.is_hidden(), "raise: false leaves the window where it is");
+
+    let shot = d.call("ui.screenshot", json!({})).unwrap();
+    assert_eq!(shot["width"].as_u64(), Some(1280));
+    assert!(!d.is_hidden(), "the screenshot raised the window");
+    assert!(d.call("ui.snapshot", json!({})).is_ok());
+}
+
+#[test]
 fn the_inspector_opens_and_an_idle_app_draws_nothing_either_way() {
     let dir = tempfile::tempdir().unwrap();
     let mut d = with_two_notes(dir.path());

@@ -39,6 +39,8 @@ pub struct Driver<D: Document> {
     close_requested: bool,
     /// Deliver `ViewportCommand::Screenshot` captures (off: a window that presents no frame).
     screenshots: bool,
+    /// The window is minimized: frames run only [`Runtime::logic`], as eframe does.
+    hidden: bool,
 }
 
 impl<D: Document> Driver<D> {
@@ -64,6 +66,7 @@ impl<D: Document> Driver<D> {
             closed: false,
             close_requested: false,
             screenshots: true,
+            hidden: false,
         }
     }
 
@@ -107,6 +110,20 @@ impl<D: Document> Driver<D> {
         self.screenshots = deliver;
     }
 
+    /// Minimize the window (or show it again). Hidden, a frame runs only [`Runtime::logic`], with
+    /// no egui pass, the way eframe treats a minimized or covered window; input waits for the
+    /// next shown frame. A raise from the app (`Focus`, `Minimized(false)`, `Visible(true)`)
+    /// shows it again.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        self.hidden = hidden;
+        self.next = Some(self.time);
+    }
+
+    /// Whether the window is hidden ([`Driver::set_hidden`]).
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
     /// Ask to close the window, as the window's close button does.
     pub fn request_close(&mut self) {
         self.close_requested = true;
@@ -114,6 +131,10 @@ impl<D: Document> Driver<D> {
 
     /// Run one frame now, whether or not one was asked for.
     pub fn frame(&mut self) -> egui::FullOutput {
+        if self.hidden {
+            self.logic_only();
+            return egui::FullOutput::default();
+        }
         let mut raw = egui::RawInput { screen_rect: Some(self.screen), time: Some(self.time), focused: true, ..Default::default() };
         raw.events.extend(self.input.drain(..));
         if std::mem::take(&mut self.close_requested) {
@@ -152,11 +173,34 @@ impl<D: Document> Driver<D> {
         out
     }
 
+    /// A frame of a hidden window: `logic` only, and the viewport commands it gave.
+    fn logic_only(&mut self) {
+        let mut raw = egui::RawInput { screen_rect: Some(self.screen), time: Some(self.time), focused: false, ..Default::default() };
+        raw.viewports.entry(ViewportId::ROOT).or_default().minimized = Some(true);
+        let rt = &mut self.runtime;
+        let out = self.ctx.run_logic(&raw, |ctx| rt.logic(ctx));
+        self.frames = self.frames.saturating_add(1);
+        self.next = None;
+        for c in out.viewport_commands.get(&ViewportId::ROOT).into_iter().flatten() {
+            match c {
+                ViewportCommand::Focus | ViewportCommand::Minimized(false) | ViewportCommand::Visible(true) => {
+                    self.hidden = false;
+                    self.next = Some(self.time);
+                }
+                ViewportCommand::Close => self.closed = true,
+                _ => {}
+            }
+        }
+        let done = self.ctx.cumulative_pass_nr();
+        self.wakes.lock().unwrap_or_else(PoisonError::into_inner).pending.retain(|(_, nr)| *nr >= done);
+    }
+
     /// When the next frame is due, if one is.
     fn due(&self) -> Option<f64> {
         let wake =
             self.wakes.lock().unwrap_or_else(PoisonError::into_inner).pending.iter().map(|(d, _)| self.time + d.as_secs_f64()).reduce(f64::min);
-        let input = (!self.input.is_empty() || self.close_requested).then_some(self.time);
+        // a hidden window keeps its input for the next shown frame
+        let input = ((!self.input.is_empty() && !self.hidden) || self.close_requested).then_some(self.time);
         [self.next, wake, input].into_iter().flatten().reduce(f64::min)
     }
 
