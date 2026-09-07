@@ -62,6 +62,17 @@ impl Args {
         }
     }
 
+    /// Whatever was not taken, in the original order (a bare `--` before the items that followed
+    /// it), for a verb that parses its arguments itself.
+    pub fn into_raw(self) -> Vec<String> {
+        let mut v = self.items;
+        if !self.rest.is_empty() {
+            v.push("--".into());
+            v.extend(self.rest);
+        }
+        v
+    }
+
     /// Everything was taken; otherwise the first leftover is an error.
     pub fn finish(self) -> Result<(), String> {
         match self.items.first().or(self.rest.first()) {
@@ -75,6 +86,13 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_raw_arguments_come_back_in_order() {
+        let mut a = Args::new(["x", "--json", "y", "--", "--z"]);
+        assert!(a.flag("--json"));
+        assert_eq!(a.into_raw(), ["x", "y", "--", "--z"]);
+    }
 
     #[test]
     fn flags_values_and_positionals_in_any_order() {
