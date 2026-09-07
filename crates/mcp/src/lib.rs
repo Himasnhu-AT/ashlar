@@ -21,9 +21,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod backend;
+mod calls;
 mod server;
 pub mod tools;
 
 pub use backend::{Backend, Subprocess};
+pub use calls::{PendingCall, ToolCx, ToolOutcome};
 pub use server::{MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
 pub use tools::{Access, ToolMode, ToolResult};

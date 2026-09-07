@@ -17,7 +17,13 @@ cancellations while one runs.
   with refs, then `ui_click`/`ui_fill`/`ui_hover`/`ui_focus`/`ui_press`/`ui_get`/`ui_wait`/
   `ui_scroll_into_view`/`ui_highlight` on `"@e3"`, and `screenshot` with `annotate`/`highlight`)
   take targets as ref strings or objects; see `docs/debugging-uis.md`. `ToolMode::PerCommand` adds one tool per
-  command with its real input schema. `McpServer::tool` adds the app's own tools. Every tool carries
+  command with its real input schema. `McpServer::tool` adds the app's own tools: a handler gets the arguments and a `ToolCx` (call the
+  backend, report progress, see a cancellation) and returns a result now or a `PendingCall` the
+  server polls about every 100 ms while it answers other requests (a long export as a job). A
+  pending call that is cancelled gets `PendingCall::cancel` to clean up and no response.
+  `McpServer::on_execute` lets the app take over `execute` for some commands (e.g. run one as a
+  pending job), `McpServer::resource` adds the app's own resources, and
+  `ServerOptions::strict_arguments(true)` refuses arguments a tool's schema does not list. Every tool carries
   hints: read-only (and idempotent), undoable (a command that changes the document: not
   destructive), or anything (`execute`, `batch`, UI input: destructive).
 - **Backends:** `Headless(Box<dyn Dispatch>)` in-process; `Remote(ashlar_control::Client)` for a

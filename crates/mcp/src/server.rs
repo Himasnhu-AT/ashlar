@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ashlar_command::CommandInfo;
@@ -15,6 +15,7 @@ use ashlar_control::{AppInfo, Reply, matches_query};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
+use crate::calls::{PendingCall, ToolCx, ToolOutcome};
 use crate::tools::{self, Access, ToolMode, ToolResult};
 
 /// The newest MCP revision implemented; older ones are accepted when a client asks for them.
@@ -33,6 +34,9 @@ const RESOURCE_NOT_FOUND: i64 = -32002;
 /// Most cancellations remembered for requests that have not arrived or finished yet.
 const MAX_CANCELLED: usize = 1024;
 
+/// How often pending tool calls are polled.
+const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// How the server presents itself.
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -43,11 +47,19 @@ pub struct ServerOptions {
     /// What the app is and how to drive it; the backend's description is appended.
     pub instructions: String,
     pub tools: ToolMode,
+    /// Refuse a tool call with an argument its input schema does not list (JSON-RPC
+    /// `-32602`), instead of passing it on to be ignored.
+    pub strict_arguments: bool,
 }
 
 impl ServerOptions {
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self { name: name.into(), title: None, version: version.into(), instructions: String::new(), tools: ToolMode::Fixed }
+        Self { name: name.into(), title: None, version: version.into(), instructions: String::new(), tools: ToolMode::Fixed, strict_arguments: false }
+    }
+
+    pub fn strict_arguments(mut self, on: bool) -> Self {
+        self.strict_arguments = on;
+        self
     }
 
     pub fn title(mut self, t: impl Into<String>) -> Self {
@@ -70,11 +82,37 @@ const DEFAULT_INSTRUCTIONS: &str = "Every action in this app is a command. Find 
 describe_command, run one with execute or several with batch.";
 
 /// A tool of the app's own, beyond the command vocabulary ([`McpServer::tool`]).
-type RunTool = Box<dyn FnMut(&Value, &mut Backend) -> ToolResult>;
+type RunTool = Box<dyn FnMut(&Value, &mut ToolCx<'_>) -> ToolOutcome>;
 
 struct CustomTool {
     def: Value,
     run: RunTool,
+}
+
+/// A resource of the app's own ([`McpServer::resource`]).
+type ReadResource = Box<dyn FnMut(&mut ToolCx<'_>) -> Result<String, String>>;
+
+struct CustomResource {
+    def: Value,
+    read: ReadResource,
+}
+
+/// The app's say over `execute` ([`McpServer::on_execute`]).
+type ExecuteHook = Box<dyn FnMut(&str, &Value, &mut ToolCx<'_>) -> Option<ToolOutcome>>;
+
+/// A tool call answered later.
+struct Pending {
+    id: Value,
+    key: String,
+    token: Option<Value>,
+    last: f64,
+    call: Box<dyn PendingCall>,
+}
+
+/// What `tools/call` produced.
+enum CallOutcome {
+    Now(Value),
+    Later(Box<dyn PendingCall>),
 }
 
 /// An MCP server bound to one backend.
@@ -86,6 +124,11 @@ pub struct McpServer {
     /// `(tool name, command id)` of the per-command tools last listed.
     command_tools: Vec<(String, String)>,
     custom: Vec<CustomTool>,
+    resources: Vec<CustomResource>,
+    on_execute: Option<ExecuteHook>,
+    pending: Vec<Pending>,
+    /// The tools last listed (for strict arguments).
+    listed: Vec<Value>,
     /// Ids (as JSON text) of requests the client cancelled.
     cancelled: Arc<Mutex<HashSet<String>>>,
     /// The request being handled (its id as JSON text).
@@ -114,23 +157,28 @@ impl McpServer {
             initialized: false,
             command_tools: Vec::new(),
             custom: Vec::new(),
+            resources: Vec::new(),
+            on_execute: None,
+            pending: Vec::new(),
+            listed: Vec::new(),
             cancelled: Arc::default(),
             current: None,
             notify: None,
         }
     }
 
-    /// Add a tool of the app's own: `run` gets the call's arguments and the backend (to call app
-    /// methods). A name the fixed or UI vocabulary already uses is refused (logged) and the tool
-    /// is not added.
-    pub fn tool(
+    /// Add a tool of the app's own: `run` gets the call's arguments and a [`ToolCx`] (the
+    /// backend, progress, cancellation), and returns a result now or a [`PendingCall`] the server
+    /// polls. A name the fixed or UI vocabulary already uses is refused (logged) and the tool is
+    /// not added.
+    pub fn tool<R: Into<ToolOutcome>>(
         mut self,
         name: &str,
         title: &str,
         description: &str,
         input_schema: Value,
         access: Access,
-        run: impl FnMut(&Value, &mut Backend) -> ToolResult + 'static,
+        mut run: impl FnMut(&Value, &mut ToolCx<'_>) -> R + 'static,
     ) -> Self {
         let fixed = tools::core_tools().into_iter().chain(tools::ui_tools(&tools::all_ui_methods()));
         let taken = fixed.chain(self.custom.iter().map(|t| t.def.clone())).any(|t| t.get("name").and_then(Value::as_str) == Some(name));
@@ -139,7 +187,37 @@ impl McpServer {
             return self;
         }
         let def = tools::custom_tool(name, title, description, input_schema, access);
-        self.custom.push(CustomTool { def, run: Box::new(run) });
+        self.custom.push(CustomTool { def, run: Box::new(move |a, cx| run(a, cx).into()) });
+        self
+    }
+
+    /// Add a resource of the app's own (`resources/list` / `resources/read`); `read` returns its
+    /// text. A URI already offered is refused (logged).
+    pub fn resource(
+        mut self,
+        uri: &str,
+        name: &str,
+        title: &str,
+        description: &str,
+        mime_type: &str,
+        read: impl FnMut(&mut ToolCx<'_>) -> Result<String, String> + 'static,
+    ) -> Self {
+        let taken = [RES_APP, RES_COMMANDS, RES_UI].contains(&uri) || self.resources.iter().any(|r| r.def["uri"] == uri);
+        if taken || uri.is_empty() {
+            log::warn!("resource `{uri}` not added: the URI is empty or taken");
+            return self;
+        }
+        let def = json!({"uri": uri, "name": name, "title": title, "description": description, "mimeType": mime_type,
+            "annotations": {"audience": ["assistant"], "priority": 0.8}});
+        self.resources.push(CustomResource { def, read: Box::new(read) });
+        self
+    }
+
+    /// Let the app take over `execute` (and per-command tools) for some commands, e.g. a long
+    /// export it runs as a job with progress. `hook` gets the command id and its params and
+    /// returns `None` to let the command run as usual.
+    pub fn on_execute(mut self, hook: impl FnMut(&str, &Value, &mut ToolCx<'_>) -> Option<ToolOutcome> + 'static) -> Self {
+        self.on_execute = Some(Box::new(hook));
         self
     }
 
@@ -175,19 +253,28 @@ impl McpServer {
             scope.spawn(move || read_lines(input, &in_tx, &direct, &cancelled));
             self.notify = Some(out_tx.clone());
             let mut result = Ok(());
-            for line in in_rx {
-                match line {
-                    Ok(line) => {
-                        if let Some(r) = self.handle_line(&line)
-                            && out_tx.send(r).is_err()
-                        {
-                            break; // the writer stopped: its error is reported below
-                        }
-                    }
-                    Err(e) => {
+            loop {
+                // with calls pending, wake up to poll them; otherwise wait for input
+                let line = if self.pending.is_empty() { in_rx.recv().map_err(|_| RecvTimeoutError::Disconnected) } else { in_rx.recv_timeout(POLL) };
+                let reply = match line {
+                    Ok(Ok(line)) => self.handle_line(&line),
+                    Ok(Err(e)) => {
                         result = Err(e);
                         break;
                     }
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                };
+                let done = self.poll_pending();
+                if reply.into_iter().chain(done).any(|r| out_tx.send(r).is_err()) {
+                    break; // the writer stopped: its error is reported below
+                }
+            }
+            // input ended with calls still running: finish them (their clients may still read)
+            while !self.pending.is_empty() {
+                std::thread::sleep(POLL);
+                for r in self.poll_pending() {
+                    let _ = out_tx.send(r);
                 }
             }
             self.notify = None;
@@ -251,7 +338,21 @@ impl McpServer {
             return None;
         }
         self.current = Some(key.clone());
-        let r = self.request(method, &params);
+        let r = if method == "tools/call" {
+            match self.call_tool(&params) {
+                Ok(CallOutcome::Now(v)) => Ok(v),
+                Ok(CallOutcome::Later(call)) => {
+                    self.current = None;
+                    let token = progress_token(&params).cloned();
+                    self.pending.push(Pending { id: id.clone(), key, token, last: f64::NEG_INFINITY, call });
+                    // served: the loop polls it; handled directly: finish it here
+                    return if self.notify.is_some() { None } else { self.finish_pending() };
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            self.request(method, &params)
+        };
         self.current = None;
         if self.take_cancelled(&key) {
             return None;
@@ -274,7 +375,6 @@ impl McpServer {
             "initialize" => Ok(self.initialize(params)),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": self.list_tools()})),
-            "tools/call" => self.call_tool(params),
             "resources/list" => Ok(json!({"resources": self.list_resources()})),
             "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
             "resources/read" => self.read_resource(params),
@@ -331,72 +431,172 @@ impl McpServer {
             self.command_tools = names;
         }
         list.extend(self.custom.iter().map(|t| t.def.clone()));
+        self.listed.clone_from(&list);
         list
     }
 
-    fn call_tool(&mut self, params: &Value) -> RpcResult {
+    /// Poll the pending calls once: the responses of those that finished (cancelled ones get none).
+    fn poll_pending(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < self.pending.len() {
+            let cancelled = self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(&self.pending[i].key);
+            let p = &mut self.pending[i];
+            let mut cx = ToolCx::new(&mut self.backend, &self.app, self.notify.as_ref(), p.token.as_ref(), cancelled);
+            cx.set_last_progress(p.last);
+            let finished = if cancelled {
+                p.call.cancel(&mut cx);
+                Some(None)
+            } else {
+                p.call.poll(&mut cx).map(Some)
+            };
+            p.last = cx.last_progress();
+            match finished {
+                None => i += 1,
+                Some(result) => {
+                    let p = self.pending.remove(i);
+                    self.take_cancelled(&p.key);
+                    if let Some(r) = result {
+                        out.push(response(p.id, r.to_value()).to_string());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Run the pending calls to the end (handling one message without the serve loop).
+    fn finish_pending(&mut self) -> Option<Value> {
+        let mut last = None;
+        while !self.pending.is_empty() {
+            for r in self.poll_pending() {
+                last = serde_json::from_str(&r).ok();
+            }
+            if !self.pending.is_empty() {
+                std::thread::sleep(POLL);
+            }
+        }
+        last
+    }
+
+    /// Refuse arguments the tool's input schema does not list (strict mode).
+    fn check_arguments(&mut self, name: &str, args: &Value) -> Result<(), (i64, String)> {
+        if !self.opts.strict_arguments {
+            return Ok(());
+        }
+        let find = |l: &[Value]| l.iter().find(|t| t["name"] == name).map(|t| t["inputSchema"].clone());
+        let schema = match find(&self.listed) {
+            Some(s) => s,
+            None => {
+                let l = self.list_tools();
+                match find(&l) {
+                    Some(s) => s,
+                    None => return Ok(()),
+                }
+            }
+        };
+        let Some(props) = schema.get("properties").and_then(Value::as_object) else { return Ok(()) };
+        if schema.get("additionalProperties") == Some(&Value::Bool(true)) {
+            return Ok(());
+        }
+        let unknown: Vec<&str> = args.as_object().into_iter().flatten().map(|(k, _)| k.as_str()).filter(|k| !props.contains_key(*k)).collect();
+        if unknown.is_empty() {
+            return Ok(());
+        }
+        let known: Vec<&str> = props.keys().map(String::as_str).collect();
+        Err((
+            INVALID_PARAMS,
+            format!(
+                "unknown argument{} {} for `{name}` (it takes: {})",
+                if unknown.len() > 1 { "s" } else { "" },
+                unknown.iter().map(|k| format!("`{k}`")).collect::<Vec<_>>().join(", "),
+                known.join(", ")
+            ),
+        ))
+    }
+
+    /// Run `command` through the app's [`McpServer::on_execute`] hook, or as usual.
+    fn run_command(&mut self, command: &str, params: Value, token: Option<&Value>) -> ToolOutcome {
+        if let Some(hook) = self.on_execute.as_mut() {
+            let cancelled = self.current.as_ref().is_some_and(|k| self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(k));
+            let mut cx = ToolCx::new(&mut self.backend, &self.app, self.notify.as_ref(), token, cancelled);
+            if let Some(o) = hook(command, &params, &mut cx) {
+                return o;
+            }
+        }
+        ToolResult::from_reply(self.call("engine.execute", json!({"command": command, "params": params}))).into()
+    }
+
+    fn call_tool(&mut self, params: &Value) -> Result<CallOutcome, (i64, String)> {
         let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "tools/call needs a string `name`".to_string()))?;
         let args = match params.get("arguments") {
             None | Some(Value::Null) => json!({}),
             Some(v @ Value::Object(_)) => v.clone(),
             Some(_) => return Err((INVALID_PARAMS, "`arguments` must be an object".to_string())),
         };
+        self.check_arguments(name, &args)?;
+        let token = progress_token(params).cloned();
         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
-        let r = match name {
+        let outcome: ToolOutcome = match name {
             "list_commands" => match self.commands() {
                 Ok(list) => {
                     let q = s("query").unwrap_or_default().to_lowercase();
-                    ToolResult::json(&Value::Array(list.iter().filter(|c| matches_query(c, &q)).map(tools::compact).collect()))
+                    ToolResult::json(&Value::Array(list.iter().filter(|c| matches_query(c, &q)).map(tools::compact).collect())).into()
                 }
-                Err(e) => ToolResult::error(e),
+                Err(e) => ToolResult::error(e).into(),
             },
             "describe_command" => match (s("command"), self.commands()) {
-                (None, _) => ToolResult::error("describe_command needs a string `command`"),
-                (_, Err(e)) => ToolResult::error(e),
+                (None, _) => ToolResult::error("describe_command needs a string `command`").into(),
+                (_, Err(e)) => ToolResult::error(e).into(),
                 (Some(id), Ok(list)) => match list.into_iter().find(|c| c.id == id) {
-                    Some(c) => ToolResult::json(&serde_json::to_value(c).unwrap_or_default()),
-                    None => ToolResult::error(format!("no command `{id}`; see list_commands")),
+                    Some(c) => ToolResult::json(&serde_json::to_value(c).unwrap_or_default()).into(),
+                    None => ToolResult::error(format!("no command `{id}`; see list_commands")).into(),
                 },
             },
             "execute" => match s("command") {
                 Some(c) => {
                     let p = args.get("params").cloned().unwrap_or(Value::Null);
-                    ToolResult::from_reply(self.call("engine.execute", json!({"command": c, "params": p})))
+                    self.run_command(&c, p, token.as_ref())
                 }
-                None => ToolResult::error("execute needs a string `command`"),
+                None => ToolResult::error("execute needs a string `command`").into(),
             },
-            "batch" => match params.get("_meta").and_then(|m| m.get("progressToken")).filter(|t| t.is_string() || t.is_i64() || t.is_u64()) {
-                Some(token) => self.batch_in_steps(&args, token),
-                None => ToolResult::from_reply(self.call("engine.batch", args)),
+            "batch" => match token.as_ref() {
+                Some(token) => self.batch_in_steps(&args, token).into(),
+                None => ToolResult::from_reply(self.call("engine.batch", args)).into(),
             },
             "screenshot" => match tools::normalize_targets(args) {
-                Ok(a) => tools::screenshot_result(self.call("ui.screenshot", a)),
-                Err(e) => ToolResult::error(e),
+                Ok(a) => tools::screenshot_result(self.call("ui.screenshot", a)).into(),
+                Err(e) => ToolResult::error(e).into(),
             },
             "ui_snapshot" => match tools::normalize_targets(args) {
                 Ok(mut a) => {
                     // `elements` shapes the tool result; the app is not asked for it.
                     let with_elements = a.as_object_mut().and_then(|o| o.remove("elements")).and_then(|v| v.as_bool()).unwrap_or(false);
-                    tools::snapshot_result(self.call("ui.snapshot", a), with_elements)
+                    tools::snapshot_result(self.call("ui.snapshot", a), with_elements).into()
                 }
-                Err(e) => ToolResult::error(e),
+                Err(e) => ToolResult::error(e).into(),
             },
             other => {
                 if let Some(method) = tools::ui_method(other) {
                     match tools::normalize_targets(args) {
-                        Ok(a) => ToolResult::from_reply(self.call(method, a)),
-                        Err(e) => ToolResult::error(e),
+                        Ok(a) => ToolResult::from_reply(self.call(method, a)).into(),
+                        Err(e) => ToolResult::error(e).into(),
                     }
                 } else if let Some(t) = self.custom.iter_mut().find(|t| t.def.get("name").and_then(Value::as_str) == Some(other)) {
-                    (t.run)(&args, &mut self.backend)
+                    let cancelled = self.current.as_ref().is_some_and(|k| self.cancelled.lock().unwrap_or_else(PoisonError::into_inner).contains(k));
+                    let mut cx = ToolCx::new(&mut self.backend, &self.app, self.notify.as_ref(), token.as_ref(), cancelled);
+                    (t.run)(&args, &mut cx)
                 } else if let Some(id) = self.command_for_tool(other) {
-                    ToolResult::from_reply(self.call("engine.execute", json!({"command": id, "params": args})))
+                    self.run_command(&id, args, token.as_ref())
                 } else {
                     return Err((INVALID_PARAMS, format!("unknown tool: {other}")));
                 }
             }
         };
-        Ok(r.to_value())
+        Ok(match outcome {
+            ToolOutcome::Done(r) => CallOutcome::Now(r.to_value()),
+            ToolOutcome::Pending(call) => CallOutcome::Later(call),
+        })
     }
 
     /// `batch` one step at a time, for a client that asked for progress: a
@@ -469,6 +669,7 @@ impl McpServer {
                 0.8,
             ),
         ];
+        list.extend(self.resources.iter().map(|r| r.def.clone()));
         if self.methods().iter().any(|m| m == "ui.snapshot") {
             list.push(res(
                 RES_UI,
@@ -498,7 +699,17 @@ impl McpServer {
                 Reply::Ok(v) => ("text/plain", v.get("tree").and_then(Value::as_str).map_or_else(|| v.to_string(), str::to_string)),
                 Reply::Err { error, .. } => return Err(failed(error)),
             },
-            _ => return Err((RESOURCE_NOT_FOUND, format!("no resource {uri}; see resources/list"))),
+            other => match self.resources.iter_mut().find(|r| r.def["uri"] == other) {
+                Some(r) => {
+                    let mut cx = ToolCx::new(&mut self.backend, &self.app, None, None, false);
+                    let mime = r.def["mimeType"].as_str().unwrap_or("text/plain").to_string();
+                    match (r.read)(&mut cx) {
+                        Ok(text) => return Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]})),
+                        Err(e) => return Err(failed(e)),
+                    }
+                }
+                None => return Err((RESOURCE_NOT_FOUND, format!("no resource {uri}; see resources/list"))),
+            },
         };
         Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]}))
     }
@@ -514,6 +725,11 @@ impl McpServer {
             find(&self.command_tools)
         })
     }
+}
+
+/// The `_meta.progressToken` of a request, when it is a string or an integer.
+fn progress_token(params: &Value) -> Option<&Value> {
+    params.get("_meta").and_then(|m| m.get("progressToken")).filter(|t| t.is_string() || t.is_i64() || t.is_u64())
 }
 
 const RES_APP: &str = "app://info";

@@ -4,7 +4,7 @@
 
 mod support;
 
-use ashlar_mcp::{Access, Backend, McpServer, ServerOptions, ToolMode, ToolResult};
+use ashlar_mcp::{Access, Backend, McpServer, PendingCall, ServerOptions, ToolCx, ToolMode, ToolOutcome, ToolResult};
 use serde_json::{Value, json};
 use support::Counter;
 
@@ -137,14 +137,12 @@ fn tools_carry_read_only_destructive_and_idempotent_hints() {
 #[test]
 fn the_apps_own_tools_are_listed_and_called_and_cannot_shadow_the_fixed_ones() {
     let mut s = server()
-        .tool("double", "Double", "Add the counter to itself.", json!({"type": "object"}), Access::Undoable, |_, backend| {
-            let app = ashlar_control::AppInfo::new("counter", "0.1.0");
-            let now = backend.call("engine.execute", json!({"command": "count.get"}), &app);
-            let by = match now {
+        .tool("double", "Double", "Add the counter to itself.", json!({"type": "object"}), Access::Undoable, |_, cx| {
+            let by = match cx.execute("count.get", json!({})) {
                 ashlar_control::Reply::Ok(v) => v.as_i64().unwrap_or(0),
                 ashlar_control::Reply::Err { error, .. } => return ToolResult::error(error),
             };
-            ToolResult::from_reply(backend.call("engine.execute", json!({"command": "count.add", "params": {"by": by}}), &app))
+            ToolResult::from_reply(cx.execute("count.add", json!({"by": by})))
         })
         .tool("execute", "Shadow", "Must not replace execute.", json!({"type": "object"}), Access::Read, |_, _| ToolResult::text("shadowed"));
     let out = serve(
@@ -160,4 +158,121 @@ fn the_apps_own_tools_are_listed_and_called_and_cannot_shadow_the_fixed_ones() {
     assert!(names.contains(&"double"));
     assert_eq!(text(&out[1]), json!(3), "execute is still the fixed tool");
     assert_eq!(text(&out[2]), json!(6));
+}
+
+/// A call that finishes after `steps` polls, reporting progress; cancelling it adds 100 to the
+/// counter so the test can see the clean-up ran.
+struct Steps {
+    left: u32,
+    total: u32,
+}
+
+impl PendingCall for Steps {
+    fn poll(&mut self, cx: &mut ToolCx<'_>) -> Option<ToolResult> {
+        let done = self.total - self.left;
+        cx.progress(f64::from(done), Some(f64::from(self.total)), "working");
+        if self.left == 0 {
+            return Some(ToolResult::text("finished"));
+        }
+        self.left -= 1;
+        None
+    }
+
+    fn cancel(&mut self, cx: &mut ToolCx<'_>) {
+        let _ = cx.execute("count.add", json!({"by": 100}));
+    }
+}
+
+fn with_long_tool() -> McpServer {
+    server().tool(
+        "long",
+        "Long",
+        "Finishes after a few polls.",
+        json!({"type": "object", "properties": {"steps": {"type": "integer"}}}),
+        Access::Read,
+        |a, _| {
+            let n = a["steps"].as_u64().unwrap_or(3) as u32;
+            ToolOutcome::pending(Steps { left: n, total: n })
+        },
+    )
+}
+
+#[test]
+fn a_pending_tool_reports_progress_while_other_requests_are_answered() {
+    let mut s = with_long_tool();
+    let mut long = call(1, "long", json!({"steps": 4}));
+    long["params"]["_meta"] = json!({"progressToken": "L"});
+    let out = serve(&mut s, &[long, call(2, "execute", json!({"command": "count.add"}))]);
+    let ids: Vec<&Value> = out.iter().filter_map(|m| m.get("id")).collect();
+    assert_eq!(ids, [&json!(2), &json!(1)], "the quick call is answered while the long one runs: {out:?}");
+    let progress: Vec<f64> =
+        out.iter().filter(|m| m["method"] == "notifications/progress").map(|m| m["params"]["progress"].as_f64().unwrap()).collect();
+    assert_eq!(progress, [0.0, 1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(out.last().unwrap()["result"]["content"][0]["text"], "finished");
+}
+
+#[test]
+fn a_cancelled_pending_tool_is_cleaned_up_and_gets_no_response() {
+    use std::io::Write;
+    let mut s = with_long_tool();
+    // the cancellation comes while the call runs (all at once, it would cancel it before it starts)
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let feed = std::thread::spawn(move || {
+        writeln!(writer, "{}", call(1, "long", json!({"steps": 50}))).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        writeln!(writer, "{}", json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}})).unwrap();
+        writeln!(writer, "{}", json!({"jsonrpc": "2.0", "id": 2, "method": "ping"})).unwrap();
+    });
+    let mut out = Vec::new();
+    s.serve(std::io::BufReader::new(reader), &mut out).unwrap();
+    feed.join().unwrap();
+    let out: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(out.iter().all(|m| m["id"] != 1), "{out:?}");
+    assert!(out.iter().any(|m| m["id"] == 2));
+    assert_eq!(text(&serve(&mut s, &[call(3, "execute", json!({"command": "count.get"}))])[0]), json!(100), "cancel ran");
+}
+
+#[test]
+fn handled_without_serve_a_pending_tool_finishes_in_place() {
+    let mut s = with_long_tool();
+    let r: Value = serde_json::from_str(&s.handle_line(&call(1, "long", json!({"steps": 2})).to_string()).unwrap()).unwrap();
+    assert_eq!(r["result"]["content"][0]["text"], "finished");
+}
+
+#[test]
+fn the_app_can_take_over_execute_for_some_commands() {
+    let mut s = server().on_execute(|id, params, _| (id == "count.add" && params["by"] == 7).then(|| ToolResult::text("taken over").into()));
+    let out = serve(
+        &mut s,
+        &[call(1, "execute", json!({"command": "count.add", "params": {"by": 7}})), call(2, "execute", json!({"command": "count.add"}))],
+    );
+    assert_eq!(out[0]["result"]["content"][0]["text"], "taken over");
+    assert_eq!(text(&out[1]), json!(1), "other calls run as usual (and the hooked one did not)");
+}
+
+#[test]
+fn app_resources_are_listed_and_read() {
+    let mut s =
+        server().resource("app://counter", "counter", "Counter", "The count.", "application/json", |cx| match cx.execute("count.get", json!({})) {
+            ashlar_control::Reply::Ok(v) => Ok(json!({"count": v}).to_string()),
+            ashlar_control::Reply::Err { error, .. } => Err(error),
+        });
+    let out = serve(
+        &mut s,
+        &[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "resources/list"}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": "app://counter"}}),
+        ],
+    );
+    assert!(out[0]["result"]["resources"].as_array().unwrap().iter().any(|r| r["uri"] == "app://counter"));
+    assert_eq!(out[1]["result"]["contents"][0]["text"], json!({"count": 0}).to_string());
+}
+
+#[test]
+fn strict_arguments_refuse_what_a_tool_does_not_take() {
+    let mut s = McpServer::new(Backend::Headless(Box::new(Counter::default())), ServerOptions::new("counter", "0.1.0").strict_arguments(true));
+    let out = serve(&mut s, &[call(1, "execute", json!({"command": "count.get", "parms": {}})), call(2, "execute", json!({"command": "count.get"}))]);
+    assert_eq!(out[0]["error"]["code"], -32602, "{out:?}");
+    assert!(out[0]["error"]["message"].as_str().unwrap().contains("`parms`"));
+    assert_eq!(text(&out[1]), json!(0));
 }
