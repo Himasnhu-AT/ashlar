@@ -339,3 +339,203 @@ fn dropping_jobs_cancels_and_does_not_block() {
     drop(jobs);
     seen_rx.recv_timeout(T).expect("the running job saw the cancel");
 }
+
+#[test]
+fn here_runs_the_job_on_the_calling_thread_and_still_waits_for_drain_to_apply() {
+    let mut jobs: Jobs<Doc> = Jobs::with_workers(2);
+    let mut doc = Doc::default();
+    let caller = std::thread::current().id();
+    let id = jobs.job("count", "Counting").here().spawn(3u32, move |n, p| {
+        assert_eq!(std::thread::current().id(), caller, "ran on the caller's thread");
+        p.steps(1, 1);
+        Ok(apply(move |d: &mut Doc| {
+            d.edit(|items| items.push(format!("n={n}")));
+            Ok(json!(n))
+        }))
+    });
+    // finished before `spawn` returned, not yet applied
+    assert_eq!(jobs.status(id), Some(Status::Ready));
+    assert!(doc.items.is_empty());
+    let recs = jobs.drain_ready(&mut doc);
+    assert_eq!((recs[0].status, &recs[0].result), (Status::Done, &json!(3)));
+    assert_eq!(jobs.status(id), Some(Status::Done), "finished jobs are found in the history");
+    assert_eq!(doc.items, ["n=3"]);
+}
+
+#[test]
+fn a_panic_in_a_job_run_here_fails_only_that_job() {
+    let mut jobs: Jobs<Doc> = Jobs::inline();
+    let mut doc = Doc::default();
+    jobs.job("bad", "Panics").here().spawn((), |(), _| -> Result<ashlar_jobs::Apply<Doc>, String> { panic!("boom") });
+    let recs = jobs.drain_ready(&mut doc);
+    assert_eq!(recs[0].status, Status::Failed);
+    assert!(recs[0].message.contains("boom"), "{}", recs[0].message);
+}
+
+#[test]
+fn streaming_updates_apply_in_order_while_the_job_runs_and_survive_a_cancel() {
+    let mut jobs: Jobs<Doc> = Jobs::with_workers(1);
+    let mut doc = Doc::default();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let (sent_tx, sent_rx) = mpsc::channel::<()>();
+    let id = jobs.job("track", "Tracking").spawn_streaming((), move |(), p, up| {
+        for k in 0..3 {
+            up.send(apply(move |d: &mut Doc| {
+                d.edit(|items| items.push(format!("key {k}")));
+                Ok(Value::Null)
+            }));
+        }
+        sent_tx.send(()).unwrap();
+        go_rx.recv_timeout(T).unwrap();
+        while !p.is_cancelled() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // a cancelled job's later updates are dropped
+        assert!(!up.send(apply(|d: &mut Doc| {
+            d.edit(|items| items.push("late".into()));
+            Ok(Value::Null)
+        })));
+        Err("stopped".into())
+    });
+    sent_rx.recv_timeout(T).unwrap();
+    // the updates land while the job is still running
+    assert!(jobs.drain_ready(&mut doc).is_empty());
+    assert_eq!(doc.items, ["key 0", "key 1", "key 2"]);
+    assert_eq!(doc.undo_steps, 3);
+    assert_eq!(jobs.status(id), Some(Status::Running));
+    go_tx.send(()).unwrap();
+    jobs.cancel(id);
+    let recs = finish(&mut jobs, &mut doc);
+    assert_eq!(recs[0].status, Status::Cancelled);
+    assert_eq!(doc.items, ["key 0", "key 1", "key 2"], "what was applied stays; nothing after the cancel");
+}
+
+#[test]
+fn an_update_that_fails_to_apply_cancels_its_job_and_becomes_its_message() {
+    let mut jobs: Jobs<Doc> = Jobs::with_workers(1);
+    let mut doc = Doc::default();
+    let (sent_tx, sent_rx) = mpsc::channel::<()>();
+    let id = jobs.job("track", "Tracking").spawn_streaming((), move |(), p, up| {
+        up.send(apply(|_: &mut Doc| Err("the target is gone".into())));
+        up.send(apply(|d: &mut Doc| {
+            d.edit(|items| items.push("after the failure".into()));
+            Ok(Value::Null)
+        }));
+        sent_tx.send(()).unwrap();
+        while !p.is_cancelled() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(apply(|d: &mut Doc| {
+            d.edit(|items| items.push("final".into()));
+            Ok(Value::Null)
+        }))
+    });
+    sent_rx.recv_timeout(T).unwrap();
+    assert!(jobs.drain_ready(&mut doc).is_empty());
+    assert!(jobs.wait(id, T), "the failed update stopped the job");
+    let recs = jobs.drain_ready(&mut doc);
+    assert_eq!((recs[0].status, recs[0].message.as_str()), (Status::Failed, "the target is gone"));
+    assert!(doc.items.is_empty(), "{:?}", doc.items);
+}
+
+#[test]
+fn take_ready_lets_an_app_keep_its_jobs_inside_the_state_the_applies_edit() {
+    #[derive(Default)]
+    struct App {
+        jobs: Jobs<App>,
+        log: Vec<String>,
+    }
+    let mut app = App { jobs: Jobs::with_workers(2), log: vec![] };
+    let first = app.jobs.spawn("one", "First", (), |(), _| {
+        Ok(apply(|a: &mut App| {
+            a.log.push("first".into());
+            // an apply may start the next job: the app's `Jobs` is not borrowed while it runs
+            a.jobs.spawn("two", "Second", (), |(), _| {
+                Ok(apply(|a: &mut App| {
+                    a.log.push("second".into());
+                    Ok(Value::Null)
+                }))
+            });
+            Ok(Value::Null)
+        }))
+    });
+    assert!(app.jobs.wait(first, T));
+    let ready = app.jobs.take_ready();
+    assert!(!ready.is_empty());
+    let recs = ready.apply(&mut app);
+    app.jobs.remember(&recs);
+    assert!(app.jobs.wait_all(T));
+    let ready = app.jobs.take_ready();
+    let recs2 = ready.apply(&mut app);
+    app.jobs.remember(&recs2);
+    assert_eq!(app.log, ["first", "second"]);
+    assert_eq!(app.jobs.recent().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
+}
+
+#[test]
+fn next_id_is_the_id_the_next_job_gets() {
+    let mut jobs: Jobs<Doc> = Jobs::inline();
+    let next = jobs.next_id();
+    let id = jobs.spawn("x", "X", (), |(), _| Ok(apply(|_: &mut Doc| Ok(Value::Null))));
+    assert_eq!(id, next);
+    assert_ne!(jobs.next_id(), id);
+}
+
+#[test]
+fn wait_blocks_until_one_job_finishes_and_counts_unknown_ones_as_finished() {
+    let mut jobs: Jobs<Doc> = Jobs::with_workers(2);
+    let slow = jobs.spawn("slow", "Slow", (), |(), p| {
+        while !p.is_cancelled() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Err("stopped".into())
+    });
+    let quick = jobs.spawn("quick", "Quick", (), |(), _| Ok(apply(|_: &mut Doc| Ok(Value::Null))));
+    assert!(jobs.wait(quick, T));
+    assert!(!jobs.wait(slow, Duration::from_millis(20)), "still running");
+    assert!(jobs.wait(JobId(999), Duration::ZERO));
+    jobs.cancel(slow);
+    assert!(jobs.wait(slow, T));
+}
+
+#[test]
+fn a_waiting_stepped_job_yields_the_frame_and_advance_reports_it() {
+    let mut jobs: Jobs<Doc> = Jobs::inline();
+    let mut doc = Doc::default();
+    let loaded = Arc::new(AtomicUsize::new(0));
+    let l = loaded.clone();
+    jobs.spawn_stepped("load", "Loading", 0u32, move |n, _| {
+        if l.load(Ordering::Relaxed) == 0 {
+            return Step::Wait;
+        }
+        *n += 1;
+        if *n < 3 {
+            Step::Continue
+        } else {
+            Step::Done(apply(|d: &mut Doc| {
+                d.edit(|i| i.push("loaded".into()));
+                Ok(Value::Null)
+            }))
+        }
+    });
+    assert!(!jobs.advance(10), "waiting: no work done");
+    assert!(jobs.needs_frames());
+    loaded.store(1, Ordering::Relaxed);
+    assert!(jobs.advance(1));
+    while jobs.advance(1) {}
+    assert!(!jobs.needs_frames());
+    jobs.drain_ready(&mut doc);
+    assert_eq!(doc.items, ["loaded"]);
+
+    // on a worker, a waiting step is retried until it can go on
+    let mut jobs: Jobs<Doc> = Jobs::with_workers(1);
+    let loaded = Arc::new(AtomicUsize::new(0));
+    let l = loaded.clone();
+    let id = jobs.spawn_stepped("load", "Loading", (), move |(), _| {
+        if l.load(Ordering::Relaxed) == 0 { Step::Wait } else { Step::Done(apply(|_: &mut Doc| Ok(json!("ok")))) }
+    });
+    assert!(!jobs.wait(id, Duration::from_millis(20)));
+    loaded.store(1, Ordering::Relaxed);
+    let recs = finish(&mut jobs, &mut doc);
+    assert_eq!(recs[0].result, json!("ok"));
+}

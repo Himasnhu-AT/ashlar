@@ -47,4 +47,16 @@ for rec in jobs.drain_ready(&mut app) { app.toast(&rec); }
   `Failed`): on threads they run straight through; inline (wasm32) `drain_ready` advances them a
   few steps per frame (`set_steps_per_drain`), so long work never freezes a frame. Keep frames
   coming while `needs_frames()` is true.
-- `wait_all(timeout)`: for CLIs, scripts and tests (never on a UI thread).
+- `wait_all(timeout)`, `wait(id, timeout)`: for CLIs, scripts and tests (never on a UI thread).
+  `status(id)` finds a job live or in the history.
+- `job(kind, label)` describes a job before it starts: `.here()` runs it on the calling thread
+  now (a command that waits for its result; the apply still waits for `drain_ready`);
+  `.spawn_streaming(input, |input, progress, updates| …)` lets it post partial results
+  (`updates.send(apply(…))`) that `drain_ready` applies in order while it runs. An update that
+  fails to apply cancels its job; updates already applied stay when the job is cancelled.
+- `next_id()`: the id the next job gets (an undo merge key that names the job).
+- A step can return `Wait` (media still loading): inline, the job yields the frame; on a worker it
+  is retried shortly. `advance(steps)` steps inline jobs without applying, for hosts that spend a
+  frame budget, and says whether any did work.
+- `take_ready()` + `Ready::apply(&mut state)` + `remember(&records)`: `drain_ready` in two halves,
+  for apps whose `Jobs` lives inside the state the applies edit (an apply may start new jobs).
