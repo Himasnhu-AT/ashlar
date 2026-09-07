@@ -8,6 +8,9 @@
 //! the main thread is running its event loop); the async pickers run anywhere and are the right
 //! choice inside an event loop. On the web only [`FileDialog::open_bytes_async`] exists (browsers
 //! give the page a file's contents, never its path); everything else is `Unsupported`.
+//!
+//! [`message`] shows a modal message box, for what must be said before (or without) a window:
+//! a start-up failure, command-line output in an app that has no console.
 
 use std::path::{Path, PathBuf};
 
@@ -90,6 +93,48 @@ impl FileDialog {
     /// The folder to open in, only when it exists (a missing folder makes some dialogs fail).
     fn existing_directory(&self) -> Option<&Path> {
         self.directory.as_deref().filter(|d| d.is_dir())
+    }
+}
+
+/// Longest message text passed to the OS.
+const MAX_MESSAGE: usize = 8192;
+
+/// How serious a [`message`] is; the OS picks the icon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MessageLevel {
+    #[default]
+    Info,
+    Warning,
+    Error,
+}
+
+/// Message text as it is given to the OS: line breaks and tabs kept, other control characters
+/// dropped, at most [`MAX_MESSAGE`] characters.
+fn clip_message(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(MAX_MESSAGE).collect()
+}
+
+/// Show a modal message box with one OK button and wait until it is dismissed. Main thread on
+/// macOS. `Unsupported` on the web.
+pub fn message(level: MessageLevel, title: &str, text: &str) -> Result<()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let level = match level {
+            MessageLevel::Info => rfd::MessageLevel::Info,
+            MessageLevel::Warning => rfd::MessageLevel::Warning,
+            MessageLevel::Error => rfd::MessageLevel::Error,
+        };
+        let (title, text) = (clip(title), clip_message(text));
+        crate::guarded("the message box", || {
+            rfd::MessageDialog::new().set_level(level).set_title(title).set_description(text).set_buttons(rfd::MessageButtons::Ok).show();
+            Ok(())
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (level, title, text);
+        Err(NativeError::Unsupported)
     }
 }
 
@@ -258,6 +303,14 @@ mod tests {
         );
         let many = (0..500).fold(FileDialog::new(), |d, i| d.filter(format!("f{i}"), &["txt"]));
         assert_eq!(many.clean_filters().len(), MAX_FILTERS);
+    }
+
+    #[test]
+    fn message_text_keeps_its_lines_and_is_bounded() {
+        assert_eq!(clip_message("usage:\n\t-h\u{0}\u{1b}[31m"), "usage:\n\t-h[31m");
+        assert_eq!(clip_message(&"y".repeat(100_000)).chars().count(), MAX_MESSAGE);
+        let level: MessageLevel = serde_json::from_str("\"error\"").unwrap_or_default();
+        assert_eq!(level, MessageLevel::Error);
     }
 
     #[test]
