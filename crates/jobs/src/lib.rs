@@ -122,6 +122,8 @@ struct State {
     message: String,
     started: Option<clock::Instant>,
     woken_fraction: f64,
+    /// Set when one of the job's updates failed to apply (the job was cancelled because of it).
+    update_error: Option<String>,
 }
 
 struct Shared {
@@ -234,12 +236,17 @@ pub enum Step<S> {
     Continue,
     Done(Apply<S>),
     Failed(String),
+    /// Nothing to do until something outside the job happens (a file or a fetch is still loading):
+    /// inline, stepping stops until the next drain; on a worker the step is retried shortly.
+    Wait,
 }
 
 enum Outcome<S> {
     Apply(Apply<S>),
     Failed(String),
     Cancelled,
+    /// A partial result posted by a running job ([`Updates::send`]).
+    Update(Apply<S>),
 }
 
 struct Inbox<S> {
@@ -267,6 +274,147 @@ struct SteppedEntry<S> {
     id: JobId,
     shared: Arc<Shared>,
     step: StepFn<S>,
+}
+
+/// Sends partial results from a running job ([`JobBuilder::spawn_streaming`]): each one is applied
+/// on the UI thread by the next [`Jobs::drain_ready`], in the order sent, while the job goes on
+/// (keyframes as a tracker finds them, hits as a search finds them). Updates sent before the job
+/// finished are applied even when it was cancelled; an update that fails to apply cancels its job,
+/// the failure becomes the job's message and later updates are dropped.
+pub struct Updates<S> {
+    id: JobId,
+    inbox: Arc<Inbox<S>>,
+    shared: Arc<Shared>,
+}
+
+impl<S> Clone for Updates<S> {
+    fn clone(&self) -> Self {
+        Self { id: self.id, inbox: self.inbox.clone(), shared: self.shared.clone() }
+    }
+}
+
+impl<S> Updates<S> {
+    /// Post a partial result. What a job found before it noticed a cancel is still applied (a
+    /// stopped tracker keeps the frames it tracked). Returns `false` once the job was cancelled:
+    /// time to stop.
+    pub fn send(&self, apply: Apply<S>) -> bool {
+        self.inbox.push(self.id, Outcome::Update(apply));
+        self.shared.wake();
+        !self.shared.cancel.is_cancelled()
+    }
+}
+
+/// A job being described ([`Jobs::job`]): how it runs, then one of the `spawn` methods starts it.
+pub struct JobBuilder<'a, S: 'static> {
+    jobs: &'a mut Jobs<S>,
+    kind: &'static str,
+    label: String,
+    here: bool,
+}
+
+impl<S: 'static> JobBuilder<'_, S> {
+    /// Run the job on the calling thread, now, instead of on a worker (a command that waits for
+    /// its result, a CLI). It is listed, reports progress, can be cancelled from another thread
+    /// and runs under `catch_unwind` like any job; its apply still waits for [`Jobs::drain_ready`].
+    pub fn here(mut self) -> Self {
+        self.here = true;
+        self
+    }
+
+    /// Start it: see [`Jobs::spawn`].
+    pub fn spawn<I: Send + 'static>(self, input: I, work: impl FnOnce(I, &Progress) -> Result<Apply<S>, String> + Send + 'static) -> JobId {
+        self.jobs.launch(self.kind, self.label, self.here, input, move |i, p, _| work(i, p))
+    }
+
+    /// Start a job that also posts partial results through [`Updates`] while it runs.
+    pub fn spawn_streaming<I: Send + 'static>(
+        self,
+        input: I,
+        work: impl FnOnce(I, &Progress, &Updates<S>) -> Result<Apply<S>, String> + Send + 'static,
+    ) -> JobId {
+        self.jobs.launch(self.kind, self.label, self.here, input, work)
+    }
+
+    /// Start a stepped job: see [`Jobs::spawn_stepped`]. With [`JobBuilder::here`] all its steps
+    /// run now.
+    pub fn spawn_stepped<I: Send + 'static>(self, input: I, step: impl FnMut(&mut I, &Progress) -> Step<S> + Send + 'static) -> JobId {
+        self.jobs.launch_stepped(self.kind, self.label, self.here, input, step)
+    }
+}
+
+/// Retry delay for a stepped job that is waiting on something outside it.
+fn wait_a_moment() {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(Duration::from_millis(1));
+    #[cfg(target_arch = "wasm32")]
+    std::hint::spin_loop();
+}
+
+struct ReadyItem<S> {
+    entry: Entry,
+    outcome: Outcome<S>,
+}
+
+/// What [`Jobs::take_ready`] took: finished jobs and partial results, in order, to apply.
+#[must_use = "apply it, or finished jobs are lost"]
+pub struct Ready<S> {
+    items: Vec<ReadyItem<S>>,
+}
+
+impl<S> Ready<S> {
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Apply everything to `state`, in order, each under `catch_unwind` (the second half of
+    /// [`Jobs::drain_ready`]). Returns the records of the jobs that finished.
+    pub fn apply(self, state: &mut S) -> Vec<JobRecord> {
+        let mut out = Vec::new();
+        for ReadyItem { entry, outcome } in self.items {
+            if let Outcome::Update(apply) = outcome {
+                // a job whose earlier update failed takes no more
+                if lock(&entry.shared.state).update_error.is_some() {
+                    continue;
+                }
+                let failed = match catch_unwind(AssertUnwindSafe(|| apply(state))) {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(e)) => Some(e),
+                    Err(p) => {
+                        let msg = panic_message(p.as_ref());
+                        log::error!("applying an update of job `{}` panicked: {msg}", entry.label);
+                        Some(format!("internal error while applying the result ({msg})"))
+                    }
+                };
+                if let Some(e) = failed {
+                    lock(&entry.shared.state).update_error = Some(e);
+                    entry.shared.cancel.cancel();
+                }
+                continue;
+            }
+            let cancelled = entry.shared.cancel.is_cancelled();
+            let update_error = lock(&entry.shared.state).update_error.take();
+            let (status, message, result) = match outcome {
+                // an update failed to apply: the job was cancelled because of it
+                _ if update_error.is_some() => (Status::Failed, update_error.clone().unwrap_or_default(), Value::Null),
+                _ if cancelled => (Status::Cancelled, String::new(), Value::Null),
+                Outcome::Cancelled | Outcome::Update(_) => (Status::Cancelled, String::new(), Value::Null),
+                Outcome::Failed(e) => (Status::Failed, e, Value::Null),
+                Outcome::Apply(apply) => match catch_unwind(AssertUnwindSafe(|| apply(state))) {
+                    Ok(Ok(v)) => (Status::Done, lock(&entry.shared.state).message.clone(), v),
+                    Ok(Err(e)) => (Status::Failed, e, Value::Null),
+                    Err(p) => {
+                        let msg = panic_message(p.as_ref());
+                        log::error!("applying job `{}` panicked: {msg}", entry.label);
+                        (Status::Failed, format!("internal error while applying the result ({msg})"), Value::Null)
+                    }
+                },
+            };
+            entry.shared.set_status(status);
+            let seconds = lock(&entry.shared.state).started.map(|t| t.elapsed().as_secs_f64());
+            out.push(JobRecord { id: entry.id, kind: entry.kind.to_string(), label: entry.label, status, message, result, seconds });
+        }
+        out
+    }
 }
 
 /// One row of the progress panel / `jobs.list`.
@@ -380,11 +528,30 @@ impl<S: 'static> Jobs<S> {
         self.next_id = self.next_id.saturating_add(1);
         let shared = Arc::new(Shared {
             cancel: CancelToken::default(),
-            state: Mutex::new(State { status: Status::Queued, fraction: None, message: String::new(), started: None, woken_fraction: 0.0 }),
+            state: Mutex::new(State {
+                status: Status::Queued,
+                fraction: None,
+                message: String::new(),
+                started: None,
+                woken_fraction: 0.0,
+                update_error: None,
+            }),
             wake: self.wake.clone(),
         });
         self.entries.push(Entry { id, kind, label, shared: shared.clone() });
         (id, shared)
+    }
+
+    /// The id the next job started here gets (for work that needs to name its own job, such as
+    /// an undo merge key).
+    pub fn next_id(&self) -> JobId {
+        JobId(self.next_id)
+    }
+
+    /// Describe a job before starting it: where it runs and how it reports.
+    /// `jobs.job("export", "Exporting").here().spawn(input, work)`.
+    pub fn job(&mut self, kind: &'static str, label: impl Into<String>) -> JobBuilder<'_, S> {
+        JobBuilder { jobs: self, kind, label: label.into(), here: false }
     }
 
     /// Start a job. `input` is the snapshot it works on; `work` returns the [`Apply`] that lands
@@ -396,14 +563,26 @@ impl<S: 'static> Jobs<S> {
         input: I,
         work: impl FnOnce(I, &Progress) -> Result<Apply<S>, String> + Send + 'static,
     ) -> JobId {
-        let (id, shared) = self.register(kind, label.into());
+        self.job(kind, label).spawn(input, work)
+    }
+
+    fn launch<I: Send + 'static>(
+        &mut self,
+        kind: &'static str,
+        label: String,
+        here: bool,
+        input: I,
+        work: impl FnOnce(I, &Progress, &Updates<S>) -> Result<Apply<S>, String> + Send + 'static,
+    ) -> JobId {
+        let (id, shared) = self.register(kind, label);
         let inbox = self.inbox.clone();
+        let updates = Updates { id, inbox: inbox.clone(), shared: shared.clone() };
         let task = move || {
             if !shared.begin() {
                 return;
             }
             let progress = Progress { shared: shared.clone() };
-            let r = catch_unwind(AssertUnwindSafe(|| work(input, &progress)));
+            let r = catch_unwind(AssertUnwindSafe(|| work(input, &progress, &updates)));
             let cancelled = shared.cancel.is_cancelled();
             let outcome = match r {
                 _ if cancelled => Outcome::Cancelled,
@@ -420,8 +599,8 @@ impl<S: 'static> Jobs<S> {
             shared.wake();
         };
         match &mut self.pool {
-            Some(pool) => pool.submit(Box::new(task)),
-            None => task(),
+            Some(pool) if !here => pool.submit(Box::new(task)),
+            _ => task(),
         }
         id
     }
@@ -435,11 +614,22 @@ impl<S: 'static> Jobs<S> {
         kind: &'static str,
         label: impl Into<String>,
         input: I,
+        step: impl FnMut(&mut I, &Progress) -> Step<S> + Send + 'static,
+    ) -> JobId {
+        self.job(kind, label).spawn_stepped(input, step)
+    }
+
+    fn launch_stepped<I: Send + 'static>(
+        &mut self,
+        kind: &'static str,
+        label: String,
+        here: bool,
+        input: I,
         mut step: impl FnMut(&mut I, &Progress) -> Step<S> + Send + 'static,
     ) -> JobId {
         let mut input = input;
-        if self.pool.is_some() {
-            return self.spawn(kind, label, (), move |(), p| {
+        if self.pool.is_some() || here {
+            return self.launch(kind, label, here, (), move |(), p, _| {
                 loop {
                     if p.is_cancelled() {
                         return Err("cancelled".into());
@@ -448,11 +638,12 @@ impl<S: 'static> Jobs<S> {
                         Step::Continue => {}
                         Step::Done(apply) => return Ok(apply),
                         Step::Failed(e) => return Err(e),
+                        Step::Wait => wait_a_moment(),
                     }
                 }
             });
         }
-        let (id, shared) = self.register(kind, label.into());
+        let (id, shared) = self.register(kind, label);
         self.stepped.push(SteppedEntry { id, shared, step: Box::new(move |p| step(&mut input, p)) });
         id
     }
@@ -467,9 +658,17 @@ impl<S: 'static> Jobs<S> {
         !self.entries.is_empty()
     }
 
-    /// Advance inline stepped jobs by up to `steps` steps each.
-    fn drive(&mut self, steps: usize) {
+    /// Advance inline stepped jobs by up to `steps` steps each, without applying anything. Returns
+    /// whether any of them did work (`false` once all are finished or waiting). Hosts with a frame
+    /// budget call it until the budget is spent, then [`Jobs::drain_ready`].
+    pub fn advance(&mut self, steps: usize) -> bool {
+        self.drive(steps.max(1))
+    }
+
+    /// Advance inline stepped jobs by up to `steps` steps each; whether any did work.
+    fn drive(&mut self, steps: usize) -> bool {
         let inbox = self.inbox.clone();
+        let mut worked = false;
         self.stepped.retain_mut(|job| {
             let status = job.shared.status();
             if status == Status::Queued && !job.shared.begin() {
@@ -486,56 +685,110 @@ impl<S: 'static> Jobs<S> {
                     return false;
                 }
                 let outcome = match catch_unwind(AssertUnwindSafe(|| (job.step)(&progress))) {
-                    Ok(Step::Continue) => continue,
+                    Ok(Step::Continue) => {
+                        worked = true;
+                        continue;
+                    }
+                    Ok(Step::Wait) => return true,
                     Ok(Step::Done(apply)) => Outcome::Apply(apply),
                     Ok(Step::Failed(e)) => Outcome::Failed(e),
                     Err(p) => Outcome::Failed(format!("internal error ({}); the job was stopped", panic_message(p.as_ref()))),
                 };
+                worked = true;
                 job.shared.set_status(Status::Ready);
                 inbox.push(job.id, outcome);
                 return false;
             }
             true
         });
+        worked
     }
 
     /// Call once per frame on the UI thread: advances inline stepped jobs, then applies every
     /// finished job to `state` in the order they finished (each apply under `catch_unwind`). A
-    /// job cancelled after it finished is not applied. Returns what finished.
+    /// job cancelled after it finished is not applied. Updates a running job posted
+    /// ([`JobBuilder::spawn_streaming`]) are applied too, in the order they were sent. Returns what
+    /// finished.
     pub fn drain_ready(&mut self, state: &mut S) -> Vec<JobRecord> {
+        let ready = self.take_ready();
+        let out = ready.apply(state);
+        self.remember(&out);
+        out
+    }
+
+    /// The first half of [`Jobs::drain_ready`], for apps whose `Jobs` lives inside the state the
+    /// applies edit: advances inline stepped jobs and takes everything that is ready, so `self`
+    /// can be released before [`Ready::apply`] borrows the state. Hand the records `apply`
+    /// returns to [`Jobs::remember`]. A job whose outcome was taken is no longer listed.
+    pub fn take_ready(&mut self) -> Ready<S> {
         if !self.stepped.is_empty() {
             self.drive(self.steps_per_drain);
         }
-        let ready: Vec<(JobId, Outcome<S>)> = lock(&self.inbox.items).drain(..).collect();
-        let mut out = Vec::with_capacity(ready.len());
-        for (id, outcome) in ready {
+        let taken: Vec<(JobId, Outcome<S>)> = lock(&self.inbox.items).drain(..).collect();
+        let mut items = Vec::with_capacity(taken.len());
+        for (id, outcome) in taken {
+            let last = !matches!(outcome, Outcome::Update(_));
             let Some(pos) = self.entries.iter().position(|e| e.id == id) else { continue };
-            let entry = self.entries.remove(pos);
-            let cancelled = entry.shared.cancel.is_cancelled();
-            let (status, message, result) = match outcome {
-                Outcome::Apply(_) | Outcome::Cancelled if cancelled => (Status::Cancelled, String::new(), Value::Null),
-                Outcome::Cancelled => (Status::Cancelled, String::new(), Value::Null),
-                Outcome::Failed(e) => (Status::Failed, e, Value::Null),
-                Outcome::Apply(apply) => match catch_unwind(AssertUnwindSafe(|| apply(state))) {
-                    Ok(Ok(v)) => (Status::Done, lock(&entry.shared.state).message.clone(), v),
-                    Ok(Err(e)) => (Status::Failed, e, Value::Null),
-                    Err(p) => {
-                        let msg = panic_message(p.as_ref());
-                        log::error!("applying job `{}` panicked: {msg}", entry.label);
-                        (Status::Failed, format!("internal error while applying the result ({msg})"), Value::Null)
-                    }
-                },
+            let entry = if last {
+                self.entries.remove(pos)
+            } else {
+                let Some(e) = self.entries.get(pos) else { continue };
+                Entry { id: e.id, kind: e.kind, label: e.label.clone(), shared: e.shared.clone() }
             };
-            entry.shared.set_status(status);
-            let seconds = lock(&entry.shared.state).started.map(|t| t.elapsed().as_secs_f64());
-            let rec = JobRecord { id, kind: entry.kind.to_string(), label: entry.label, status, message, result, seconds };
+            items.push(ReadyItem { entry, outcome });
+        }
+        Ready { items }
+    }
+
+    /// Keep finished jobs' records for [`Jobs::recent`] (what [`Ready::apply`] returned).
+    pub fn remember(&mut self, records: &[JobRecord]) {
+        for rec in records {
             self.history.push_back(rec.clone());
             if self.history.len() > HISTORY {
                 self.history.pop_front();
             }
-            out.push(rec);
         }
-        out
+    }
+
+    /// Where job `id` is: unfinished jobs from the live list, finished ones from [`Jobs::recent`].
+    pub fn status(&self, id: JobId) -> Option<Status> {
+        if let Some(e) = self.entries.iter().find(|e| e.id == id) {
+            return Some(e.shared.status());
+        }
+        self.history.iter().rev().find(|r| r.id == id).map(|r| r.status)
+    }
+
+    /// Block until job `id` has finished on its worker (it is then ready for
+    /// [`Jobs::drain_ready`]) or `timeout` passes. Returns whether it finished; an unknown or
+    /// already applied job counts as finished. Never call it on a UI thread for long work.
+    pub fn wait(&mut self, id: JobId, timeout: Duration) -> bool {
+        let Some(shared) = self.entries.iter().find(|e| e.id == id).map(|e| e.shared.clone()) else { return true };
+        if self.stepped.iter().any(|j| j.id == id) {
+            let mut budget: u64 = 10_000_000;
+            let deadline = clock::now();
+            while self.stepped.iter().any(|j| j.id == id) && budget > 0 {
+                self.drive(1);
+                budget -= 1;
+                if deadline.is_some_and(|t| t.elapsed() >= timeout) {
+                    break;
+                }
+            }
+        }
+        let deadline = clock::now();
+        let mut items = lock(&self.inbox.items);
+        loop {
+            if !matches!(shared.status(), Status::Queued | Status::Running) {
+                return true;
+            }
+            let left = match deadline {
+                Some(t) => timeout.saturating_sub(t.elapsed()),
+                None => return false,
+            };
+            if left.is_zero() {
+                return false;
+            }
+            items = self.inbox.cv.wait_timeout(items, left.min(Duration::from_millis(50))).unwrap_or_else(PoisonError::into_inner).0;
+        }
     }
 
     /// Ask a job to stop. A queued job never starts; a running one stops when it next checks; a
