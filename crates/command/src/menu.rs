@@ -212,9 +212,27 @@ impl MenuSpec {
     /// deeper than [`MAX_DEPTH`] are cut there. Separators, check marks and roles are the app's to
     /// add ([`Self::separator_before`], [`Self::set_checked`]).
     pub fn from_commands(commands: &[CommandInfo], order: &[&str]) -> Self {
+        Self::from_items(
+            commands.iter().map(|c| {
+                let mut item = Item::new(c.id.clone(), c.label.clone()).enabled(c.enabled);
+                item.accelerator = c.shortcut.as_deref().map(|s| shortcut::normalize(s).unwrap_or_else(|| s.to_owned()));
+                item.disabled_reason = if c.enabled { None } else { c.disabled_reason.clone() };
+                (c.menu.as_slice(), item)
+            }),
+            order,
+        )
+    }
+
+    /// A menu bar from items with their menu paths, for apps whose menu entries carry more than a
+    /// [`CommandInfo`] (check marks, translated titles): each `(path, item)` goes into the submenu
+    /// `path` names (`["File", "Export"]` = File ▸ Export), in order, each submenu created where
+    /// its first item appears. Entries with an empty path are skipped; paths deeper than
+    /// [`MAX_DEPTH`] are cut there. Top-level menus follow `order`; menus not in it come after, in
+    /// first-seen order.
+    pub fn from_items<P: AsRef<[String]>>(entries: impl IntoIterator<Item = (P, Item)>, order: &[&str]) -> Self {
         let mut spec = MenuSpec::default();
-        for c in commands {
-            let Some((top, rest)) = c.menu.split_first() else { continue };
+        for (path, item) in entries {
+            let Some((top, rest)) = path.as_ref().split_first() else { continue };
             let rest = rest.get(..MAX_DEPTH.saturating_sub(1)).unwrap_or(rest);
             let idx = match spec.menus.iter().position(|m| &m.label == top) {
                 Some(i) => i,
@@ -225,9 +243,6 @@ impl MenuSpec {
             };
             let Some(menu) = spec.menus.get_mut(idx) else { continue };
             let Some(children) = submenu_children(&mut menu.children, rest) else { continue };
-            let mut item = Item::new(c.id.clone(), c.label.clone()).enabled(c.enabled);
-            item.accelerator = c.shortcut.as_deref().map(|s| shortcut::normalize(s).unwrap_or_else(|| s.to_owned()));
-            item.disabled_reason = if c.enabled { None } else { c.disabled_reason.clone() };
             children.push(item.into());
         }
         let rank = |label: &str| order.iter().position(|o| *o == label).unwrap_or(order.len());
