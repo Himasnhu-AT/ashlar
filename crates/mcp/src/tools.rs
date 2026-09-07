@@ -68,7 +68,7 @@ pub enum Access {
 
 fn tool(name: &str, title: &str, description: &str, schema: Value, access: Access) -> Value {
     let annotations = match access {
-        Access::Read => json!({"title": title, "readOnlyHint": true, "idempotentHint": true, "openWorldHint": false}),
+        Access::Read => json!({"title": title, "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}),
         Access::Undoable => json!({"title": title, "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false}),
         Access::Any => json!({"title": title, "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false}),
     };
