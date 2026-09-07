@@ -278,8 +278,9 @@ struct SteppedEntry<S> {
 
 /// Sends partial results from a running job ([`JobBuilder::spawn_streaming`]): each one is applied
 /// on the UI thread by the next [`Jobs::drain_ready`], in the order sent, while the job goes on
-/// (keyframes as a tracker finds them, hits as a search finds them). An update that fails to apply
-/// cancels its job; the failure becomes the job's message.
+/// (keyframes as a tracker finds them, hits as a search finds them). Updates sent before the job
+/// finished are applied even when it was cancelled; an update that fails to apply cancels its job,
+/// the failure becomes the job's message and later updates are dropped.
 pub struct Updates<S> {
     id: JobId,
     inbox: Arc<Inbox<S>>,
@@ -293,14 +294,13 @@ impl<S> Clone for Updates<S> {
 }
 
 impl<S> Updates<S> {
-    /// Post a partial result. Returns `false` (and drops it) once the job was cancelled.
+    /// Post a partial result. What a job found before it noticed a cancel is still applied (a
+    /// stopped tracker keeps the frames it tracked). Returns `false` once the job was cancelled:
+    /// time to stop.
     pub fn send(&self, apply: Apply<S>) -> bool {
-        if self.shared.cancel.is_cancelled() {
-            return false;
-        }
         self.inbox.push(self.id, Outcome::Update(apply));
         self.shared.wake();
-        true
+        !self.shared.cancel.is_cancelled()
     }
 }
 

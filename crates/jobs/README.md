@@ -52,8 +52,9 @@ for rec in jobs.drain_ready(&mut app) { app.toast(&rec); }
 - `job(kind, label)` describes a job before it starts: `.here()` runs it on the calling thread
   now (a command that waits for its result; the apply still waits for `drain_ready`);
   `.spawn_streaming(input, |input, progress, updates| …)` lets it post partial results
-  (`updates.send(apply(…))`) that `drain_ready` applies in order while it runs. An update that
-  fails to apply cancels its job; updates already applied stay when the job is cancelled.
+  (`updates.send(apply(…))`) that `drain_ready` applies in order while it runs. Updates sent before
+  the job finished apply even if it was cancelled (`send` returns `false` then: time to stop); an
+  update that fails to apply cancels its job and drops its later updates.
 - `next_id()`: the id the next job gets (an undo merge key that names the job).
 - A step can return `Wait` (media still loading): inline, the job yields the frame; on a worker it
   is retried shortly. `advance(steps)` steps inline jobs without applying, for hosts that spend a

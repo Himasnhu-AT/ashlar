@@ -390,9 +390,9 @@ fn streaming_updates_apply_in_order_while_the_job_runs_and_survive_a_cancel() {
         while !p.is_cancelled() {
             std::thread::sleep(Duration::from_millis(1));
         }
-        // a cancelled job's later updates are dropped
+        // what it found before it noticed the cancel is still applied; `send` says to stop
         assert!(!up.send(apply(|d: &mut Doc| {
-            d.edit(|items| items.push("late".into()));
+            d.edit(|items| items.push("found before stopping".into()));
             Ok(Value::Null)
         })));
         Err("stopped".into())
@@ -407,7 +407,7 @@ fn streaming_updates_apply_in_order_while_the_job_runs_and_survive_a_cancel() {
     jobs.cancel(id);
     let recs = finish(&mut jobs, &mut doc);
     assert_eq!(recs[0].status, Status::Cancelled);
-    assert_eq!(doc.items, ["key 0", "key 1", "key 2"], "what was applied stays; nothing after the cancel");
+    assert_eq!(doc.items, ["key 0", "key 1", "key 2", "found before stopping"], "updates survive the cancel; the final apply does not run");
 }
 
 #[test]
