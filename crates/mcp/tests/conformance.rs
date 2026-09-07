@@ -175,6 +175,23 @@ fn remote_backend_drives_a_running_app_with_ui() {
     assert!(r["content"][0]["text"].as_str().unwrap().contains("not reachable"), "{r}");
 }
 
+#[test]
+fn an_app_backend_starts_before_the_app_and_connects_when_it_is_up() {
+    let dir = tempfile::tempdir().unwrap();
+    // reserve a port, then free it: the app is not running yet
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let backend = Backend::App(ashlar_mcp::AppPort::new(port, dir.path(), "start the app with `counter --control <port>`"));
+    let mut server = McpServer::new(backend, options());
+    let r = call(&mut server, 1, "execute", json!({"command": "count.get"}));
+    assert_eq!(r["isError"], true);
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("counter --control"), "{r}");
+    let (app, rx) = Server::start(Config::new(port, dir.path()), || {}).unwrap();
+    app_thread(rx);
+    let r = call(&mut server, 2, "execute", json!({"command": "count.add", "params": {"by": 3}}));
+    assert_eq!((r["isError"].clone(), r["content"][0]["text"].clone()), (json!(false), json!("3")));
+    drop(app);
+}
+
 fn worker() -> PathBuf {
     // tests run from target/<profile>/deps; cargo builds examples into target/<profile>/examples.
     let exe = std::env::current_exe().unwrap();

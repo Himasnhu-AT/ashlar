@@ -3,6 +3,7 @@
 //!
 //! - [`Backend::Headless`]: an in-process session (any [`ashlar_command::Dispatch`]);
 //! - [`Backend::Remote`]: a running app through its control port (adds screenshots and UI input);
+//!   [`Backend::App`] the same, connected on first use so the server can start before the app;
 //! - [`Backend::Subprocess`]: a child process serving the control protocol on stdio, so a command
 //!   that crashes takes down the child, not the server.
 //!
@@ -25,7 +26,7 @@ mod calls;
 mod server;
 pub mod tools;
 
-pub use backend::{Backend, Subprocess};
+pub use backend::{AppPort, Backend, Subprocess};
 pub use calls::{PendingCall, ToolCx, ToolOutcome};
 pub use server::{LATEST_PROTOCOL_VERSION, MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
 pub use tools::{Access, ToolMode, ToolResult};

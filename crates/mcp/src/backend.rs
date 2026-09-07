@@ -17,6 +17,9 @@ pub enum Backend {
     Headless(Box<dyn Dispatch>),
     /// A running app through its control port: standard and `ui.*` methods.
     Remote(Client),
+    /// A running app reached on first use (and again after it restarts), so the MCP server can
+    /// start before the app: until then each call says how to start it.
+    App(AppPort),
     /// A child process speaking the control protocol on stdin/stdout (`<app>-cli serve`): a crash
     /// in a command kills the child, not the MCP server; the next call starts a fresh one.
     Subprocess(Subprocess),
@@ -34,6 +37,7 @@ impl Backend {
         match self {
             Backend::Headless(d) => ashlar_control::answer(method, params, d.as_mut(), &mut NoUi, app),
             Backend::Remote(c) => c.request(method, params).unwrap_or_else(|e| Reply::err(format!("the app is not reachable: {e}"))),
+            Backend::App(a) => a.call(method, params),
             Backend::Subprocess(s) => s.call(method, params),
         }
     }
@@ -43,7 +47,47 @@ impl Backend {
         match self {
             Backend::Headless(_) => "headless session (no window)".into(),
             Backend::Remote(c) => format!("the running app on 127.0.0.1:{}", c.port()),
+            Backend::App(a) => format!("the running app on 127.0.0.1:{}", a.port),
             Backend::Subprocess(s) => format!("a worker process ({})", s.program.display()),
+        }
+    }
+}
+
+/// A running app's control port, connected on first use.
+pub struct AppPort {
+    port: u16,
+    key_dir: PathBuf,
+    /// How to start the app with its control port, for the error when nothing answers.
+    hint: String,
+    client: Option<Client>,
+}
+
+impl AppPort {
+    /// The app on `127.0.0.1:port` whose control key is in `key_dir`; `hint` tells a user how to
+    /// start it (`start the app with \`notes --control 9876\``).
+    pub fn new(port: u16, key_dir: impl Into<PathBuf>, hint: impl Into<String>) -> Self {
+        Self { port, key_dir: key_dir.into(), hint: hint.into(), client: None }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Reply {
+        let client = match self.client.as_mut() {
+            Some(c) => c,
+            None => match Client::connect(self.port, &self.key_dir) {
+                Ok(c) => self.client.insert(c),
+                Err(e) => return Reply::err(format!("cannot reach the app on 127.0.0.1:{} ({e}); {}", self.port, self.hint)),
+            },
+        };
+        match client.request(method, params) {
+            Ok(r) => r,
+            Err(e) => {
+                // the app went away: connect again on the next call
+                self.client = None;
+                Reply::err(format!("the app is not reachable: {e}; {}", self.hint))
+            }
         }
     }
 }
