@@ -27,5 +27,5 @@ pub mod tools;
 
 pub use backend::{Backend, Subprocess};
 pub use calls::{PendingCall, ToolCx, ToolOutcome};
-pub use server::{MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
+pub use server::{LATEST_PROTOCOL_VERSION, MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
 pub use tools::{Access, ToolMode, ToolResult};

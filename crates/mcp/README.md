@@ -4,8 +4,11 @@ A stdio MCP server (JSON-RPC 2.0, hand-rolled, no async runtime) generated from 
 Requests are handled one at a time, in order; a reader thread answers `ping` and takes
 cancellations while one runs.
 
-- **Protocol:** `initialize` with version negotiation (2025-06-18, 2025-03-26, 2024-11-05; anything
-  else gets the newest), `ping` (answered even while a call runs), `tools/list`, `tools/call`,
+- **Protocol:** 2026-07-28 without a handshake (each request names its version and client
+  capabilities in `_meta`; `server/discover`; `resultType` on results and `ttlMs`/`cacheScope` on
+  lists and reads, the list TTL from `ServerOptions::list_ttl_ms`; unsupported versions get
+  `-32022`), and `initialize` with version negotiation (2025-06-18, 2025-03-26, 2024-11-05;
+  anything else, 2026-07-28 included, gets 2025-06-18 and the old result shapes), `ping` (answered even while a call runs), `tools/list`, `tools/call`,
   `resources/list` / `resources/read` (`app://info`, `app://commands`, and `app://ui/snapshot` when
   the backend draws a UI), `notifications/cancelled` (a cancelled request gets no response; a
   stepwise batch stops before its next step), `notifications/progress` for a `batch` called with a

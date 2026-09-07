@@ -18,9 +18,20 @@ use crate::backend::Backend;
 use crate::calls::{PendingCall, ToolCx, ToolOutcome};
 use crate::tools::{self, Access, ToolMode, ToolResult};
 
-/// The newest MCP revision implemented; older ones are accepted when a client asks for them.
+/// The newest MCP revision answered through the `initialize` handshake.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
-pub const SUPPORTED_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
+/// The newest revision implemented: no `initialize`; each request names its version and client
+/// capabilities in `_meta`, `server/discover` describes the server, and list and read results
+/// carry `resultType` and cache hints.
+pub const LATEST_PROTOCOL_VERSION: &str = "2026-07-28";
+/// Revisions from this one on have no `initialize` handshake.
+const NO_INITIALIZE: &str = "2026-07-28";
+pub const SUPPORTED_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
+
+/// Request `_meta` keys of the newer revisions.
+const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
 /// Longest accepted message line.
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
@@ -30,6 +41,7 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const RESOURCE_NOT_FOUND: i64 = -32002;
+const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 
 /// Most cancellations remembered for requests that have not arrived or finished yet.
 const MAX_CANCELLED: usize = 1024;
@@ -50,11 +62,27 @@ pub struct ServerOptions {
     /// Refuse a tool call with an argument its input schema does not list (JSON-RPC
     /// `-32602`), instead of passing it on to be ignored.
     pub strict_arguments: bool,
+    /// How long (ms) a client on a revision with cache hints may keep `tools/list` and
+    /// `resources/list` results (0: always ask again).
+    pub list_ttl_ms: u64,
 }
 
 impl ServerOptions {
     pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self { name: name.into(), title: None, version: version.into(), instructions: String::new(), tools: ToolMode::Fixed, strict_arguments: false }
+        Self {
+            name: name.into(),
+            title: None,
+            version: version.into(),
+            instructions: String::new(),
+            tools: ToolMode::Fixed,
+            strict_arguments: false,
+            list_ttl_ms: 0,
+        }
+    }
+
+    pub fn list_ttl_ms(mut self, ms: u64) -> Self {
+        self.list_ttl_ms = ms;
+        self
     }
 
     pub fn strict_arguments(mut self, on: bool) -> Self {
@@ -103,6 +131,8 @@ type ExecuteHook = Box<dyn FnMut(&str, &Value, &mut ToolCx<'_>) -> Option<ToolOu
 /// A tool call answered later.
 struct Pending {
     id: Value,
+    /// Answered on a revision with `resultType` (the response is decorated).
+    modern: bool,
     key: String,
     token: Option<Value>,
     last: f64,
@@ -143,6 +173,11 @@ fn response(id: Value, result: Value) -> Value {
 
 fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
+}
+
+/// Whether a revision has no `initialize` handshake (the date strings sort in order).
+fn without_initialize(version: &str) -> bool {
+    version >= NO_INITIALIZE
 }
 
 type RpcResult = Result<Value, (i64, String)>;
@@ -332,6 +367,38 @@ impl McpServer {
         if !valid_id {
             return Some(error(Value::Null, INVALID_REQUEST, "`id` must be a string or an integer"));
         }
+        // the newer revisions name their version and client capabilities on every request
+        let meta = params.get("_meta");
+        let version = meta.and_then(|m| m.get(META_VERSION)).and_then(Value::as_str).map(str::to_string);
+        let modern = match version.as_deref() {
+            Some(v) if without_initialize(v) || method == "server/discover" => {
+                let mut missing = Vec::new();
+                if meta.and_then(|m| m.get(META_CLIENT_CAPABILITIES)).is_none_or(|c| !c.is_object()) {
+                    missing.push(META_CLIENT_CAPABILITIES);
+                }
+                if !missing.is_empty() {
+                    return Some(error(
+                        id,
+                        INVALID_PARAMS,
+                        format!("request _meta is missing or has malformed required fields: {}", missing.join(", ")),
+                    ));
+                }
+                if method != "server/discover" && !SUPPORTED_VERSIONS.contains(&v) {
+                    let mut e = error(id, UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version");
+                    e["error"]["data"] = json!({"requested": v, "supported": SUPPORTED_VERSIONS});
+                    return Some(e);
+                }
+                without_initialize(v)
+            }
+            _ if method == "server/discover" => {
+                return Some(error(
+                    id,
+                    INVALID_PARAMS,
+                    format!("request _meta is missing or has malformed required fields: {META_VERSION}, {META_CLIENT_CAPABILITIES}"),
+                ));
+            }
+            _ => false,
+        };
         // a cancelled request gets no response, whether it was cancelled before or while it ran
         let key = id.to_string();
         if self.take_cancelled(&key) {
@@ -344,7 +411,7 @@ impl McpServer {
                 Ok(CallOutcome::Later(call)) => {
                     self.current = None;
                     let token = progress_token(&params).cloned();
-                    self.pending.push(Pending { id: id.clone(), key, token, last: f64::NEG_INFINITY, call });
+                    self.pending.push(Pending { id: id.clone(), modern, key, token, last: f64::NEG_INFINITY, call });
                     // served: the loop polls it; handled directly: finish it here
                     return if self.notify.is_some() { None } else { self.finish_pending() };
                 }
@@ -358,9 +425,52 @@ impl McpServer {
             return None;
         }
         Some(match r {
-            Ok(r) => response(id, r),
+            Ok(r) => response(id, if modern { self.decorate(method, r) } else { r }),
             Err((code, m)) => error(id, code, m),
         })
+    }
+
+    /// A result as the newer revisions want it: `resultType`, and cache hints on lists and reads.
+    fn decorate(&self, method: &str, mut r: Value) -> Value {
+        let cacheable = matches!(method, "tools/list" | "resources/list" | "resources/templates/list" | "resources/read" | "prompts/list");
+        if !cacheable && method != "tools/call" && method != "prompts/get" {
+            return r;
+        }
+        if let Some(o) = r.as_object_mut() {
+            o.entry("resultType").or_insert(json!("complete"));
+            if cacheable {
+                let ttl = if method.ends_with("/list") { self.opts.list_ttl_ms } else { 0 };
+                o.entry("ttlMs").or_insert(json!(ttl));
+                o.entry("cacheScope").or_insert(json!("private"));
+            }
+        }
+        r
+    }
+
+    /// `server/discover`: what an initialize result says, for clients without the handshake.
+    fn discover(&mut self) -> Value {
+        let mut info = json!({"name": self.opts.name, "version": self.opts.version});
+        if let Some(t) = &self.opts.title {
+            info["title"] = json!(t);
+        }
+        json!({
+            "resultType": "complete",
+            "supportedVersions": SUPPORTED_VERSIONS,
+            "capabilities": self.capabilities(),
+            "instructions": self.instructions(),
+            "ttlMs": 0,
+            "cacheScope": "private",
+            "_meta": {META_SERVER_INFO: info},
+        })
+    }
+
+    fn capabilities(&self) -> Value {
+        json!({"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}})
+    }
+
+    fn instructions(&self) -> String {
+        let base = if self.opts.instructions.is_empty() { DEFAULT_INSTRUCTIONS } else { self.opts.instructions.as_str() };
+        format!("{base} Backend: {}.", self.backend.describe())
     }
 
     fn notification(&mut self, method: &str) {
@@ -373,6 +483,7 @@ impl McpServer {
     fn request(&mut self, method: &str, params: &Value) -> RpcResult {
         match method {
             "initialize" => Ok(self.initialize(params)),
+            "server/discover" => Ok(self.discover()),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": self.list_tools()})),
             "resources/list" => Ok(json!({"resources": self.list_resources()})),
@@ -383,18 +494,18 @@ impl McpServer {
     }
 
     fn initialize(&mut self, params: &Value) -> Value {
+        // the handshake only answers revisions that have one; a newer client falls back to it
         let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
-        let version = SUPPORTED_VERSIONS.iter().find(|v| **v == asked).copied().unwrap_or(PROTOCOL_VERSION);
+        let version = SUPPORTED_VERSIONS.iter().find(|v| **v == asked && !without_initialize(v)).copied().unwrap_or(PROTOCOL_VERSION);
         let mut info = json!({"name": self.opts.name, "version": self.opts.version});
         if let Some(t) = &self.opts.title {
             info["title"] = json!(t);
         }
-        let base = if self.opts.instructions.is_empty() { DEFAULT_INSTRUCTIONS } else { self.opts.instructions.as_str() };
         json!({
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}},
+            "capabilities": self.capabilities(),
             "serverInfo": info,
-            "instructions": format!("{base} Backend: {}.", self.backend.describe()),
+            "instructions": self.instructions(),
         })
     }
 
@@ -457,7 +568,8 @@ impl McpServer {
                     let p = self.pending.remove(i);
                     self.take_cancelled(&p.key);
                     if let Some(r) = result {
-                        out.push(response(p.id, r.to_value()).to_string());
+                        let v = if p.modern { self.decorate("tools/call", r.to_value()) } else { r.to_value() };
+                        out.push(response(p.id, v).to_string());
                     }
                 }
             }
