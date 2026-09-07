@@ -72,6 +72,7 @@ pub struct Toasts {
     max_visible: usize,
     corner: Corner,
     width: f32,
+    inset: Vec2,
     last_time: Option<f64>,
 }
 
@@ -86,7 +87,16 @@ pub const MAX_TEXT: usize = 2000;
 
 impl Toasts {
     pub fn new() -> Self {
-        Toasts { entries: VecDeque::new(), next_id: 1, capacity: 32, max_visible: 4, corner: Corner::default(), width: 320.0, last_time: None }
+        Toasts {
+            entries: VecDeque::new(),
+            next_id: 1,
+            capacity: 32,
+            max_visible: 4,
+            corner: Corner::default(),
+            width: 320.0,
+            inset: Vec2::ZERO,
+            last_time: None,
+        }
     }
     /// Keep at most `capacity` toasts (the oldest are dropped first).
     pub fn capacity(mut self, capacity: usize) -> Self {
@@ -99,6 +109,13 @@ impl Toasts {
     }
     pub fn corner(mut self, corner: Corner) -> Self {
         self.corner = corner;
+        self
+    }
+    /// Keep the stack this far (in points) further from its corner's edges than the usual margin,
+    /// clear of a status bar or a toolbar. Negative or non-finite parts count as zero.
+    pub fn inset(mut self, inset: Vec2) -> Self {
+        let clean = |v: f32| if v.is_finite() { v.clamp(0.0, 10_000.0) } else { 0.0 };
+        self.inset = Vec2::new(clean(inset.x), clean(inset.y));
         self
     }
     pub fn width(mut self, width: f32) -> Self {
@@ -184,8 +201,8 @@ impl Toasts {
         for entry in self.entries.iter_mut().take(visible) {
             let area_id = Id::new(("ashlar_ui::toast", entry.id));
             let y = if down { offset } else { -offset };
-            let x = if matches!(anchor, Align2::RIGHT_TOP | Align2::RIGHT_BOTTOM) { -margin } else { margin };
-            let y_margin = if down { margin } else { -margin };
+            let x = if matches!(anchor, Align2::RIGHT_TOP | Align2::RIGHT_BOTTOM) { -margin - self.inset.x } else { margin + self.inset.x };
+            let y_margin = if down { margin + self.inset.y } else { -margin - self.inset.y };
             let area = egui::Area::new(area_id).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(true);
             let mut hovered = false;
             let inner = area.show(ctx, |ui| {
@@ -295,6 +312,29 @@ mod tests {
         assert!(q.texts().last().unwrap().len() <= MAX_TEXT + 3);
         assert!(q.dismiss(id));
         assert!(!q.dismiss(id));
+    }
+
+    #[test]
+    fn inset_keeps_the_stack_clear_of_the_edges() {
+        let shown = |toasts: Toasts| {
+            let mut h = Harness::builder().with_size(vec2(600.0, 400.0)).build_ui_state(|ui, q: &mut Toasts| q.show(ui.ctx()), toasts);
+            automation::install(&h.ctx);
+            h.state_mut().info("Saved");
+            // an area is measured on its first frame and placed on the next
+            h.step();
+            h.step();
+            automation::query(&h.ctx, "toast.")
+                .into_iter()
+                .find(|e| e.label == "Saved")
+                .map(|e| (e.rect[0] + e.rect[2], e.rect[1] + e.rect[3]))
+                .unwrap()
+        };
+        let plain = shown(Toasts::new());
+        let inset = shown(Toasts::new().inset(vec2(10.0, 30.0)));
+        assert!((plain.0 - inset.0 - 10.0).abs() < 0.5, "{plain:?} {inset:?}");
+        assert!((plain.1 - inset.1 - 30.0).abs() < 0.5, "{plain:?} {inset:?}");
+        let hostile = shown(Toasts::new().inset(vec2(f32::NAN, -50.0)));
+        assert_eq!(hostile, plain);
     }
 
     #[test]
