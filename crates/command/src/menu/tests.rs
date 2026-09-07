@@ -141,6 +141,35 @@ fn a_bar_is_mirrored_from_commands() {
     assert!(spec.validate().is_ok());
 }
 
+#[test]
+fn a_bar_is_built_from_items_with_paths_keeping_check_marks() {
+    let path = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let deep: Vec<String> = (0..20).map(|i| format!("m{i}")).collect();
+    let entries = vec![
+        (path(&["Ansicht"]), Item::new("view.grid", "Raster").checked(true)),
+        (path(&["Datei"]), Item::new("file.save", "Sichern").accelerator("Mod+S")),
+        (path(&[]), Item::new("hidden", "Hidden")),
+        (path(&["Datei", "Export"]), Item::new("file.export.png", "PNG").enabled(false)),
+        (deep, Item::new("deep", "Deep")),
+    ];
+    let spec = MenuSpec::from_items(entries, &["Datei", "Ansicht"]);
+    let tops: Vec<&str> = spec.menus.iter().map(|m| m.label.as_str()).collect();
+    assert_eq!(tops, ["Datei", "Ansicht", "m0"]);
+    assert_eq!(spec.find("view.grid").and_then(|i| i.checked), Some(true));
+    assert_eq!(spec.find("file.export.png").map(|i| i.enabled), Some(false));
+    assert!(spec.find("hidden").is_none());
+    assert!(spec.find("deep").is_some());
+    assert!(spec.validate().is_ok(), "{:?}", spec.validate());
+    // the same as mirroring commands with those paths
+    let mirrored = MenuSpec::from_commands(&commands(), &["File"]);
+    let rebuilt = MenuSpec::from_items(
+        commands().iter().map(|c| (c.menu.clone(), mirrored.find(&c.id).cloned().unwrap_or_else(|| Item::new("x", "x")))),
+        &["File"],
+    );
+    assert_eq!(rebuilt.items(), mirrored.items());
+    assert_eq!(rebuilt.structure_hash(), mirrored.structure_hash());
+}
+
 fn info(id: &str, label: &str, menu: &[&str], shortcut: Option<&str>, enabled: bool) -> CommandInfo {
     CommandInfo {
         id: id.into(),

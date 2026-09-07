@@ -1,6 +1,7 @@
 //! The `muda` backend of [`super::MenuSpec`]: macOS (the app's menu bar) and Windows (a window's
 //! menu bar).
 
+use std::cell::Cell;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use muda::accelerator::Accelerator as MudaAccelerator;
@@ -20,7 +21,9 @@ enum Handle {
 pub struct NativeMenuBar {
     menu: Menu,
     structure: u64,
-    state: u64,
+    /// The state last pushed to the OS; reset by an activation, because the OS flips a check
+    /// item's mark itself when it is chosen and the app may not follow (the command failed).
+    state: Cell<u64>,
     handles: Vec<(Vec<usize>, Handle)>,
     events: Receiver<String>,
 }
@@ -141,7 +144,7 @@ impl NativeMenuBar {
                     waker();
                 }
             }));
-            let mut bar = Self { menu: Menu::new(), structure: 0, state: 0, handles: vec![], events: rx };
+            let mut bar = Self { menu: Menu::new(), structure: 0, state: Cell::new(0), handles: vec![], events: rx };
             bar.rebuild(spec)?;
             #[cfg(target_os = "macos")]
             bar.menu.init_for_nsapp();
@@ -181,7 +184,7 @@ impl NativeMenuBar {
             crate::guarded("the menu bar", || self.rebuild(spec))?;
             return Ok(Update::Rebuilt);
         }
-        if state == self.state {
+        if state == self.state.get() {
             return Ok(Update::Unchanged);
         }
         require_main_thread()?;
@@ -189,18 +192,28 @@ impl NativeMenuBar {
             self.patch(spec);
             Ok(())
         })?;
-        self.state = state;
+        self.state.set(state);
         Ok(Update::Patched)
     }
 
     /// The next activated item id, if any.
     pub fn try_recv(&self) -> Option<String> {
-        self.events.try_recv().ok()
+        let id = self.events.try_recv().ok();
+        if id.is_some() {
+            self.state.set(0);
+        }
+        id
     }
 
-    /// Every activated item id since the last call, oldest first.
+    /// Every activated item id since the last call, oldest first. After an activation the next
+    /// [`Self::update`] pushes the state again, so a check mark the OS flipped shows the app's
+    /// state, not the click.
     pub fn drain(&self) -> Vec<String> {
-        self.events.try_iter().take(1024).collect()
+        let ids: Vec<String> = self.events.try_iter().take(1024).collect();
+        if !ids.is_empty() {
+            self.state.set(0);
+        }
+        ids
     }
 
     fn rebuild(&mut self, spec: &MenuSpec) -> Result<()> {
@@ -215,7 +228,7 @@ impl NativeMenuBar {
             self.handles.push((vec![i], Handle::Submenu(sub)));
         }
         self.structure = spec.structure_hash();
-        self.state = spec.state_hash();
+        self.state.set(spec.state_hash());
         Ok(())
     }
 
