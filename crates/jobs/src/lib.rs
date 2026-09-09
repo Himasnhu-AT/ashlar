@@ -259,6 +259,17 @@ impl<S> Inbox<S> {
         lock(&self.items).push_back((id, outcome));
         self.cv.notify_all();
     }
+
+    /// A job's last outcome: queued and the job marked [`Status::Ready`] under the inbox lock, so
+    /// whoever checks statuses while holding it ([`Jobs::wait_all`]) sees the outcome as soon as it
+    /// sees the job finished, never a finished job with nothing in the inbox yet.
+    fn finish(&self, id: JobId, outcome: Outcome<S>, shared: &Shared) {
+        let mut items = lock(&self.items);
+        items.push_back((id, outcome));
+        shared.set_status(Status::Ready);
+        drop(items);
+        self.cv.notify_all();
+    }
 }
 
 struct Entry {
@@ -594,8 +605,7 @@ impl<S: 'static> Jobs<S> {
                     Outcome::Failed(format!("internal error ({msg}); the job was stopped"))
                 }
             };
-            shared.set_status(Status::Ready);
-            inbox.push(id, outcome);
+            inbox.finish(id, outcome, &shared);
             shared.wake();
         };
         match &mut self.pool {
@@ -680,8 +690,7 @@ impl<S: 'static> Jobs<S> {
             let progress = Progress { shared: job.shared.clone() };
             for _ in 0..steps {
                 if job.shared.cancel.is_cancelled() {
-                    job.shared.set_status(Status::Ready);
-                    inbox.push(job.id, Outcome::Cancelled);
+                    inbox.finish(job.id, Outcome::Cancelled, &job.shared);
                     return false;
                 }
                 let outcome = match catch_unwind(AssertUnwindSafe(|| (job.step)(&progress))) {
@@ -695,8 +704,7 @@ impl<S: 'static> Jobs<S> {
                     Err(p) => Outcome::Failed(format!("internal error ({}); the job was stopped", panic_message(p.as_ref()))),
                 };
                 worked = true;
-                job.shared.set_status(Status::Ready);
-                inbox.push(job.id, outcome);
+                inbox.finish(job.id, outcome, &job.shared);
                 return false;
             }
             true
