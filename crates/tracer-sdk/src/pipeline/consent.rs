@@ -11,8 +11,10 @@ use super::files::{lock, read_json, write_json};
 
 pub(super) const CONSENT_FILE: &str = "consent.json";
 
-/// Environment variables that switch the SDK off for the whole process.
-const KILL_SWITCHES: [&str; 2] = ["DO_NOT_TRACK", "TRACER_DISABLED"];
+/// The end user's switch, honoured unless the host turns that off ([`crate::Config::honor_do_not_track`]).
+const DO_NOT_TRACK: &str = "DO_NOT_TRACK";
+/// The developer's switch (dev machines, CI): always honoured.
+const TRACER_DISABLED: &str = "TRACER_DISABLED";
 
 /// Content of `consent.json`. A missing field means allowed: the model is opt-out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,9 +190,16 @@ fn bit(category: ConsentCategory) -> u8 {
     }
 }
 
-/// True when `DO_NOT_TRACK` or `TRACER_DISABLED` is set to anything other than empty, `0` or `false`.
-pub(super) fn kill_switch() -> bool {
-    KILL_SWITCHES.iter().any(|name| std::env::var_os(name).is_some_and(|value| switch_on(&value.to_string_lossy())))
+/// True when `TRACER_DISABLED`, or `DO_NOT_TRACK` while `honor_do_not_track` is set, is set to anything
+/// other than empty, `0` or `false`.
+pub(super) fn kill_switch(honor_do_not_track: bool) -> bool {
+    killed_by(|name| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned()), honor_do_not_track)
+}
+
+/// [`kill_switch`] with the environment read through `env`.
+fn killed_by(env: impl Fn(&str) -> Option<String>, honor_do_not_track: bool) -> bool {
+    let on = |name: &str| env(name).is_some_and(|value| switch_on(&value));
+    on(TRACER_DISABLED) || (honor_do_not_track && on(DO_NOT_TRACK))
 }
 
 fn switch_on(value: &str) -> bool {
@@ -202,6 +211,32 @@ fn switch_on(value: &str) -> bool {
 mod tests {
     use super::super::files::testing::TempDir;
     use super::*;
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| pairs.iter().find(|(n, _)| *n == name).map(|(_, v)| (*v).to_owned())
+    }
+
+    #[test]
+    fn do_not_track_is_honoured_by_default() {
+        assert!(killed_by(env(&[("DO_NOT_TRACK", "1")]), true));
+        assert!(!killed_by(env(&[("DO_NOT_TRACK", "0")]), true));
+        assert!(!killed_by(env(&[]), true));
+    }
+
+    #[test]
+    fn do_not_track_is_ignored_when_the_host_says_so() {
+        assert!(!killed_by(env(&[("DO_NOT_TRACK", "1")]), false));
+        assert!(!killed_by(env(&[("DO_NOT_TRACK", "true")]), false));
+    }
+
+    #[test]
+    fn tracer_disabled_is_always_honoured() {
+        for honor in [true, false] {
+            assert!(killed_by(env(&[("TRACER_DISABLED", "1")]), honor), "{honor}");
+            assert!(killed_by(env(&[("TRACER_DISABLED", "yes"), ("DO_NOT_TRACK", "0")]), honor), "{honor}");
+            assert!(!killed_by(env(&[("TRACER_DISABLED", "false")]), honor), "{honor}");
+        }
+    }
 
     #[test]
     fn kill_switch_values() {

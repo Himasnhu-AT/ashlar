@@ -277,6 +277,7 @@ self.tracer.forget();
 - `set_consent(category, false)` takes effect at once and deletes that category's unsent items from the spool. The choice is saved and survives restarts. Other running processes of the same host pick it up within a tick.
 - `forget()` deletes everything stored locally, sends a request asking the server to delete the old install's data (retried on the next launch if the server is unreachable), and issues a new install id.
 - `DO_NOT_TRACK` set to anything but empty, `0` or `false`, or `TRACER_DISABLED` set the same way, turns everything off for that process: nothing is written to disk, no folder is created, no request is made, and the consent file is not changed. Document this for your users.
+- A host whose telemetry is not optional can build with `.honor_do_not_track(false)`: `DO_NOT_TRACK` is then ignored. `TRACER_DISABLED` is always honoured, so developers and CI can still switch the SDK off. If you do this, say so plainly in your own privacy text: users who set `DO_NOT_TRACK` expect it to work.
 
 ## 10. Inspect mode and the local report
 

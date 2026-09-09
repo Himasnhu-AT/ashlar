@@ -96,6 +96,13 @@ impl Builder {
         self
     }
 
+    /// Whether `DO_NOT_TRACK` in the environment switches the SDK off (the default, `true`). A host
+    /// whose telemetry is not optional sets `false`; `TRACER_DISABLED` still switches it off.
+    pub fn honor_do_not_track(mut self, honor: bool) -> Self {
+        self.config.honor_do_not_track = honor;
+        self
+    }
+
     /// Replaces the set of built-in signals. All are on by default.
     pub fn signals(mut self, signals: &[Signal]) -> Self {
         self.config.signals = signals.to_vec();

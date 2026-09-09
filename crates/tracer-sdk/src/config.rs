@@ -42,6 +42,8 @@ pub struct Config {
     /// Send before the host has called [`crate::Tracer::notice_shown`]. Off by default: data is recorded
     /// and kept on disk, but nothing leaves the machine until the user has seen the notice.
     pub send_before_notice: bool,
+    /// Honour `DO_NOT_TRACK` in the environment (on by default). `TRACER_DISABLED` is always honoured.
+    pub honor_do_not_track: bool,
 
     /// Items the in-memory queue holds before dropping.
     pub queue_capacity: usize,
@@ -96,6 +98,7 @@ impl Config {
             logger: LoggerMode::None,
             inspect: false,
             send_before_notice: false,
+            honor_do_not_track: true,
             queue_capacity: 1024,
             batch_items: 50,
             flush_interval: Duration::from_secs(60),

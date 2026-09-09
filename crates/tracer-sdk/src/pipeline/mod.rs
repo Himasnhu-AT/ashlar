@@ -498,7 +498,7 @@ pub(crate) struct Pipeline {
 impl Pipeline {
     /// Starts the worker thread and opens the session. `transport` overrides the built-in HTTP client.
     pub(crate) fn start(config: &Config, transport: Option<Box<dyn Transport>>) -> Arc<Self> {
-        Self::start_with(config, transport, consent::kill_switch(), true)
+        Self::start_with(config, transport, consent::kill_switch(config.honor_do_not_track), true)
     }
 
     /// `killed` is the state of the kill switches. Without `spawn_worker` nothing drains the queue, which
