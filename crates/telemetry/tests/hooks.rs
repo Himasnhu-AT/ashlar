@@ -3,46 +3,25 @@
 //! frames, the hang watchdog and its pause around native dialogs, an old opt-out overridden, and
 //! no endpoint meaning no client at all.
 
-use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use ashlar_command::{CommandError, CommandSpec, Host, Journal, Registry};
-use ashlar_telemetry::sdk::proto::{Envelope, ItemBody};
-use ashlar_telemetry::sdk::transport::{Reply, Request, Transport, TransportError};
+use ashlar_telemetry::sdk::proto::ItemBody;
 use ashlar_telemetry::sdk::{ConsentCategory, Tracer};
-use ashlar_telemetry::{Off, Target, Telemetry, TelemetryConfig};
+use ashlar_telemetry::testing::{self, Recorder};
+use ashlar_telemetry::{Off, Telemetry, TelemetryConfig};
 use serde_json::{Value, json};
 
-/// Records every envelope the SDK sends.
-#[derive(Clone, Default)]
-struct Fake {
-    sent: Arc<Mutex<Vec<Envelope>>>,
+type Fake = Recorder;
+
+trait Events {
+    fn events_with_props(&self) -> Vec<(String, Value)>;
 }
 
-impl Transport for Fake {
-    fn send(&mut self, r: &Request<'_>) -> Result<Reply, TransportError> {
-        let mut body = r.body.to_vec();
-        if r.gzip {
-            body.clear();
-            flate2::read::GzDecoder::new(r.body).read_to_end(&mut body).map_err(|e| TransportError::Network(e.to_string()))?;
-        }
-        if let Ok(env) = serde_json::from_slice::<Envelope>(&body) {
-            self.sent.lock().unwrap().push(env);
-        }
-        Ok(Reply { status: 200, body: br#"{"accepted":1}"#.to_vec(), retry_after: None })
-    }
-}
-
-impl Fake {
-    fn items(&self) -> Vec<ItemBody> {
-        self.sent.lock().unwrap().iter().flat_map(|e| e.items.iter().map(|i| i.body.clone())).collect()
-    }
-    fn types(&self) -> Vec<&'static str> {
-        self.items().iter().map(ItemBody::type_name).collect()
-    }
-    fn events(&self) -> Vec<(String, Value)> {
+impl Events for Recorder {
+    fn events_with_props(&self) -> Vec<(String, Value)> {
         self.items()
             .into_iter()
             .filter_map(|b| match b {
@@ -58,16 +37,7 @@ fn cfg() -> TelemetryConfig {
 }
 
 fn client(dir: &Path, fake: &Fake, hang_ms: u64) -> Telemetry {
-    let target = Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_test".into(), host: "127.0.0.1".into() };
-    let t = Telemetry::with_transport(&cfg(), &target, dir, fake.clone(), |c| {
-        c.tick_interval = Duration::from_millis(10);
-        c.flush_interval = Duration::from_millis(20);
-        c.heartbeat_interval = Duration::from_millis(50);
-        c.perf_window = Duration::from_millis(50);
-        c.retry_min = Duration::from_millis(10);
-        c.retry_max = Duration::from_millis(20);
-        c.hang_threshold = Duration::from_millis(hang_ms);
-    });
+    let t = testing::client(&cfg(), dir, fake, Duration::from_millis(hang_ms));
     assert!(t.is_enabled() && t.status().active && t.status().server.as_deref() == Some("127.0.0.1"));
     t
 }
@@ -131,7 +101,7 @@ fn commands_saves_frames_and_logs_are_sent_with_no_interaction() {
     for want in ["session_start", "event", "perf", "crash"] {
         assert!(types.contains(&want), "{want} missing from {types:?}");
     }
-    let events = fake.events();
+    let events = fake.events_with_props();
     let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
     for want in ["command.run", "doc.edit", "doc.save", "doc.fail", "view.zoom_in", "app.document_saved"] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
@@ -140,6 +110,7 @@ fn commands_saves_frames_and_logs_are_sent_with_no_interaction() {
     assert_eq!(runs.iter().filter(|p| p["id"] == "view.zoomIn").count(), 2, "five quick runs fold into one, then one more");
     assert!(runs.iter().any(|p| p["id"] == "view.zoomIn" && p["repeats"] == 4), "{runs:?}");
     assert!(runs.iter().any(|p| p["id"] == "doc.fail" && p["ok"] == false));
+    assert!(events.iter().any(|(n, p)| n == "app.document_saved" && p["kind"] == "doc.save"), "the save says which command saved");
     let all = serde_json::to_string(&fake.items()).unwrap();
     assert!(!all.contains("secret.txt") && !all.contains("typed") && !all.contains("Trip.mov"), "no params or paths: {all}");
     let crash = fake.items().into_iter().find_map(|b| if let ItemBody::Crash(c) = b { Some(c) } else { None }).unwrap();
@@ -163,7 +134,7 @@ impl log::Log for Keep {
 fn an_old_opt_out_is_overridden_from_the_first_item() {
     let dir = tempfile::tempdir().unwrap();
     // an earlier build: the notice never closed, every category switched off
-    let old = Tracer::builder("tk_test", "demo", "0.1.0").data_dir(dir.path()).transport(Fake::default()).init();
+    let old = Tracer::builder("tk_test", "demo", "0.1.0").data_dir(dir.path()).transport(Recorder::default()).init();
     for cat in [ConsentCategory::Crash, ConsentCategory::Performance, ConsentCategory::Usage] {
         old.set_consent(cat, false);
     }
@@ -214,4 +185,27 @@ fn no_endpoint_means_no_client_and_no_network() {
     t.command("doc.edit", true, Duration::from_millis(1));
     t.quit();
     assert!(!dir.path().join("tracer").exists(), "nothing recorded");
+}
+
+/// What the frame hooks cost per frame (two turns, focus and input, the frame time), enabled and
+/// disabled. `cargo test -p ashlar-telemetry --release --test hooks frame_hooks_cost -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark"]
+fn frame_hooks_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    let on = client(dir.path(), &Fake::default(), 2000);
+    let off = Telemetry::off(Off::NoEndpoint);
+    for (name, t) in [("on", &on), ("off", &off)] {
+        let n = 1_000_000u32;
+        let started = std::time::Instant::now();
+        for i in 0..n {
+            t.begin_turn();
+            t.input(true, i % 4 == 0);
+            t.end_turn();
+            t.begin_turn();
+            t.frame(Duration::from_micros(800));
+            t.end_turn();
+        }
+        println!("telemetry {name}: {:.0} ns per frame", started.elapsed().as_nanos() as f64 / f64::from(n));
+    }
 }

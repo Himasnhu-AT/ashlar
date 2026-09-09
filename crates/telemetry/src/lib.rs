@@ -25,6 +25,8 @@
 
 mod fold;
 mod redact;
+#[cfg(feature = "testing")]
+pub mod testing;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
@@ -57,7 +59,7 @@ ashlar_trace::events! {
         /// A top-level command ran: `id` (the registered id), `ok`, `ms`, `repeats` (runs of the
         /// same id folded into this one, see [`REPEAT_WINDOW`]).
         CommandRun = "command.run" in Command,
-        /// A document was saved.
+        /// A document was saved: `kind` (the save command's id, when a command saved), `ms`.
         DocumentSaved = "app.document_saved" in App,
     }
 }
@@ -332,11 +334,11 @@ impl Telemetry {
             self.tracer.track_id(Category::Command, name);
         }
         if run.ok && self.save_commands.contains(&run.id) {
-            self.saved();
+            self.tracer.track_with(AppEvent::DocumentSaved, &[("kind", Prop::Str(run.id)), ("ms", Prop::Float(ms))]);
         }
     }
 
-    /// A document was saved.
+    /// A document was saved (not through one of [`TelemetryConfig::save_commands`]).
     pub fn saved(&self) {
         self.tracer.track(AppEvent::DocumentSaved);
     }
@@ -354,6 +356,16 @@ impl Telemetry {
     /// is reported as a hang. Ends when the guard is dropped.
     pub fn turn(&self) -> TurnGuard {
         self.tracer.turn()
+    }
+
+    /// [`Telemetry::turn`] without the guard, for loops that open and close turns in different
+    /// callbacks. A second `begin_turn` keeps the first start; `end_turn` without one does nothing.
+    pub fn begin_turn(&self) {
+        self.tracer.begin_turn();
+    }
+
+    pub fn end_turn(&self) {
+        self.tracer.end_turn();
     }
 
     /// The time one UI pass took; the first call after [`Telemetry::start`] also records the
@@ -375,10 +387,19 @@ impl Telemetry {
 
     /// Run `f` (a blocking native call) with hang detection paused.
     pub fn paused<R>(&self, f: impl FnOnce() -> R) -> R {
-        self.tracer.pause_hang_detection();
+        self.pause_hangs();
         let r = f();
-        self.tracer.resume_hang_detection();
+        self.resume_hangs();
         r
+    }
+
+    /// Pause hang detection (pauses nest; each needs its [`Telemetry::resume_hangs`]).
+    pub fn pause_hangs(&self) {
+        self.tracer.pause_hang_detection();
+    }
+
+    pub fn resume_hangs(&self) {
+        self.tracer.resume_hang_detection();
     }
 
     /// Pause hang detection around every native file dialog and message box
@@ -397,15 +418,16 @@ impl Telemetry {
         })));
     }
 
-    /// Send what is waiting, for at most `timeout`.
-    pub fn flush(&self, timeout: Duration) {
-        let _ = self.tracer.flush_blocking(timeout);
+    /// Send what is waiting, for at most `timeout`. True when nothing is left that could be sent
+    /// (what could not stays on disk and goes with the next launch).
+    pub fn flush(&self, timeout: Duration) -> bool {
+        self.tracer.flush_blocking(timeout)
     }
 
     /// The app is quitting: send what is waiting, for at most [`QUIT_FLUSH`].
     pub fn quit(&self) {
         if self.tracer.is_enabled() {
-            self.flush(QUIT_FLUSH);
+            let _ = self.flush(QUIT_FLUSH);
         }
     }
 }

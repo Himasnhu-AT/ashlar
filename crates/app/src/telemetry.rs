@@ -59,11 +59,11 @@ mod imp {
         pub fn first_frame(&self) {}
 
         pub fn begin_turn(&self) {
-            self.inner.tracer().begin_turn();
+            self.inner.begin_turn();
         }
 
         pub fn end_turn(&self) {
-            self.inner.tracer().end_turn();
+            self.inner.end_turn();
         }
 
         pub fn input(&self, focused: bool, active: bool) {
@@ -71,15 +71,15 @@ mod imp {
         }
 
         pub fn pause_hangs(&self) {
-            self.inner.tracer().pause_hang_detection();
+            self.inner.pause_hangs();
         }
 
         pub fn resume_hangs(&self) {
-            self.inner.tracer().resume_hang_detection();
+            self.inner.resume_hangs();
         }
 
         pub fn flush(&self, timeout: Duration) {
-            self.inner.flush(timeout);
+            let _ = self.inner.flush(timeout);
         }
     }
 }

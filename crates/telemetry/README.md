@@ -18,8 +18,8 @@ app built on ashlar.
 | Log breadcrumbs | `Telemetry::wrap_logger` + `ashlar_log::logging::install_wrapped` |
 | Commands (id, ok, ms; rapid repeats folded) | `Journal::set_observer(telemetry.command_observer())` |
 | Saves | `TelemetryConfig::save_commands`, or `Telemetry::saved` |
-| Frames, first frame, focus, input, hang watchdog | `ashlar_ui::telemetry::FrameProbe` (feature `telemetry`), or `turn` / `frame` / `input` |
-| Native dialogs | `Telemetry::pause_hangs_in_dialogs` (`ashlar_native::modal`) |
+| Frames, first frame, focus, input, hang watchdog | `ashlar_ui::telemetry::FrameProbe` (feature `telemetry`), or `turn` (or `begin_turn` / `end_turn`) / `frame` / `input` |
+| Native dialogs | `Telemetry::pause_hangs_in_dialogs` (`ashlar_native::modal`), or `paused(|| …)` around any other blocking call |
 | Quit | `Telemetry::quit` (at most 1.5 s) |
 | Privacy page | `Telemetry::status`; `ashlar_ui::telemetry::privacy_section` with the app's own words |
 
@@ -33,3 +33,7 @@ ashlar_log::logging::install_wrapped(Box::new(logger), level, |l| telemetry.wrap
 telemetry.pause_hangs_in_dialogs();
 session.journal.set_observer(telemetry.command_observer());
 ```
+
+Tests: feature `testing` gives `testing::Recorder` (a transport that keeps every envelope, decoded)
+and `testing::client` (a client on it with millisecond intervals). Cost: about 65 ns per frame on,
+5 ns off (`frame_hooks_cost` in `tests/hooks.rs`).

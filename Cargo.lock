@@ -545,6 +545,7 @@ version = "0.1.0"
 dependencies = [
  "ashlar-command",
  "ashlar-native",
+ "ashlar-telemetry",
  "ashlar-trace",
  "flate2",
  "log",

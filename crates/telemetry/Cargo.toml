@@ -8,6 +8,10 @@ description = "Always-on crash, performance and usage telemetry to a self-hosted
 [lints]
 workspace = true
 
+[features]
+# `testing`: a recording transport and a short-interval client for apps' own tests
+testing = ["dep:flate2", "dep:serde_json"]
+
 [dependencies]
 ashlar-command = { workspace = true }
 # no features: only the always-compiled `modal` hook (hang detection pauses around blocking dialogs)
@@ -15,6 +19,8 @@ ashlar-native = { workspace = true }
 log = { workspace = true, features = ["std"] }
 # Its own HTTPS client is left out: this crate sends with the TLS stack below.
 ashlar-trace = { workspace = true, features = ["sysinfo"] }
+flate2 = { version = "1", optional = true }
+serde_json = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # pure-Rust TLS: rustls with the RustCrypto provider and the operating system's verifier
@@ -23,6 +29,6 @@ rustls = { version = "0.23", default-features = false }
 rustls-rustcrypto = "0.0.2-alpha"
 
 [dev-dependencies]
-flate2 = "1"
+ashlar-telemetry = { path = ".", features = ["testing"] }
 serde_json = { workspace = true }
 tempfile = "3"
