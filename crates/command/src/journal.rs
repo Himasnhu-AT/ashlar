@@ -1,6 +1,8 @@
 //! Execution state owned by the host: command nesting depth and the journal of mutating commands.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,6 +21,19 @@ pub struct JournalEntry {
     pub params: Value,
 }
 
+/// One top-level command that ran, as the chokepoint saw it: the registered id (a fixed program
+/// string, never its parameters), whether it succeeded and how long its body took.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommandRun {
+    pub id: &'static str,
+    pub ok: bool,
+    pub took: Duration,
+}
+
+/// Told about every top-level command that ran (not about calls refused before running, and not
+/// about nested calls). Runs on the thread that executed the command, so it must be cheap.
+pub type RunObserver = Arc<dyn Fn(CommandRun) + Send + Sync>;
+
 /// The journal of a host: the mutating commands that succeeded, in order, with scrubbed params
 /// (replay, session logs, agent "what happened"). Also tracks the current nesting depth of
 /// [`crate::Registry::execute`].
@@ -33,6 +48,17 @@ pub struct Journal {
     nested: bool,
     depth: usize,
     next_seq: u64,
+    observer: Observer,
+}
+
+/// [`Journal`]'s observer slot (the closure itself has no `Debug`).
+#[derive(Clone, Default)]
+struct Observer(Option<RunObserver>);
+
+impl std::fmt::Debug for Observer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Observer(set)" } else { "Observer(none)" })
+    }
 }
 
 impl Default for Journal {
@@ -49,13 +75,23 @@ impl Journal {
     /// Keep at most `cap` entries (at least 1), dropping the oldest `drop` (1..=cap) when full.
     pub fn with_cap(cap: usize, drop: usize) -> Self {
         let cap = cap.max(1);
-        Self { entries: VecDeque::new(), cap, drop: drop.clamp(1, cap), nested: false, depth: 0, next_seq: 0 }
+        Self { entries: VecDeque::new(), cap, drop: drop.clamp(1, cap), nested: false, depth: 0, next_seq: 0, observer: Observer::default() }
     }
 
     /// Also record commands run from inside other commands.
     pub fn record_nested(mut self, yes: bool) -> Self {
         self.nested = yes;
         self
+    }
+
+    /// Tell `observer` about every top-level command that runs from now on (`None`: nobody).
+    /// Telemetry uses this; [`crate::Registry::execute`] calls it after [`crate::Host::after`].
+    pub fn set_observer(&mut self, observer: Option<RunObserver>) {
+        self.observer = Observer(observer);
+    }
+
+    pub fn observer(&self) -> Option<&RunObserver> {
+        self.observer.0.as_ref()
     }
 
     /// Current nesting depth: 0 outside any command, 1 inside a top-level command…

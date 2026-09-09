@@ -212,6 +212,12 @@ pub fn install(logger: Box<dyn Log>, level: LevelFilter) -> bool {
     }
 }
 
+/// [`install`], with `logger` passed through `wrap` first: telemetry keeps log lines as crash
+/// breadcrumbs this way. `wrap` must forward every record to the logger it is given.
+pub fn install_wrapped(logger: Box<dyn Log>, level: LevelFilter, wrap: impl FnOnce(Box<dyn Log>) -> Box<dyn Log>) -> bool {
+    install(wrap(logger), level)
+}
+
 /// Flush the installed logger (wait for its file writer); call it before a CLI exits.
 pub fn flush() {
     log::logger().flush();

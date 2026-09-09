@@ -12,3 +12,5 @@ workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# a monotonic clock that also works on wasm32, for the run observer's durations
+web-time = "1"

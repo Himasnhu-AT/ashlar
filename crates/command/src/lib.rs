@@ -152,7 +152,7 @@ mod registry;
 pub mod shortcut;
 
 pub use fuzzy::{FuzzyMatch, fuzzy_match, fuzzy_rank};
-pub use journal::{Journal, JournalEntry};
+pub use journal::{CommandRun, Journal, JournalEntry, RunObserver};
 pub use keymap::Keymap;
 pub use legacy::accepted_params;
 pub use params::{Kind, Param, params_schema, validate_params};

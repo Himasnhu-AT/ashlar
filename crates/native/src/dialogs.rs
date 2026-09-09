@@ -127,7 +127,9 @@ pub fn message(level: MessageLevel, title: &str, text: &str) -> Result<()> {
         };
         let (title, text) = (clip(title), clip_message(text));
         crate::guarded("the message box", || {
-            rfd::MessageDialog::new().set_level(level).set_title(title).set_description(text).set_buttons(rfd::MessageButtons::Ok).show();
+            crate::modal::around(|| {
+                rfd::MessageDialog::new().set_level(level).set_title(title).set_description(text).set_buttons(rfd::MessageButtons::Ok).show()
+            });
             Ok(())
         })
     }
@@ -177,7 +179,7 @@ mod native {
     }
 
     fn picked<T>(what: &str, f: impl FnOnce() -> Option<T>) -> Result<T> {
-        crate::guarded(what, || f().ok_or(NativeError::Cancelled))
+        crate::guarded(what, || crate::modal::around(f).ok_or(NativeError::Cancelled))
     }
 
     impl FileDialog {

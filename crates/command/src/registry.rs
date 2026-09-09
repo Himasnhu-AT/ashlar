@@ -192,6 +192,8 @@ impl<S: Host> Registry<S> {
             return reject(state, id, CommandError::Disabled { id: id.to_string(), reason }, depth);
         }
         state.journal().set_depth(depth + 1);
+        // timed only when someone listens, and only at the top level
+        let started = (depth == 0 && state.journal().observer().is_some()).then(web_time::Instant::now);
         // Last-resort guard: a panic in a command (a bug that escaped the never-crash rules)
         // becomes an error for the caller instead of taking the app and its unsaved work down.
         let run = catch_unwind(AssertUnwindSafe(|| (spec.run)(state, &params)));
@@ -209,6 +211,11 @@ impl<S: Host> Registry<S> {
             Err(_) => Err(CommandError::Panicked { id: id.to_string() }),
         };
         state.after(spec, &params, &result, depth);
+        if let Some(started) = started
+            && let Some(observe) = state.journal().observer().cloned()
+        {
+            observe(crate::CommandRun { id: spec.id, ok: result.is_ok(), took: started.elapsed() });
+        }
         if result.is_ok() && spec.mutates && state.journal().records(depth) {
             // a secret must never reach the journal (and with it session logs)
             state.scrub(id, &mut params);

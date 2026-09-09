@@ -21,11 +21,14 @@
 //! | [`secrets`] | Keychain | Credential Manager | Secret Service | – |
 //! | [`system`] | AppKit | registry / SPI | portal settings | media queries |
 //!
+//! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
+//!
 //! `unsafe` is denied in this crate and allowed only in the FFI modules that need it, each block
 //! with a `// SAFETY:` comment (docs/adr/0001-native-ffi.md).
 
 mod error;
 pub use error::{NativeError, Result};
+pub mod modal;
 
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
