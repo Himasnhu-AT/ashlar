@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 ashlar-command = { workspace = true }
 ashlar-control = { workspace = true }
+ashlar-telemetry = { workspace = true, optional = true }
 log = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
@@ -24,6 +25,8 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 [features]
 # docking layout persistence (serde is always available for menus, automation and keymaps)
 serde = []
+# the telemetry frame probe and the read-only privacy section (ashlar-telemetry)
+telemetry = ["dep:ashlar-telemetry"]
 
 [dev-dependencies]
 egui = { workspace = true, features = ["default_fonts"] }

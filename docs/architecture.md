@@ -20,6 +20,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
 | 2 | `ashlar-control` | Agent control port: hardened JSON-lines server, client, standard method set | yes | – |
 | 2 | `ashlar-print` | System PDF print spooler (CUPS, Windows) | yes | – |
+| 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry (tracer): client, transport, hooks for commands, logs, frames and dialogs | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |

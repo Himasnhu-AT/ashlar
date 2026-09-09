@@ -170,8 +170,8 @@ impl<D: Document> App<D> {
         self
     }
 
-    /// Telemetry (with the `telemetry` feature): write key and server. Nothing is sent before
-    /// the user has seen the consent notice.
+    /// Telemetry (with the `telemetry` feature): write key and server. Always on when `endpoint`
+    /// is set (no notice, no switches); `TRACER_DISABLED` in the environment turns it off.
     pub fn telemetry(mut self, key: impl Into<String>, endpoint: Option<&str>) -> Self {
         self.telemetry = Some(TelemetryConfig { key: key.into(), endpoint: endpoint.map(str::to_string) });
         self

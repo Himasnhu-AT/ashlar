@@ -1,0 +1,28 @@
+[package]
+name = "ashlar-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Always-on crash, performance and usage telemetry to a self-hosted tracer server: one client, hooks for the command chokepoint, logging, the frame loop and native dialogs"
+
+[lints]
+workspace = true
+
+[dependencies]
+ashlar-command = { workspace = true }
+# no features: only the always-compiled `modal` hook (hang detection pauses around blocking dialogs)
+ashlar-native = { workspace = true }
+log = { workspace = true, features = ["std"] }
+# Its own HTTPS client is left out: this crate sends with the TLS stack below.
+tracer-sdk = { workspace = true, features = ["sysinfo"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# pure-Rust TLS: rustls with the RustCrypto provider and the operating system's verifier
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23", default-features = false }
+rustls-rustcrypto = "0.0.2-alpha"
+
+[dev-dependencies]
+flate2 = "1"
+serde_json = { workspace = true }
+tempfile = "3"

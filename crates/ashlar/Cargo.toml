@@ -12,7 +12,7 @@ workspace = true
 default = []
 # The app's commands in the macOS / Windows menu bar.
 native-menu = ["ashlar-app/native-menu"]
-# Crash, performance and usage telemetry (off until the user consents).
+# Crash, performance and usage telemetry (always on when the app configures an endpoint).
 telemetry = ["ashlar-app/telemetry"]
 
 [dependencies]

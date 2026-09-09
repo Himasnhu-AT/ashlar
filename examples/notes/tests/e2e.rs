@@ -309,23 +309,18 @@ fn palette_keymap_and_theme_from_the_keyboard_and_menus() {
 
 #[cfg(feature = "telemetry")]
 #[test]
-fn telemetry_asks_for_consent_before_anything_is_sent() {
+fn telemetry_asks_nothing_and_without_an_endpoint_records_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let rt = notes::app().dirs(AppDirs::under(dir.path())).telemetry("test-write-key", None).runtime();
     let mut d = Driver::new(rt);
     d.settle(20);
-    let ins = d.call("ui.inspect", json!({})).unwrap();
-    assert_eq!(ins["dialogs"], json!(1), "the consent notice is shown: {ins}");
-    // Continue (with the default choices)
-    let ids: Vec<String> = ins["elements"].as_array().unwrap().iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
-    assert!(ids.iter().any(|i| i == "ashlar.consent.button.0"), "{ids:?}");
-    d.call("ui.click", json!({"id": "ashlar.consent.button.0"})).unwrap();
+    // telemetry is not optional: no notice, no dialog
     assert_eq!(d.call("ui.inspect", json!({})).unwrap()["dialogs"], json!(0));
     d.call("engine.execute", json!({"command": "note.add"})).unwrap();
-    // the notice is remembered: a second launch does not ask again
     drop(d);
-    let rt = notes::app().dirs(AppDirs::under(dir.path())).telemetry("test-write-key", None).runtime();
-    let mut d = Driver::new(rt);
-    d.settle(20);
-    assert_eq!(d.call("ui.inspect", json!({})).unwrap()["dialogs"], json!(0));
+    // no endpoint: no client, nothing on disk
+    fn has_tracer(p: &std::path::Path) -> bool {
+        std::fs::read_dir(p).into_iter().flatten().flatten().any(|e| e.file_name() == "tracer" || (e.path().is_dir() && has_tracer(&e.path())))
+    }
+    assert!(!has_tracer(dir.path()));
 }

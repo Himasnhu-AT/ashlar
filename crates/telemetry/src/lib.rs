@@ -1,0 +1,494 @@
+//! Always-on crash, performance and usage telemetry to a self-hosted tracer server.
+//!
+//! One [`Telemetry`] client per process, started once from a [`TelemetryConfig`]. It is **on
+//! whenever an endpoint is configured**: every category is allowed and there is no notice
+//! (`force_consent`), `DO_NOT_TRACK` is ignored, and only `TRACER_DISABLED` (a switch for developer
+//! machines and CI) turns it off. With no endpoint, or with a bad one, no key, no data folder, or
+//! on the web, [`Telemetry::start`] returns a disabled client: every call is a no-op, nothing is
+//! recorded and no request is ever made.
+//!
+//! What an app wires, a few lines each:
+//!
+//! | Hook | How |
+//! |---|---|
+//! | crashes | start the client before the app's own panic hook; tracer's hook chains to it |
+//! | log lines → crash breadcrumbs (redacted) | [`Telemetry::wrap_logger`], e.g. with `ashlar_log::logging::install_wrapped` |
+//! | commands (id, ok, ms; top level; rapid repeats folded) | `journal.set_observer(telemetry.command_observer())` (`ashlar_command::Journal`) |
+//! | saves | [`TelemetryConfig::save_commands`], or [`Telemetry::saved`] |
+//! | frames, first frame, focus, input, hang watchdog | [`Telemetry::turn`], [`Telemetry::frame`], [`Telemetry::input`]; `ashlar_ui::telemetry::FrameProbe` does it for an egui loop |
+//! | native dialogs | [`Telemetry::pause_hangs_in_dialogs`] (the `ashlar_native::modal` hook) |
+//! | quit | [`Telemetry::quit`] (sends what is waiting, at most [`QUIT_FLUSH`]) |
+//! | privacy page | [`Telemetry::status`] (read-only) |
+//!
+//! Never sent: command parameters, file names, paths or typed text. Event names and property text
+//! are fixed program strings; log lines are redacted on the device ([`redact`]).
+
+mod fold;
+mod redact;
+#[cfg(not(target_arch = "wasm32"))]
+mod transport;
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use ashlar_command::{CommandRun, RunObserver};
+pub use fold::REPEAT_WINDOW;
+pub use redact::redact;
+/// The tracer SDK, for tests (`Tracer`, `Config`, transports) and hosts that need more.
+pub use tracer_sdk as sdk;
+pub use tracer_sdk::{ProcessKind, TurnGuard};
+use tracer_sdk::{Prop, Tracer};
+#[cfg(not(target_arch = "wasm32"))]
+pub use transport::Https;
+
+/// How long [`Telemetry::quit`] waits for the last send.
+pub const QUIT_FLUSH: Duration = Duration::from_millis(1500);
+/// The developer's switch: set (to anything but empty, `0` or `false`), telemetry is off.
+pub const DISABLED_ENV: &str = "TRACER_DISABLED";
+
+tracer_sdk::events! {
+    pub enum Category {
+        Command = "command",
+        App = "app",
+    }
+    pub enum AppEvent {
+        /// A top-level command ran: `id` (the registered id), `ok`, `ms`, `repeats` (runs of the
+        /// same id folded into this one, see [`REPEAT_WINDOW`]).
+        CommandRun = "command.run" in Command,
+        /// A document was saved.
+        DocumentSaved = "app.document_saved" in App,
+    }
+}
+
+/// What to start. Everything the app knows at build time; [`Telemetry::start`] adds the
+/// environment overrides.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TelemetryConfig {
+    /// The app's name on the server (lower case).
+    pub app_id: String,
+    pub version: String,
+    /// The server's base URL (no path): `https://…`, or `http://` to a loopback address. `None`:
+    /// no telemetry at all.
+    pub endpoint: Option<String>,
+    /// The app's write key (not a secret: it only allows sending).
+    pub write_key: String,
+    /// Environment variables that override [`Self::endpoint`] and [`Self::write_key`] (testing).
+    pub url_env: Option<String>,
+    pub key_env: Option<String>,
+    pub process: ProcessKind,
+    /// Commands whose success counts as a save (`app.document_saved`).
+    pub save_commands: Vec<&'static str>,
+}
+
+impl TelemetryConfig {
+    pub fn new(app_id: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            app_id: app_id.into(),
+            version: version.into(),
+            endpoint: None,
+            write_key: String::new(),
+            url_env: None,
+            key_env: None,
+            process: ProcessKind::Gui,
+            save_commands: Vec::new(),
+        }
+    }
+
+    /// The server and its write key; `endpoint = None` means no telemetry.
+    pub fn endpoint(mut self, endpoint: Option<&str>, write_key: &str) -> Self {
+        self.endpoint = endpoint.map(str::to_string);
+        self.write_key = write_key.to_string();
+        self
+    }
+
+    /// Names of environment variables that override the endpoint and the key.
+    pub fn env_overrides(mut self, url: &str, key: &str) -> Self {
+        self.url_env = Some(url.to_string());
+        self.key_env = Some(key.to_string());
+        self
+    }
+
+    pub fn process(mut self, process: ProcessKind) -> Self {
+        self.process = process;
+        self
+    }
+
+    pub fn save_commands(mut self, ids: &[&'static str]) -> Self {
+        self.save_commands = ids.to_vec();
+        self
+    }
+}
+
+/// Why telemetry is off in this process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Off {
+    /// No endpoint configured.
+    NoEndpoint,
+    /// An endpoint without a write key.
+    NoKey,
+    /// An endpoint that is neither `https://` nor `http://` to this computer.
+    BadEndpoint,
+    /// `TRACER_DISABLED` is set.
+    Disabled,
+    /// No data folder to keep the spool in.
+    NoDataDir,
+    /// The web build, or the app chose to start none (tests).
+    NotStarted,
+}
+
+impl Off {
+    /// A plain sentence; apps may word it their own way.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Off::NoEndpoint => "Telemetry is off in this build: no server is configured, so nothing is recorded or sent.",
+            Off::NoKey => "Telemetry is off: a server is configured without a write key, so nothing is recorded or sent.",
+            Off::BadEndpoint => "Telemetry is off: the server address must start with https:// (http:// only on this computer).",
+            Off::Disabled => "Telemetry is off: TRACER_DISABLED is set (a developer switch), so nothing is recorded or sent.",
+            Off::NoDataDir => "Telemetry is off: there is no data folder to keep it in.",
+            Off::NotStarted => "Telemetry is not part of this process.",
+        }
+    }
+}
+
+/// What a read-only privacy page shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Status {
+    /// A client runs and sends to `server`.
+    pub active: bool,
+    /// The server's host name (never a path or key), when one is configured.
+    pub server: Option<String>,
+    /// Why nothing is sent, when `active` is false.
+    pub off: Option<Off>,
+}
+
+/// A configured server: base URL, write key and host name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Target {
+    pub endpoint: String,
+    pub key: String,
+    pub host: String,
+}
+
+/// Whether an environment switch is on: set, and not empty, `0` or `false` (as tracer reads it).
+fn switch_on(v: Option<String>) -> bool {
+    v.is_some_and(|v| {
+        let v = v.trim();
+        !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
+    })
+}
+
+/// The host of an `https://` URL, or of an `http://` URL on this computer; `None` for anything else.
+pub fn endpoint_host(url: &str) -> Option<String> {
+    let (secure, rest) = if let Some(r) = url.strip_prefix("https://") { (true, r) } else { (false, url.strip_prefix("http://")?) };
+    let authority = rest.split('/').next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') || rest.contains(['?', '#']) {
+        return None;
+    }
+    let host =
+        if authority.starts_with('[') { authority.split(']').next().map(|h| format!("{h}]"))? } else { authority.split(':').next()?.to_string() };
+    let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]");
+    (secure || loopback).then_some(host)
+}
+
+/// Where telemetry goes, from `cfg` and the environment (`env`), or why it is off. `DO_NOT_TRACK`
+/// is not read: telemetry is not optional.
+pub fn resolve(cfg: &TelemetryConfig, env: &dyn Fn(&str) -> Option<String>) -> Result<Target, Off> {
+    if switch_on(env(DISABLED_ENV)) {
+        return Err(Off::Disabled);
+    }
+    let set = |name: &Option<String>| name.as_deref().and_then(env).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let endpoint = set(&cfg.url_env).or_else(|| cfg.endpoint.clone()).ok_or(Off::NoEndpoint)?;
+    let key = set(&cfg.key_env).unwrap_or_else(|| cfg.write_key.clone());
+    if key.is_empty() {
+        return Err(Off::NoKey);
+    }
+    let host = endpoint_host(&endpoint).ok_or(Off::BadEndpoint)?;
+    Ok(Target { endpoint: endpoint.trim_end_matches('/').to_string(), key, host })
+}
+
+/// The process's telemetry client. Cheap to clone; every method is a no-op when it is off.
+#[derive(Clone)]
+pub struct Telemetry {
+    tracer: Tracer,
+    status: Status,
+    save_commands: Arc<[&'static str]>,
+    first_frame: Arc<AtomicBool>,
+    repeats: Arc<Mutex<fold::Repeats>>,
+}
+
+impl Default for Telemetry {
+    fn default() -> Self {
+        Telemetry::off(Off::NotStarted)
+    }
+}
+
+impl Telemetry {
+    /// A client that records and sends nothing.
+    pub fn off(why: Off) -> Telemetry {
+        Telemetry {
+            tracer: Tracer::disabled(),
+            status: Status { active: false, server: None, off: Some(why) },
+            save_commands: Arc::from(Vec::new()),
+            first_frame: Arc::default(),
+            repeats: Arc::default(),
+        }
+    }
+
+    /// Start from `cfg` and the process environment; the spool goes in `<data_dir>/tracer`. Off
+    /// (see [`Off`]) without an endpoint, with `TRACER_DISABLED`, without a data folder, on the web.
+    /// Apps start none under their test harness: call [`Telemetry::off`] there.
+    pub fn start(cfg: &TelemetryConfig, data_dir: Option<&Path>) -> Telemetry {
+        let target = match resolve(cfg, &|k| std::env::var(k).ok()) {
+            Ok(t) => t,
+            Err(why) => return Telemetry::off(why),
+        };
+        let Some(dir) = data_dir else { return Telemetry::off(Off::NoDataDir) };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let transport = Https::new(&target.endpoint);
+            Telemetry::with_transport(cfg, &target, dir, transport, |_| {})
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (target, dir);
+            Telemetry::off(Off::NotStarted)
+        }
+    }
+
+    /// Start with a given transport and config tweaks (tests use a fake one with short intervals).
+    pub fn with_transport(
+        cfg: &TelemetryConfig,
+        target: &Target,
+        data_dir: &Path,
+        transport: impl tracer_sdk::transport::Transport,
+        configure: impl FnOnce(&mut tracer_sdk::Config),
+    ) -> Telemetry {
+        let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
+            .data_dir(data_dir)
+            .endpoint(&target.endpoint)
+            .process(cfg.process)
+            .listen_all::<AppEvent>()
+            // not optional: every category on, no notice, DO_NOT_TRACK ignored
+            .force_consent(true)
+            .honor_do_not_track(false)
+            .transport(transport)
+            .configure(|c| {
+                // quitting must stay quick, whatever the network does
+                c.shutdown_timeout = Duration::from_secs(1);
+                configure(c);
+            })
+            .init();
+        let status = if tracer.is_enabled() {
+            Status { active: true, server: Some(target.host.clone()), off: None }
+        } else {
+            Status { active: false, server: None, off: Some(Off::NoDataDir) }
+        };
+        Telemetry { tracer, status, save_commands: Arc::from(cfg.save_commands.clone()), first_frame: Arc::default(), repeats: Arc::default() }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.tracer.is_enabled()
+    }
+
+    /// What a read-only privacy page shows.
+    pub fn status(&self) -> Status {
+        self.status.clone()
+    }
+
+    /// The SDK client, for what this crate does not wrap.
+    pub fn tracer(&self) -> &Tracer {
+        &self.tracer
+    }
+
+    /// The command chokepoint's observer (`ashlar_command::Journal::set_observer`); `None` when off.
+    /// Reports the registered id, ok and milliseconds, never parameters; runs of one id within
+    /// [`REPEAT_WINDOW`] are folded into the next report.
+    pub fn command_observer(&self) -> Option<RunObserver> {
+        if !self.tracer.is_enabled() {
+            return None;
+        }
+        let me = self.clone();
+        Some(Arc::new(move |run: CommandRun| me.record(run)))
+    }
+
+    /// Record one command by hand (hosts that do not use the journal observer).
+    pub fn command(&self, id: &'static str, ok: bool, took: Duration) {
+        self.record(CommandRun { id, ok, took });
+    }
+
+    fn record(&self, run: CommandRun) {
+        if !self.tracer.is_enabled() {
+            return;
+        }
+        let Some((name, folded)) = self.repeats.lock().unwrap_or_else(PoisonError::into_inner).admit(run.id, Instant::now()) else { return };
+        let ms = run.took.as_secs_f64() * 1000.0;
+        self.tracer.track_with(
+            AppEvent::CommandRun,
+            &[("id", Prop::Str(run.id)), ("ok", Prop::Bool(run.ok)), ("ms", Prop::Float(ms)), ("repeats", Prop::Int(i64::from(folded)))],
+        );
+        if let Some(name) = name {
+            self.tracer.track_id(Category::Command, name);
+        }
+        if run.ok && self.save_commands.contains(&run.id) {
+            self.saved();
+        }
+    }
+
+    /// A document was saved.
+    pub fn saved(&self) {
+        self.tracer.track(AppEvent::DocumentSaved);
+    }
+
+    /// Wrap the app's logger: every record still reaches it, and the lines it keeps at info or
+    /// above also become crash breadcrumbs, redacted ([`redact`]).
+    pub fn wrap_logger(&self, inner: Box<dyn log::Log>) -> Box<dyn log::Log> {
+        if !self.tracer.is_enabled() {
+            return inner;
+        }
+        Box::new(redact::Breadcrumbs { inner, crumbs: self.tracer.logger(None) })
+    }
+
+    /// One turn of the main loop (logic or a UI pass): a turn still open after the hang threshold
+    /// is reported as a hang. Ends when the guard is dropped.
+    pub fn turn(&self) -> TurnGuard {
+        self.tracer.turn()
+    }
+
+    /// The time one UI pass took; the first call after [`Telemetry::start`] also records the
+    /// startup time.
+    pub fn frame(&self, took: Duration) {
+        self.tracer.frame(took);
+        if !self.first_frame.swap(true, Ordering::Relaxed) {
+            self.tracer.first_frame();
+        }
+    }
+
+    /// Window focus, and whether the user did something this turn (active versus idle time).
+    pub fn input(&self, focused: bool, active: bool) {
+        self.tracer.set_focused(focused);
+        if active {
+            self.tracer.note_input();
+        }
+    }
+
+    /// Run `f` (a blocking native call) with hang detection paused.
+    pub fn paused<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.tracer.pause_hang_detection();
+        let r = f();
+        self.tracer.resume_hang_detection();
+        r
+    }
+
+    /// Pause hang detection around every native file dialog and message box
+    /// (`ashlar_native::modal`). Process-wide; nothing to do when off.
+    pub fn pause_hangs_in_dialogs(&self) {
+        if !self.tracer.is_enabled() {
+            return;
+        }
+        let tracer = self.tracer.clone();
+        ashlar_native::modal::set_hook(Some(Arc::new(move |open| {
+            if open {
+                tracer.pause_hang_detection();
+            } else {
+                tracer.resume_hang_detection();
+            }
+        })));
+    }
+
+    /// Send what is waiting, for at most `timeout`.
+    pub fn flush(&self, timeout: Duration) {
+        let _ = self.tracer.flush_blocking(timeout);
+    }
+
+    /// The app is quitting: send what is waiting, for at most [`QUIT_FLUSH`].
+    pub fn quit(&self) {
+        if self.tracer.is_enabled() {
+            self.flush(QUIT_FLUSH);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    fn cfg() -> TelemetryConfig {
+        TelemetryConfig::new("demo", "1.0.0")
+            .endpoint(Some("https://t.example.com"), "tk_x")
+            .env_overrides("DEMO_TELEMETRY_URL", "DEMO_TELEMETRY_KEY")
+    }
+
+    #[test]
+    fn no_endpoint_means_off() {
+        assert_eq!(resolve(&TelemetryConfig::new("demo", "1"), &env(&[])), Err(Off::NoEndpoint));
+        let blank = TelemetryConfig::new("demo", "1").env_overrides("DEMO_TELEMETRY_URL", "DEMO_TELEMETRY_KEY");
+        assert_eq!(resolve(&blank, &env(&[("DEMO_TELEMETRY_URL", "  ")])), Err(Off::NoEndpoint));
+        let t = Telemetry::start(&TelemetryConfig::new("demo", "1"), Some(Path::new("/nonexistent")));
+        assert!(!t.is_enabled() && t.command_observer().is_none() && !t.status().active);
+        assert_eq!(t.status().off, Some(Off::NoEndpoint));
+    }
+
+    #[test]
+    fn do_not_track_is_ignored_and_tracer_disabled_stops_it() {
+        for v in ["1", "true", "yes"] {
+            let e = move |k: &str| (k == "DO_NOT_TRACK").then(|| v.to_string());
+            assert!(resolve(&cfg(), &e).is_ok(), "{v}");
+            let e = move |k: &str| (k == DISABLED_ENV).then(|| v.to_string());
+            assert_eq!(resolve(&cfg(), &e), Err(Off::Disabled), "{v}");
+        }
+        for v in ["", "0", "false", "FALSE"] {
+            let e = move |k: &str| (k == DISABLED_ENV).then(|| v.to_string());
+            assert!(resolve(&cfg(), &e).is_ok(), "{v}");
+        }
+    }
+
+    #[test]
+    fn endpoints_must_be_https_or_loopback() {
+        assert_eq!(endpoint_host("https://t.example.com").as_deref(), Some("t.example.com"));
+        assert_eq!(endpoint_host("https://t.example.com:8443/").as_deref(), Some("t.example.com"));
+        assert_eq!(endpoint_host("http://127.0.0.1:8090").as_deref(), Some("127.0.0.1"));
+        assert_eq!(endpoint_host("http://localhost:1").as_deref(), Some("localhost"));
+        assert_eq!(endpoint_host("http://[::1]:8090").as_deref(), Some("[::1]"));
+        for bad in
+            ["http://t.example.com", "ftp://x", "https://", "https://user@t.example.com", "t.example.com", "https://x?y", "http://127.0.0.1.evil.com"]
+        {
+            assert_eq!(endpoint_host(bad), None, "{bad}");
+        }
+        let plain = TelemetryConfig::new("demo", "1").endpoint(Some("http://t.example.com"), "tk_x");
+        assert_eq!(resolve(&plain, &env(&[])), Err(Off::BadEndpoint));
+        let nokey = TelemetryConfig::new("demo", "1").endpoint(Some("https://t.example.com"), "");
+        assert_eq!(resolve(&nokey, &env(&[])), Err(Off::NoKey));
+        let t = resolve(&cfg(), &env(&[("DEMO_TELEMETRY_URL", "http://127.0.0.1:9/"), ("DEMO_TELEMETRY_KEY", "tk_env")])).unwrap();
+        assert_eq!(t, Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_env".into(), host: "127.0.0.1".into() });
+    }
+
+    #[test]
+    fn a_disabled_client_touches_nothing() {
+        let t = Telemetry::off(Off::Disabled);
+        struct Null;
+        impl log::Log for Null {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, _: &log::Record<'_>) {}
+            fn flush(&self) {}
+        }
+        let wrapped = t.wrap_logger(Box::new(Null));
+        wrapped.log(&log::Record::builder().args(format_args!("x")).build());
+        assert_eq!(t.paused(|| 7), 7);
+        t.command("doc.edit", true, Duration::from_millis(1));
+        t.frame(Duration::from_millis(1));
+        t.input(true, true);
+        drop(t.turn());
+        t.pause_hangs_in_dialogs();
+        t.quit();
+        assert!(t.tracer().flush_blocking(Duration::from_millis(1)));
+        assert_eq!(t.tracer().install_id(), "");
+    }
+}

@@ -35,6 +35,8 @@ pub mod slider;
 pub mod status_bar;
 pub mod swatches;
 pub mod tabs;
+#[cfg(feature = "telemetry")]
+pub mod telemetry;
 pub mod theme;
 pub mod toasts;
 pub mod tokens;

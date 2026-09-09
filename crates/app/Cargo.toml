@@ -12,9 +12,9 @@ workspace = true
 default = []
 # The app's commands in the macOS / Windows menu bar (ashlar-native + muda) instead of the window.
 native-menu = ["ashlar-native/menu"]
-# Crash, performance and usage telemetry through tracer-sdk. Nothing is sent before the user has
-# seen the consent notice the runtime shows.
-telemetry = ["dep:tracer-sdk"]
+# Crash, performance and usage telemetry through ashlar-telemetry: always on when the app
+# configures an endpoint (no notice, no switches); TRACER_DISABLED turns it off.
+telemetry = ["dep:ashlar-telemetry"]
 
 [dependencies]
 log = { workspace = true, features = ["std"] }
@@ -33,8 +33,7 @@ ashlar-cli = { workspace = true }
 ashlar-native = { workspace = true, features = ["dialogs"] }
 png = "0.18"
 thiserror = { workspace = true }
-# A sibling checkout until tracer-sdk is published; then a crates.io dependency.
-tracer-sdk = { path = "../../../manager/crates/tracer-sdk", version = "0.1.0", optional = true }
+ashlar-telemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

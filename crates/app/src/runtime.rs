@@ -148,7 +148,6 @@ struct InfoCache {
 enum Modal {
     Recovery,
     SafeMode,
-    Consent([bool; 3]),
     Confirm { quit: bool, command: Option<(String, Value)> },
 }
 
@@ -273,9 +272,6 @@ impl<D: Document> Runtime<D> {
         }
         if rt.launch.safe_mode {
             rt.modals.push(Modal::SafeMode);
-        }
-        if rt.launch.telemetry.notice_pending() {
-            rt.modals.push(Modal::Consent([true, true, true]));
         }
         rt
     }
@@ -876,24 +872,6 @@ impl<D: Document> Runtime<D> {
                     }
                     Some(_) => true,
                     None => false,
-                }
-            }
-            Modal::Consent(choice) => {
-                let buttons = [DialogButton::new("Continue").default()];
-                let title = format!("Help improve {}", self.shared.title);
-                let mut c = *choice;
-                let out = Dialog::new("ashlar.consent", &title, &buttons).width(440.0).show(ctx, |ui| {
-                    ui.label("Anonymous reports help find crashes and slow spots. No document content, file names or typed text are ever sent. Change this any time in settings.");
-                    ui.checkbox(&mut c[0], "Crash reports");
-                    ui.checkbox(&mut c[1], "Performance (frame times, hangs)");
-                    ui.checkbox(&mut c[2], "Usage (which commands are used)");
-                });
-                *choice = c;
-                if out.is_some() {
-                    self.launch.telemetry.notice_shown(c[0], c[1], c[2]);
-                    true
-                } else {
-                    false
                 }
             }
             Modal::Confirm { quit, command } => {

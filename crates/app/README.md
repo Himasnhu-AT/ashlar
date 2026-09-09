@@ -28,7 +28,7 @@ let mut d = Driver::new(notes_app().runtime()); // tests: the window on a virtua
 | Menus and keys | In-window menu bar from the commands' menu paths (`ashlar_ui::commands`), or the OS menu bar with feature `native-menu` (macOS/Windows, `ashlar_native::menu`). Keymap from the registry plus user overrides saved in settings (`keymap`), `keys::dispatch` each frame, palette and keymap editor windows. Theme and view state persist in settings. |
 | Agent control | `--control <port>` or `<APP>_CONTROL_PORT` (or `App::control_port`) serves the keyed control port. Standard `app.*`/`engine.*` plus `ui.inspect`, `ui.click`, `ui.move`, `ui.drag`, `ui.scroll`, `ui.key`, `ui.type` (injected egui input, answered after the frame that consumed it), `ui.screenshot` (PNG base64, optionally cropped to an element), `ui.menu.list/invoke`, `ui.set` (view state, `theme`), `app.quit`, `app.stats`, `app.logs`. |
 | CLI / MCP | `App::cli()` / `cli_main(app)`: `ashlar-cli` over a fresh headless session of the same app. |
-| Telemetry | Feature `telemetry` (tracer-sdk, off by default): `command.run` with id, ok and duration at the chokepoint, frame times, first frame, main-loop turns (hang watchdog), crash reports after the runtime's own hook, and a consent dialog: nothing is sent before the user closes it. |
+| Telemetry | Feature `telemetry` (over `ashlar-telemetry`, off by default): `command.run` with id, ok and duration at the chokepoint, frame times, first frame, main-loop turns (hang watchdog), crash reports after the runtime's own hook. Always on when the app configures an endpoint (no notice, no switches); `TRACER_DISABLED` turns it off. |
 
 ## Testing apps
 
