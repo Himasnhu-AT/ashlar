@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "app": { "name": "demo", "version": "1.2.3", "build": "abc1234", "process": "gui" },
+  "install_id": "0f8fad5bd9cb469fa16570867728950e",
+  "session_id": "7c9e6679742540de944be07fc1f90ae7",
+  "device": {
+    "os_name": "macos",
+    "os_version": "26.0",
+    "arch": "aarch64",
+    "cpu_brand": "Example CPU",
+    "cpu_cores": 10,
+    "ram_mb": 32768,
+    "gpu": { "name": "Example GPU", "vendor": "example", "backend": "metal", "driver": "1.0" },
+    "locale": "en-US"
+  },
+  "sent_at": 1791900060000,
+  "items": [
+    {
+      "id": "a0000000000000000000000000000001",
+      "ts": 1791900000000,
+      "type": "session_start",
+      "catalog_hash": "9f86d081884c7d65",
+      "catalog": { "events": [{ "name": "file.open", "category": "file" }, { "name": "edit.undo", "category": "edit" }] },
+      "listening": ["file", "edit"],
+      "signals": ["session", "usage", "crash", "hang", "perf", "sys", "logs"]
+    },
+    {
+      "id": "a0000000000000000000000000000002",
+      "ts": 1791900001000,
+      "type": "event",
+      "name": "file.open",
+      "category": "file",
+      "props": { "count": 3, "format": "native", "ratio": 0.5, "recent": true }
+    },
+    { "id": "a0000000000000000000000000000003", "ts": 1791900002000, "type": "event", "name": "tool.custom", "category": "edit", "dynamic": true },
+    {
+      "id": "a0000000000000000000000000000004",
+      "ts": 1791900030000,
+      "type": "session_heartbeat",
+      "seq": 1,
+      "duration_s": 30,
+      "focused_s": 25,
+      "active_s": 20,
+      "idle_s": 10
+    },
+    {
+      "id": "a0000000000000000000000000000005",
+      "ts": 1791900060000,
+      "type": "perf",
+      "window_s": 60,
+      "frames": { "count": 3, "sum_us": 724000, "max_us": 710000, "slow": 1, "frozen": 1, "buckets": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0] },
+      "cpu_pct": 42.5,
+      "rss_mb": 512,
+      "rss_peak_mb": 640,
+      "startup_ms": 850,
+      "counters": { "audio.xruns": 2 },
+      "gauges": { "cache.mb": 128.0 }
+    },
+    {
+      "id": "a0000000000000000000000000000006",
+      "ts": 1791900061000,
+      "type": "crash",
+      "kind": "panic",
+      "fatal": true,
+      "message": "index out of bounds",
+      "location": "src/main.rs:10:5",
+      "thread": "main",
+      "backtrace": "0: demo::main\n1: std::rt::lang_start",
+      "breadcrumbs": [{ "ts": 1791900059000, "level": "warn", "target": "demo", "message": "low memory" }],
+      "perf": { "window_s": 1, "rss_mb": 600 }
+    },
+    { "id": "a0000000000000000000000000000007", "ts": 1791900061500, "type": "drops", "reasons": { "queue_full": 4 } },
+    {
+      "id": "a0000000000000000000000000000008",
+      "ts": 1791900062000,
+      "type": "session_end",
+      "status": "crashed",
+      "seq": 2,
+      "duration_s": 62,
+      "focused_s": 50,
+      "active_s": 40,
+      "idle_s": 22,
+      "errors": 1
+    }
+  ]
+}

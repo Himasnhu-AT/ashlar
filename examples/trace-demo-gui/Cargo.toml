@@ -1,0 +1,26 @@
+[package]
+name = "demo-gui"
+description = "A minimal windowed host that wires the Tracer SDK by hand"
+version = "0.1.0"
+edition = "2024"
+# eframe 0.36 needs Rust 1.95; the SDK itself still builds on 1.90.
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Kept out of the main workspace because eframe pulls in a very large dependency tree. The empty table
+# makes this package its own workspace root, with its own lockfile. Check it with `cargo xtask demo`.
+[workspace]
+
+[dependencies]
+tracer-sdk = { path = "../../crates/tracer-sdk" }
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+log = "0.4"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

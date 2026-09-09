@@ -1,0 +1,12 @@
+error[E0080]: evaluation panicked: tracer: invalid event name "File.Save": use lower-case snake_case, optionally dotted, starting with a letter, at most 64 bytes
+ --> tests/ui/invalid_event_name.rs:1:1
+  |
+1 | / tracer_sdk::events! {
+2 | |     pub enum Category { File = "file" }
+3 | |     pub enum AppEvent {
+4 | |         FileOpen = "file.open" in File,
+... |
+7 | | }
+  | |_^ evaluation of `_` failed here
+  |
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tracer_sdk::events` (in Nightly builds, run with -Z macro-backtrace for more info)

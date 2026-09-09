@@ -1,0 +1,21 @@
+[package]
+name = "tracer-proto"
+description = "Wire types shared by the Tracer telemetry SDK and server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords = ["telemetry", "crash-reporting", "analytics"]
+categories = ["development-tools::debugging"]
+readme = "../../README.md"
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

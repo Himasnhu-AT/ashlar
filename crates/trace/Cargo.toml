@@ -1,0 +1,38 @@
+[package]
+name = "tracer-sdk"
+description = "Crash, performance and usage telemetry for desktop apps, with a self-hostable backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords = ["telemetry", "crash-reporting", "analytics", "metrics"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+readme = "../../README.md"
+
+[features]
+default = ["http", "sysinfo"]
+# Send over HTTPS with a blocking client on the SDK's own thread.
+http = ["dep:ureq"]
+# Sample this process's CPU and memory, and read static device details.
+sysinfo = ["dep:sysinfo"]
+
+[dependencies]
+tracer-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+flate2 = "1"
+getrandom = "0.4"
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
+sysinfo = { version = "0.38", optional = true, default-features = false, features = ["system"] }
+
+[dev-dependencies]
+trybuild = "1"
+
+[lints]
+workspace = true

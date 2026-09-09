@@ -1,0 +1,22 @@
+[package]
+name = "loadgen"
+description = "Load generator and read-path benchmark for tracer-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+tracer-proto.workspace = true
+tracer-server = { path = "../../crates/tracer-server" }
+serde_json.workspace = true
+flate2 = "1"
+ureq = { version = "3", default-features = false, features = ["gzip"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+
+[lints]
+workspace = true

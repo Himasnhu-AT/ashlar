@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "app": { "name": "demo", "version": "9.0.0", "process": "plugin_host", "channel": "beta" },
+  "install_id": "0f8fad5bd9cb469fa16570867728950e",
+  "session_id": "7c9e6679742540de944be07fc1f90ae7",
+  "sent_at": 1791900060000,
+  "region_hint": "unknown-field",
+  "items": [
+    { "id": "b1", "ts": 1791900000000, "type": "replay_chunk", "bytes": 12 },
+    { "id": "b2", "ts": 1791900000001, "type": "crash", "kind": "gpu_device_lost", "new_field": [1, 2, 3] },
+    { "id": "b3", "ts": 1791900000002, "type": "event", "name": "file.open", "category": "file", "extra": { "nested": true } }
+  ]
+}
