@@ -136,7 +136,9 @@ impl<'a> SearchField<'a> {
             ui.painter().line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(1.5, col));
             clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Clear search"));
             let sid = self.id;
-            automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), "Clear search", Role::Button, true, Details::default());
+            if !sid.is_empty() {
+                automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), "Clear search", Role::Button, true, Details::default());
+            }
             if clear.clicked() {
                 self.text.clear();
                 changed = true;

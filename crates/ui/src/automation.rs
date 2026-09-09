@@ -4,7 +4,8 @@
 //!
 //! Ids are dotted paths the app chooses (`inspector.opacity`, `files.row.12`). Components derive
 //! sub-ids from the id they are given (`.row.<n>`, `.button.<n>`). Only what is visible is
-//! registered: a virtualized list reports the rows it painted, not all of them.
+//! registered: a virtualized list reports the rows it painted, not all of them. An empty id
+//! registers nothing (for a component the app registers under its own id).
 //!
 //! The registry lives in an egui plugin, added on first use. Each completed pass replaces the
 //! previous snapshot; a pass egui discards is not published. Recording reuses its buffers, so a
@@ -178,6 +179,10 @@ fn record(ui: &Ui, rect: Rect, egui_id: Option<egui::Id>, id: std::fmt::Argument
         let Some(e) = r.slot() else { return };
         e.id.clear();
         let _ = e.id.write_fmt(id);
+        if e.id.is_empty() {
+            r.len = r.len.saturating_sub(1);
+            return;
+        }
         e.label.clear();
         e.label.push_str(label);
         e.role = role;
@@ -245,6 +250,8 @@ mod tests {
             run(&ctx, input(), |ui| {
                 let r = ui.button("Save");
                 register(ui, &r, "toolbar.save", "Save", Role::Button);
+                // an empty id registers nothing
+                register(ui, &r, "", "Save", Role::Button);
                 for i in 0..rows {
                     let r = ui.label("row");
                     register_fmt(
