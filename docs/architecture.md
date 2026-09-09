@@ -15,19 +15,22 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-command` | Commands: registry, typed params, one execute chokepoint, discovery | yes | yes |
 | 0 | `ashlar-fs` | Files and settings: app dirs, durable atomic writes, keyed settings, recent files | yes | yes |
 | 0 | `ashlar-jobs` | Background jobs: progress, cancel, panic isolation, apply-on-UI-thread | yes | yes |
+| 0 | `ashlar-trace-proto` | Telemetry wire format: envelopes, items, name rules, limits | yes | yes |
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
+| 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
 | 2 | `ashlar-control` | Agent control port: hardened JSON-lines server, client, standard method set | yes | – |
+| 2 | `ashlar-trace-server` | Self-hosted telemetry server: ingest, SQLite store, rollups, dashboard | yes | – |
 | 2 | `ashlar-print` | System PDF print spooler (CUPS, Windows) | yes | – |
-| 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry (tracer): client, transport, hooks for commands, logs, frames and dialogs | yes | – |
+| 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry over ashlar-trace: client, transport, hooks for commands, logs, frames and dialogs | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
 | 7 | `ashlar` | Umbrella crate: re-exports the others behind features | no | – |
-| 8 | `ashlar-example-gallery`, `ashlar-example-notes` | Example apps | no | – |
+| 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
 
 Adding a crate: give it the lowest rank its dependencies allow, add it to `LAYERS` and to this

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use tracer_proto::{FRAME_BUCKET_BOUNDS_US, FrameStats};
+use ashlar_trace_proto::{FRAME_BUCKET_BOUNDS_US, FrameStats};
 
 use super::metrics::{self, CustomMetrics, PerfSummary, SessionSummary};
 use crate::ingest::DAY_MS;
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn bucket_labels_match_the_histogram_size() {
         let labels = bucket_labels();
-        assert_eq!(labels.len(), tracer_proto::FRAME_BUCKETS);
+        assert_eq!(labels.len(), ashlar_trace_proto::FRAME_BUCKETS);
         assert_eq!(labels[0], "\u{2264}1");
         assert_eq!(labels[4], "\u{2264}8.3");
         assert_eq!(labels[15], ">5000");

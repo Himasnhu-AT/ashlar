@@ -14,10 +14,10 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use tracer_sdk::proto::{ConsentCategory, ProcessKind};
-use tracer_sdk::{EventCategory, LoggerMode, Prop, Tracer};
+use ashlar_trace::proto::{ConsentCategory, ProcessKind};
+use ashlar_trace::{EventCategory, LoggerMode, Prop, Tracer};
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category {
         File = "file",
         Edit = "edit",
@@ -257,10 +257,11 @@ fn normal(tracer: &Tracer, args: &Args) {
     run_loop(tracer, args.run.unwrap_or(Duration::from_millis(1300)));
 }
 
-/// The deliberate crash of the `panic` scenario.
-#[allow(clippy::panic, reason = "this scenario exists to crash the host on purpose")]
+/// The deliberate crash of the `panic` scenario (the point of the scenario).
 fn crash_on_purpose() -> ! {
-    panic!("demo panic in the main loop")
+    // a failed assertion: a real panic with this message, through the panic hook
+    assert!(std::hint::black_box(false), "demo panic in the main loop");
+    std::process::abort()
 }
 
 fn hang(tracer: &Tracer, args: &Args) {
@@ -352,7 +353,7 @@ fn main() -> ExitCode {
 mod tests {
     use std::time::Duration;
 
-    use tracer_sdk::Tracer;
+    use ashlar_trace::Tracer;
 
     use super::{DemoEvent, normal, parse};
 

@@ -42,7 +42,7 @@ pub enum Prop {
 /// Declares the host's event categories and events.
 ///
 /// ```
-/// tracer_sdk::events! {
+/// ashlar_trace::events! {
 ///     pub enum Category { File = "file", Edit = "edit" }
 ///     pub enum AppEvent {
 ///         FileOpen = "file.open" in File,
@@ -50,7 +50,7 @@ pub enum Prop {
 ///     }
 /// }
 ///
-/// use tracer_sdk::{Event, EventCategory};
+/// use ashlar_trace::{Event, EventCategory};
 /// assert_eq!(AppEvent::FileOpen.name(), "file.open");
 /// assert_eq!(AppEvent::Undo.category(), Category::Edit);
 /// assert_eq!(Category::ALL.len(), 2);
@@ -129,7 +129,7 @@ macro_rules! events {
 /// Build-time name check for [`events!`](crate::events). Not part of the public API.
 #[doc(hidden)]
 pub const fn __name_is_valid(name: &str) -> bool {
-    tracer_proto::validate_name(name).is_ok()
+    ashlar_trace_proto::validate_name(name).is_ok()
 }
 
 /// Build-time duplicate check for [`events!`](crate::events). Not part of the public API.
@@ -139,7 +139,7 @@ pub const fn __has_duplicate(names: &[&str]) -> bool {
     while first < names.len() {
         let mut second = first + 1;
         while second < names.len() {
-            if tracer_proto::const_str_eq(names[first], names[second]) {
+            if ashlar_trace_proto::const_str_eq(names[first], names[second]) {
                 return true;
             }
             second += 1;

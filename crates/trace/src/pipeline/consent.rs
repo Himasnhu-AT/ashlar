@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use ashlar_trace_proto::ConsentCategory;
 use serde::{Deserialize, Serialize};
-use tracer_proto::ConsentCategory;
 
 use super::files::{lock, read_json, write_json};
 

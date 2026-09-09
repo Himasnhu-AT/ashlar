@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use ashlar_trace_proto::{Catalog, SessionTotals, UnixMs};
 use serde::{Deserialize, Serialize};
-use tracer_proto::{Catalog, SessionTotals, UnixMs};
 
 use super::spool::Header;
 
@@ -155,7 +155,7 @@ pub(super) fn catalog_hash(catalog: &Catalog) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use tracer_proto::CatalogEvent;
+    use ashlar_trace_proto::CatalogEvent;
 
     use super::*;
 

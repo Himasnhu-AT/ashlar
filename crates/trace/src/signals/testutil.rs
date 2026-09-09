@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use tracer_proto::Signal;
+use ashlar_trace_proto::Signal;
 
 use super::Signals;
 use crate::config::Config;
@@ -17,7 +17,7 @@ pub(crate) struct TempDir(PathBuf);
 impl TempDir {
     pub(crate) fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir().join(format!("tracer-sdk-signals-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let path = std::env::temp_dir().join(format!("ashlar-trace-signals-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::create_dir_all(&path);
         Self(path)
     }

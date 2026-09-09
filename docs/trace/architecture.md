@@ -3,9 +3,9 @@
 This is the spec. Code follows it; when they disagree, fix one of them in the same change.
 
 ```
-host app ──► tracer-sdk ──► bounded queue ──► worker thread ──► disk spool ──► HTTPS batch (gzip)
+host app ──► ashlar-trace ──► bounded queue ──► worker thread ──► disk spool ──► HTTPS batch (gzip)
                                                                                     │
-                                              tracer-server: ingest ► SQLite ► rollups ► dashboard + reports
+                                              ashlar-trace-server: ingest ► SQLite ► rollups ► dashboard + reports
 ```
 
 ## 1. What the SDK must fit
@@ -24,9 +24,9 @@ The host apps set these constraints:
 
 | Crate | Role | May depend on |
 |---|---|---|
-| `tracer-proto` | Wire types, constants, name validation. No I/O. | `serde` |
-| `tracer-sdk` | The client. | `tracer-proto`, `serde_json`, `log`, `thiserror`, `flate2`, `getrandom`, optional `ureq`, optional `sysinfo` |
-| `tracer-server` | The backend binary. | `tracer-proto`, `axum`, `tokio`, `rusqlite`, `maud`, `argon2`, and small helpers |
+| `ashlar-trace-proto` | Wire types, constants, name validation. No I/O. | `serde` |
+| `ashlar-trace` | The client. | `ashlar-trace-proto`, `serde_json`, `log`, `thiserror`, `flate2`, `getrandom`, optional `ureq`, optional `sysinfo` |
+| `ashlar-trace-server` | The backend binary. | `ashlar-trace-proto`, `axum`, `tokio`, `rusqlite`, `maud`, `argon2`, and small helpers |
 
 ## 3. SDK
 
@@ -80,7 +80,7 @@ Files are written to a temporary name and renamed. A file that fails to parse is
 - `Sink::allows(signal)` is true only when the host enabled the signal, the kill switches are off, and the category is allowed.
 - `set_consent(category, false)` takes effect at once and also deletes that category's unsent items from the spool.
 - A choice made in this process is the authority in memory until it has been saved. If `consent.json` cannot be written, the worker tries again on every tick and does not read the file in the meantime, so a file that could not be updated never switches an opt-out back on.
-- `notice_pending()` is true until `notice_shown()`. Until then the SDK records and spools as usual (opt-out model) but **sends nothing**: no ingest request and no forget request leaves the machine before the user has seen the host's notice. `notice_shown()` is saved in `consent.json`, so later runs send from the start, and other running processes of the host see it within a tick. A category the user switches off before the notice is acknowledged is deleted from the spool and so is never sent. `flush_blocking` returns false while sending is held and data is waiting. The first time that happens the worker logs one `log::warn!` with target `tracer_sdk`, so a host that forgot to call `notice_shown()` can find out why nothing arrives; the SDK's own logger forwards lines with that target but never keeps them as breadcrumbs.
+- `notice_pending()` is true until `notice_shown()`. Until then the SDK records and spools as usual (opt-out model) but **sends nothing**: no ingest request and no forget request leaves the machine before the user has seen the host's notice. `notice_shown()` is saved in `consent.json`, so later runs send from the start, and other running processes of the host see it within a tick. A category the user switches off before the notice is acknowledged is deleted from the spool and so is never sent. `flush_blocking` returns false while sending is held and data is waiting. The first time that happens the worker logs one `log::warn!` with target `ashlar_trace`, so a host that forgot to call `notice_shown()` can find out why nothing arrives; the SDK's own logger forwards lines with that target but never keeps them as breadcrumbs.
 - `Builder::send_before_notice(true)` lifts the hold, for hosts that show their notice somewhere else, such as an installer. It does not mark the notice as shown.
 - Under a kill switch `set_consent` and `notice_shown` change nothing on disk.
 - `forget()` deletes this process's unsent items, every orphan, its breadcrumbs and the outbox, sends a `ForgetRequest` for the old install id, and creates a new install id. It also calls `Signals::forget()`, which empties what the signal modules hold in memory from before: the breadcrumb ring, the last crash and the last performance window. Other running processes of the host see the new id on their next tick and do the same to their own session folder and memory; items they had queued under the old id are discarded, which is decided under the spool lock so that none can land under the new header.
@@ -111,7 +111,7 @@ Item ids have the same form but are not drawn from the system each time, because
 The host declares events once:
 
 ```rust
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category { File = "file", Edit = "edit" }
     pub enum AppEvent {
         FileOpen = "file.open" in File,
@@ -122,7 +122,7 @@ tracer_sdk::events! {
 
 - A declarative macro; no procedural macro crate.
 - It generates both enums (`Copy`, `Clone`, `Debug`, `PartialEq`, `Eq`, `Hash`), and implements `EventCategory` and `Event` with `ALL` lists.
-- At build time, through `const` assertions using `tracer_proto::validate_name` and `const_str_eq`, it rejects an invalid name and a duplicate name within either enum. `trybuild` compile-fail tests cover both.
+- At build time, through `const` assertions using `ashlar_trace_proto::validate_name` and `const_str_eq`, it rejects an invalid name and a duplicate name within either enum. `trybuild` compile-fail tests cover both.
 - `listen(category)`, `listen_events(&[..])` and `listen_all::<AppEvent>()` choose what is recorded, and each declares the catalog itself, so their order does not matter and no separate call is needed. `listen(category)` reaches the events through `EventCategory::EVENTS`, which the macro fills in. `Builder::catalog::<AppEvent>()` declares the events without listening to any. A hand-written `EventCategory` that leaves `EVENTS` empty needs that call; `init` logs one warning when categories are listened to and no event is declared.
 - `track` drops an event that is not listened to before it reaches the queue. The check must be cheap: a lookup in a small set built at startup.
 - `track_id(category, id)` records an id that is not in the catalog, marked `dynamic`, when its category is listened to. The id is validated with `validate_name` at run time; an invalid one is dropped and counted.
@@ -157,7 +157,7 @@ tracer_sdk::events! {
 | `hang` | A watchdog thread, driven in one of two ways. **Turns** (preferred): `begin_turn()` when the main loop starts handling something and `end_turn()` when it is done, or `turn()` for a guard that does both. A turn open for longer than `hang_threshold` is a hang; the time between turns, when the loop waits for work, never is. This is the only way that works for a loop that runs only on input or that a GUI framework owns. **Heartbeats**: `heartbeat()` once per iteration of a loop that runs continuously; a last beat older than the threshold is a hang. Once a host has begun a turn, heartbeats no longer count for that process. Each call is one atomic update. A second `begin_turn` while a turn is open keeps the original start; `end_turn` without an open turn does nothing. Either way one `crash` of kind `hang` is submitted per hang, with `blocked_ms` as observed so far, and nothing more until the next turn or beat. Watching starts with the first turn or beat, so hosts that call neither get no reports. `pause`/`resume` nest; resuming restarts the open turn or the last beat, and stores that before lifting the pause. If the watchdog finds far more time has passed than its own poll interval, it was suspended with the rest of the machine: it restarts the measurement instead of reporting. |
 | `perf` | `frame(duration)` records into a `FrameStats` histogram behind a lock that is held only for the update. `first_frame()` records startup time since `init` once. Every `perf_window` the tick submits one `perf` item if it has anything to report, and keeps a copy as "last perf" for crash reports. |
 | `sys` | With the `sysinfo` feature: this process's CPU and memory every `sys_interval`, folded into the perf window (mean CPU, last and peak memory), and static device details once for the envelope header. Without the feature, those fields are absent. |
-| `logs` | A `log::Log` that keeps the last `breadcrumb_capacity` lines at or above `breadcrumb_level` in a ring, scrubbed, and forwards every record to the wrapped logger if there is one. `LoggerMode::Install` installs it globally; otherwise the host wraps its own logger with `Tracer::logger`. The ring is saved to `breadcrumbs.jsonl` in the session folder on the tick when it changed. Log lines leave the device only inside a crash. Lines with the SDK's own target, `tracer_sdk`, are forwarded but not kept. |
+| `logs` | A `log::Log` that keeps the last `breadcrumb_capacity` lines at or above `breadcrumb_level` in a ring, scrubbed, and forwards every record to the wrapped logger if there is one. `LoggerMode::Install` installs it globally; otherwise the host wraps its own logger with `Tracer::logger`. The ring is saved to `breadcrumbs.jsonl` in the session folder on the tick when it changed. Log lines leave the device only inside a crash. Lines with the SDK's own target, `ashlar_trace`, are forwarded but not kept. |
 | `rt` | `Counter` and `Gauge` are `Arc<AtomicU64>`. Registration allocates and locks; recording is one atomic operation. The tick reads them into the perf window (counters as the increase since the last window). |
 | `scrub` | Replaces the home directory with `~`, removes the account name from paths, truncates long values (messages 2 KiB, backtraces 32 KiB, log lines 512 bytes). |
 | `report` | `write_report(path)` writes a plain-text report: app, version, device, session ids and totals, last perf window, recent breadcrumbs. |
@@ -176,7 +176,7 @@ Known limit for 0.1: a backtrace from a release build stripped of symbols contai
 
 ### 4.1 Shape
 
-One binary, `tracer-server`, with subcommands:
+One binary, `ashlar-trace-server`, with subcommands:
 
 | Command | Does |
 |---|---|

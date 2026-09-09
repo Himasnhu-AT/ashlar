@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn binary(dir: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_tracer-server"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ashlar-trace-server"));
     command
         .env("TRACER_DATA_DIR", dir)
         .env_remove("TRACER_BIND")
@@ -21,7 +21,7 @@ fn help_and_unknown_commands() {
     let dir = tempfile::tempdir().unwrap();
     let help = binary(dir.path()).arg("help").output().unwrap();
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("usage: tracer-server"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("usage: ashlar-trace-server"));
     let none = binary(dir.path()).output().unwrap();
     assert!(none.status.success(), "no arguments prints the usage");
 

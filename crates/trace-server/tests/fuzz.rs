@@ -49,7 +49,7 @@ const NASTY_STRINGS: &[&str] = &[
 ];
 
 fn now() -> u64 {
-    tracer_server::now_ms() as u64
+    ashlar_trace_server::now_ms() as u64
 }
 
 fn base_envelope(rng: &mut Rng, n: usize) -> Value {
@@ -228,7 +228,7 @@ fn mutated_envelopes_never_cause_a_server_error_or_an_oversized_string() {
     assert_eq!(server.get("/v1/health").status, 200, "the server must still be alive");
     assert_stored_strings_are_capped(&server);
     // Whatever was stored, the rollups still compute.
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn extreme_timestamps_are_clamped_not_stored_raw() {
             "items": [{"id": format!("e{n}"), "ts": ts, "type": "event", "name": "file.open", "category": "file"}]});
         assert_eq!(server.ingest_json(&serde_json::to_vec(&envelope).unwrap()).status, 200);
     }
-    let nowms = tracer_server::now_ms();
+    let nowms = ashlar_trace_server::now_ms();
     assert!(server.count("SELECT min(ts) FROM events") >= nowms - 90 * 86_400_000 - 10_000);
     assert!(server.count("SELECT max(ts) FROM events") <= nowms + 3_600_000 + 10_000);
 }

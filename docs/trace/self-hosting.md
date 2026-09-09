@@ -1,24 +1,24 @@
 # Self-hosting the server
 
-`tracer-server` is one binary and one data folder. It serves the ingest API, stores everything in a SQLite file, computes daily rollups, and renders the dashboard. There is no other service to run.
+`ashlar-trace-server` is one binary and one data folder. It serves the ingest API, stores everything in a SQLite file, computes daily rollups, and renders the dashboard. There is no other service to run.
 
 ## 1. Run it
 
 ### The binary
 
 ```
-cargo build --release -p tracer-server
-./target/release/tracer-server serve
+cargo build --release -p ashlar-trace-server
+./target/release/ashlar-trace-server serve
 ```
 
 With no settings it listens on `127.0.0.1:8090` and keeps its database in `./data`. It logs to stderr at `info` level and stops on ctrl-c, letting in-flight requests finish.
 
 ### The container
 
-`deploy/Dockerfile` builds a small image (build from the repository root) and `deploy/compose.yml` runs it with its data in a named volume:
+`deploy/trace/Dockerfile` builds a small image (build from the repository root) and `deploy/trace/compose.yml` runs it with its data in a named volume:
 
 ```
-docker compose -f deploy/compose.yml up -d
+docker compose -f deploy/trace/compose.yml up -d
 ```
 
 The image tags (`rust:1-slim-bookworm`, `debian:bookworm-slim`) are left as they are so that security updates arrive on rebuild. If you need reproducible builds, pin the base images by digest (`FROM debian:bookworm-slim@sha256:...`) and update the digests on a schedule.
@@ -58,7 +58,7 @@ Every command below works on the same data folder as `serve`. Run them with the 
 **Create an app.** The slug is lower-case letters, digits, `-` or `_`. The command prints the app's first write key:
 
 ```
-tracer-server app create my-app "My App"
+ashlar-trace-server app create my-app "My App"
 created app my-app (My App)
 write key: tk_...
 ```
@@ -66,9 +66,9 @@ write key: tk_...
 Put that key into the host app's `Tracer::builder`. Write keys are public by nature (they ship inside the app) and only allow sending data. More keys:
 
 ```
-tracer-server key create my-app
-tracer-server key revoke tk_...      # stops it working at once
-tracer-server app list
+ashlar-trace-server key create my-app
+ashlar-trace-server key revoke tk_...      # stops it working at once
+ashlar-trace-server app list
 ```
 
 Revoking a key makes the server answer 401 to it. The SDK keeps its data and stops sending until the app restarts, so rotate keys by shipping a new one first, then revoking the old one when most installs have updated.
@@ -76,7 +76,7 @@ Revoking a key makes the server answer 401 to it. The SDK keeps its data and sto
 **Create a dashboard login.** The password is read from `TRACER_ADMIN_PASSWORD` or, if that is unset, from one line of standard input. It must be at least 8 characters:
 
 ```
-TRACER_ADMIN_PASSWORD='a long passphrase' tracer-server admin create alice
+TRACER_ADMIN_PASSWORD='a long passphrase' ashlar-trace-server admin create alice
 ```
 
 Then open the server's address in a browser and sign in. The dashboard has an overview, crashes, performance, usage, release reports (downloadable as HTML, Markdown or JSON) and a settings page for keys.
@@ -84,8 +84,8 @@ Then open the server's address in a browser and sign in. The dashboard has an ov
 **With compose**, the container's entrypoint is the binary, so:
 
 ```
-docker compose -f deploy/compose.yml exec tracer tracer-server app create my-app "My App"
-docker compose -f deploy/compose.yml exec -e TRACER_ADMIN_PASSWORD='a long passphrase' tracer tracer-server admin create alice
+docker compose -f deploy/trace/compose.yml exec tracer ashlar-trace-server app create my-app "My App"
+docker compose -f deploy/trace/compose.yml exec -e TRACER_ADMIN_PASSWORD='a long passphrase' tracer ashlar-trace-server admin create alice
 ```
 
 ## 4. Point a host app at it
@@ -154,9 +154,9 @@ Everything is in `TRACER_DATA_DIR`: the database `tracer.db`, and while the serv
 For compose, option 3 or a stopped copy is simplest:
 
 ```
-docker compose -f deploy/compose.yml stop
+docker compose -f deploy/trace/compose.yml stop
 docker run --rm -v tracer_tracer-data:/data -v "$PWD":/backup debian:bookworm-slim tar czf /backup/tracer-data.tgz -C /data .
-docker compose -f deploy/compose.yml start
+docker compose -f deploy/trace/compose.yml start
 ```
 
 (The volume is named `<project>_tracer-data`; `docker volume ls` shows the real name.) Test a restore now and then: stop the server, put the files back into the data folder, start it.
@@ -171,8 +171,8 @@ What is lost if you lose the database: history. Clients keep unsent data on thei
 - **By hand**, for example from cron on a machine that runs the binary directly:
 
   ```
-  tracer-server rollup --days 7     # recompute recent rollups now
-  tracer-server prune               # run retention once
+  ashlar-trace-server rollup --days 7     # recompute recent rollups now
+  ashlar-trace-server prune               # run retention once
   ```
 
 ## 8. Upgrading
@@ -189,7 +189,7 @@ Run one server process per data folder. Do not point an older binary at a databa
 
 **429 Too Many Requests.** Requests are limited per client address (`TRACER_RATE_PER_MIN`, default 120 a minute), and each write key also has a much larger overall allowance (`TRACER_KEY_RATE_PER_MIN`, default 6000). Behind a proxy, set `TRACER_TRUST_PROXY=1`, otherwise all clients share the proxy's address. The SDK honours `Retry-After` and keeps its data until the server accepts it, so an occasional 429 loses nothing. Sustained 429 usually means the proxy setting above, or a test loop. Raise the limit, or set `0` to switch it off.
 
-**507 Insufficient Storage.** The database passed `TRACER_MAX_DB_MB`. The SDK keeps its data and retries. Lower `TRACER_RETENTION_DAYS` and run `tracer-server prune`, or raise the ceiling.
+**507 Insufficient Storage.** The database passed `TRACER_MAX_DB_MB`. The SDK keeps its data and retries. Lower `TRACER_RETENTION_DAYS` and run `ashlar-trace-server prune`, or raise the ceiling.
 
 **400, 413 or 422.** The batch was malformed, over 1 MiB after decompression, or from a newer schema. The SDK deletes that batch and counts a `server_rejected` drop, shown on the dashboard. A proxy that rewrites or truncates bodies (or a body-size limit smaller than 1 MiB) causes this too.
 
@@ -211,7 +211,7 @@ Run one server process per data folder. Do not point an older binary at a databa
 
 ## 10. Capacity and tuning
 
-Numbers below were measured with `examples/loadgen` on one machine (15 cores, an NVMe disk, release build, client and server on the same host over loopback, other jobs running on the machine). Treat them as an order of magnitude for your own hardware and re-measure with the commands at the end. A "typical" envelope in the generator carries about 40 items (a session start with a catalog hash, heartbeats, 20 to 50 events, a performance window with a real histogram, now and then a crash with a 30-frame backtrace, a session end) and is about 1.2 KB gzipped.
+Numbers below were measured with `examples/trace-loadgen` on one machine (15 cores, an NVMe disk, release build, client and server on the same host over loopback, other jobs running on the machine). Treat them as an order of magnitude for your own hardware and re-measure with the commands at the end. A "typical" envelope in the generator carries about 40 items (a session start with a catalog hash, heartbeats, 20 to 50 events, a performance window with a real histogram, now and then a crash with a 30-frame backtrace, a session end) and is about 1.2 KB gzipped.
 
 **Ingest.**
 
@@ -246,8 +246,8 @@ Ingest at 300 envelopes a second while the 3-day rollup runs as another process:
 **Measuring your own server.**
 
 ```
-cargo xtask load                                   # a short standard profile, prints a table
-cargo build --release -p tracer-server -p loadgen
+cargo xtask trace-load                                   # a short standard profile, prints a table
+cargo build --release -p ashlar-trace-server -p loadgen
 target/release/loadgen run --spawn --concurrency 64 --duration 30             # flat out
 target/release/loadgen run --spawn --rate 500 --duration 60                   # fixed rate, open loop
 target/release/loadgen run --url http://host:8090 --key tk_... --db /data/tracer.db --rate 200 --duration 60

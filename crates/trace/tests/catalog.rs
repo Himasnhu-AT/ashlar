@@ -1,7 +1,7 @@
 //! Build-time behaviour of the `events!` macro: what it accepts and what it refuses to compile.
 //!
 //! The expected compiler output is in `tests/ui/*.stderr`. After a toolchain update changes its wording,
-//! regenerate it with `TRYBUILD=overwrite cargo test -p tracer-sdk --test catalog` and review the diff.
+//! regenerate it with `TRYBUILD=overwrite cargo test -p ashlar-trace --test catalog` and review the diff.
 
 #[test]
 fn events_macro() {

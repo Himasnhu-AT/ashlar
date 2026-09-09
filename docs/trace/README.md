@@ -1,12 +1,12 @@
-# Tracer
+# ashlar-trace: telemetry
 
 Crash, performance and usage telemetry for Rust desktop apps, with a backend you host yourself.
 
-- **`tracer-sdk`** — a small client you embed. Safe Rust only, no async runtime, no UI toolkit. It never blocks your frame loop and never prints.
-- **`tracer-server`** — one binary and one data folder: ingest API, SQLite storage, and a dashboard for crashes, performance and usage.
-- **`tracer-proto`** — the wire types both share.
+- **`ashlar-trace`** — a small client you embed. Safe Rust only, no async runtime, no UI toolkit. It never blocks your frame loop and never prints.
+- **`ashlar-trace-server`** — one binary and one data folder: ingest API, SQLite storage, and a dashboard for crashes, performance and usage.
+- **`ashlar-trace-proto`** — the wire types both share.
 
-> Status: early development. See [ROADMAP.md](ROADMAP.md).
+> Status: release candidate, load-tested; not yet published. See [roadmap.md](roadmap.md). Apps built on ashlar use it through `ashlar-telemetry`, which wires it to the command chokepoint, logging, the frame loop and native dialogs.
 
 ## What it collects
 
@@ -17,12 +17,12 @@ Crash, performance and usage telemetry for Rust desktop apps, with a backend you
 | Performance | Frame-time histogram, slow and frozen frames, startup time, process CPU and memory, plus your own counters and gauges. |
 | Usage | Sessions, daily opens, focused / active / idle time, and the events you declare. |
 
-The host app decides what is tracked. Events are declared as enums and checked at build time; anything not declared and listened to is never recorded. End users can switch each category off, and `DO_NOT_TRACK=1` is honoured. [docs/privacy.md](docs/privacy.md) lists every field.
+The host app decides what is tracked. Events are declared as enums and checked at build time; anything not declared and listened to is never recorded. End users can switch each category off, and `DO_NOT_TRACK=1` is honoured. [docs/privacy.md](privacy.md) lists every field.
 
 ## Sketch
 
 ```rust
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category { File = "file", Edit = "edit" }
     pub enum AppEvent {
         FileOpen = "file.open" in File,
@@ -30,7 +30,7 @@ tracer_sdk::events! {
     }
 }
 
-let tracer = tracer_sdk::Tracer::builder("app-write-key", "my-app", env!("CARGO_PKG_VERSION"))
+let tracer = ashlar_trace::Tracer::builder("app-write-key", "my-app", env!("CARGO_PKG_VERSION"))
     .data_dir(my_data_dir)
     .endpoint("https://telemetry.example.com")
     .listen(Category::File)
@@ -47,18 +47,15 @@ tracer.frame(frame_duration);   // once per frame
 
 ## Documentation
 
-- [Integrating the SDK into a host app](docs/integration.md)
-- [Self-hosting the server](docs/self-hosting.md)
-- [Architecture](docs/architecture.md)
-- [Wire format](docs/wire-format.md)
-- [Privacy and collected fields](docs/privacy.md)
+- [Integrating the SDK into a host app](integration.md)
+- [Self-hosting the server](self-hosting.md)
+- [Architecture](architecture.md)
+- [Wire format](wire-format.md)
+- [Privacy and collected fields](privacy.md)
 
 ## Development
 
-```
-cargo xtask ci
-```
-
-## Licence
-
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at your option.
+The crates are part of the ashlar workspace and its gate (`cargo xtask ci`). Heavier runs:
+`cargo xtask trace-stress` (the SDK's benchmarks and stress tests, release build),
+`cargo xtask trace-load` (a short load profile against a spawned release server) and
+`cargo xtask trace-demo` (checks the windowed demo, which is its own workspace).

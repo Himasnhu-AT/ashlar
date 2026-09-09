@@ -12,11 +12,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use ashlar_trace_proto::{AppInfo, Catalog, CatalogEvent, Envelope, Event, Item, ItemBody, ProcessKind, SessionStart, SessionTotals};
+use ashlar_trace_server::config::Config;
+use ashlar_trace_server::http::{self, AppState};
+use ashlar_trace_server::store::{SqliteStore, Store};
 use rusqlite::{Connection, OpenFlags, params};
-use tracer_proto::{AppInfo, Catalog, CatalogEvent, Envelope, Event, Item, ItemBody, ProcessKind, SessionStart, SessionTotals};
-use tracer_server::config::Config;
-use tracer_server::http::{self, AppState};
-use tracer_server::store::{SqliteStore, Store};
 
 const WAIT: Duration = Duration::from_secs(15);
 
@@ -41,8 +41,8 @@ impl Server {
         std::fs::create_dir_all(&config.data_dir).unwrap();
         let db_path = config.db_path();
         let store = Arc::new(SqliteStore::open(&db_path).unwrap());
-        let key = tracer_server::cli::new_write_key().unwrap();
-        store.create_app("demo", "Demo", &key, tracer_server::now_ms()).unwrap();
+        let key = ashlar_trace_server::cli::new_write_key().unwrap();
+        store.create_app("demo", "Demo", &key, ashlar_trace_server::now_ms()).unwrap();
         Self { dir, store, key, db_path, addr: None, shutdown: None, thread: None }
     }
 
@@ -83,7 +83,7 @@ impl Server {
     }
 
     fn rollup(&self) {
-        tracer_server::jobs::rollup_recent(self.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+        ashlar_trace_server::jobs::rollup_recent(self.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     }
 
     fn demo(&self) -> Demo {
@@ -235,8 +235,8 @@ struct Browser {
 
 impl Browser {
     fn login(server: &Server) -> Self {
-        let hash = tracer_server::cli::hash_password("correct horse battery").unwrap();
-        server.store.create_admin("admin", &hash, tracer_server::now_ms()).unwrap();
+        let hash = ashlar_trace_server::cli::hash_password("correct horse battery").unwrap();
+        server.store.create_admin("admin", &hash, ashlar_trace_server::now_ms()).unwrap();
         let agent: ureq::Agent =
             ureq::Agent::config_builder().http_status_as_error(false).max_redirects(0).max_redirects_will_error(false).build().into();
         let base = server.base();
@@ -273,7 +273,7 @@ fn cookies<B>(response: &ureq::http::Response<B>) -> String {
 // hand-built envelopes
 
 fn now() -> u64 {
-    tracer_server::now_ms() as u64
+    ashlar_trace_server::now_ms() as u64
 }
 
 fn envelope(version: &str, install: &str, session: &str, items: Vec<Item>) -> Envelope {

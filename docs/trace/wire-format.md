@@ -1,6 +1,6 @@
 # Wire format
 
-Schema version **1**. The types live in `crates/tracer-proto`; the fixtures in its `tests/fixtures/` are the reference examples.
+Schema version **1**. The types live in `crates/trace-proto`; the fixtures in its `tests/fixtures/` are the reference examples.
 
 ## Transport
 

@@ -7,10 +7,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use tracer_proto::{AppInfo, Envelope, Item, ItemBody, ProcessKind};
-use tracer_server::config::Config;
-use tracer_server::http::{self, AppState};
-use tracer_server::store::{SqliteStore, Store};
+use ashlar_trace_proto::{AppInfo, Envelope, Item, ItemBody, ProcessKind};
+use ashlar_trace_server::config::Config;
+use ashlar_trace_server::http::{self, AppState};
+use ashlar_trace_server::store::{SqliteStore, Store};
 
 pub struct Reply {
     pub status: u16,
@@ -64,7 +64,7 @@ impl TestServer {
         adjust(&mut config);
         let mut server = Self::start(config);
         server.key = "tk_test_key_demo".to_string();
-        let app = server.store.create_app("demo", "Demo", &server.key, tracer_server::now_ms()).unwrap();
+        let app = server.store.create_app("demo", "Demo", &server.key, ashlar_trace_server::now_ms()).unwrap();
         server.app_id = app.id;
         server._dir = Some(dir);
         server
@@ -149,7 +149,7 @@ impl TestServer {
     }
 
     pub fn forget(&self, install_id: &str) -> Reply {
-        let body = serde_json::to_vec(&tracer_proto::ForgetRequest { schema: 1, install_id: install_id.to_string() }).unwrap();
+        let body = serde_json::to_vec(&ashlar_trace_proto::ForgetRequest { schema: 1, install_id: install_id.to_string() }).unwrap();
         self.post_raw("/v1/forget", Some(&self.key), false, &body)
     }
 
@@ -183,7 +183,7 @@ pub fn gzip(bytes: &[u8]) -> Vec<u8> {
 }
 
 pub fn now() -> u64 {
-    tracer_server::now_ms() as u64
+    ashlar_trace_server::now_ms() as u64
 }
 
 pub fn envelope(install: &str, session: &str, items: Vec<Item>) -> Envelope {

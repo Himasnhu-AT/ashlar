@@ -188,7 +188,7 @@ pub fn run(args: &RunArgs) -> Report {
                 }
                 // Build the body before waiting for the slot: the client's own generation time is not the
                 // server's latency.
-                let now_ms = tracer_server::now_ms() as u64;
+                let now_ms = ashlar_trace_server::now_ms() as u64;
                 let (body, items) = synth::body(&profile, &mut rng, n, now_ms);
                 let scheduled = match slot_at {
                     Some(at) => {

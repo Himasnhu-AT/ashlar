@@ -155,7 +155,7 @@ fn login_markup(message: Option<&str>, csrf: Option<&str>, no_admin: bool) -> Ma
             div class="banner" role="status" {
                 strong { "No admin account exists yet." }
                 p { "Create one on the server, then reload this page:" }
-                p { code { "tracer-server admin create <username>" } }
+                p { code { "ashlar-trace-server admin create <username>" } }
             }
         } @else if let Some(csrf) = csrf {
             form method="post" action="/login" {

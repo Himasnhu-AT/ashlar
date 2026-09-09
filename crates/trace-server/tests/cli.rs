@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::too_many_arguments, clippy::type_complexity)]
 mod common;
 
+use ashlar_trace_proto::{ItemBody, SessionStart};
+use ashlar_trace_server::cli::{Command, execute, parse};
+use ashlar_trace_server::config::Config;
 use common::{TestServer, config_in, envelope, item};
-use tracer_proto::{ItemBody, SessionStart};
-use tracer_server::cli::{Command, execute, parse};
-use tracer_server::config::Config;
 
 fn run(config: &Config, words: &[&str], stdin: &str) -> Result<String, String> {
     let args: Vec<String> = words.iter().map(|word| word.to_string()).collect();
@@ -53,12 +53,12 @@ fn admin_create_reads_the_password_from_settings_or_stdin() {
     run(&config, &["admin", "create", "bob"], "").unwrap();
     assert!(run(&config, &["admin", "create", "bob"], "").unwrap_err().contains("taken"));
 
-    let store = tracer_server::store::SqliteStore::open(&config.db_path()).unwrap();
-    use tracer_server::store::Store;
+    let store = ashlar_trace_server::store::SqliteStore::open(&config.db_path()).unwrap();
+    use ashlar_trace_server::store::Store;
     let (_, hash) = store.admin_password_hash("alice").unwrap().unwrap();
     assert!(hash.starts_with("$argon2"));
-    assert!(tracer_server::cli::verify_password("a long enough password", &hash));
-    assert!(!tracer_server::cli::verify_password("a long enough passwore", &hash));
+    assert!(ashlar_trace_server::cli::verify_password("a long enough password", &hash));
+    assert!(!ashlar_trace_server::cli::verify_password("a long enough passwore", &hash));
     assert!(!hash.contains("long enough"));
 }
 

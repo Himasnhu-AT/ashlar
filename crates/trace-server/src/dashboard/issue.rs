@@ -1,8 +1,8 @@
 //! The page for one crash issue. Everything in a crash record came from a client, so all of it is shown as
 //! escaped text.
 
+use ashlar_trace_proto::{Breadcrumb, Device, Perf};
 use maud::{Markup, html};
-use tracer_proto::{Breadcrumb, Device, Perf};
 
 use super::data::IssueDetail;
 use super::fmt;

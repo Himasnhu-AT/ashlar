@@ -1,4 +1,4 @@
-//! Starts the `tracer-server` binary as a child process on a data directory, so its memory can be measured
+//! Starts the `ashlar-trace-server` binary as a child process on a data directory, so its memory can be measured
 //! on its own.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ fn server_binary() -> PathBuf {
         return PathBuf::from(path);
     }
     let exe = std::env::current_exe().unwrap_or_default();
-    exe.parent().map(|dir| dir.join("tracer-server")).unwrap_or_default()
+    exe.parent().map(|dir| dir.join("ashlar-trace-server")).unwrap_or_default()
 }
 
 fn free_port() -> u16 {
@@ -49,7 +49,7 @@ pub fn spawn(dir: Option<PathBuf>, extra_env: &[(String, String)]) -> Result<Spa
     let listing = base_command(&dir, extra_env)
         .args(["app", "list"])
         .output()
-        .map_err(|e| format!("cannot run {}: {e} (build tracer-server first)", server_binary().display()))?;
+        .map_err(|e| format!("cannot run {}: {e} (build ashlar-trace-server first)", server_binary().display()))?;
     let key = if String::from_utf8_lossy(&listing.stdout).contains("loadgen") {
         let out = base_command(&dir, extra_env).args(["key", "create", "loadgen"]).output().map_err(|e| e.to_string())?;
         String::from_utf8_lossy(&out.stdout).lines().find_map(|l| l.strip_prefix("write key: ").map(str::to_string))

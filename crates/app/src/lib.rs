@@ -17,7 +17,7 @@
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
 //! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
-//! | [`telemetry`] | tracer-sdk hook points (feature `telemetry`) |
+//! | [`telemetry`] | ashlar-telemetry hook points (feature `telemetry`) |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod app;

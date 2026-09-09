@@ -6,9 +6,9 @@ mod common;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use ashlar_trace_proto::{Crash, CrashKind, Event, Item, ItemBody, SessionEnd, SessionStart, SessionStatus, SessionTotals};
+use ashlar_trace_server::store::Store;
 use common::{TestServer, envelope, item};
-use tracer_proto::{Crash, CrashKind, Event, Item, ItemBody, SessionEnd, SessionStart, SessionStatus, SessionTotals};
-use tracer_server::store::Store;
 
 fn totals(duration_s: u64) -> SessionTotals {
     SessionTotals { seq: 1, duration_s, focused_s: duration_s, active_s: duration_s / 2, idle_s: 0 }
@@ -198,12 +198,12 @@ fn rollup_fingerprint(server: &TestServer) -> Vec<i64> {
 fn two_rollups_at_once_agree_with_one() {
     let server = TestServer::demo();
     seed_for_rollup(&server);
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     let alone = rollup_fingerprint(&server);
     assert_eq!(alone[0], 60);
     std::thread::scope(|scope| {
         for _ in 0..4 {
-            scope.spawn(|| tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap());
+            scope.spawn(|| ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap());
         }
         scope.spawn(|| {
             server.store.rollup_dirty(0).unwrap();
@@ -216,7 +216,7 @@ fn two_rollups_at_once_agree_with_one() {
 fn a_rollup_racing_ingest_ends_with_the_same_numbers_as_a_rollup_after_it() {
     let after = TestServer::demo();
     seed_for_rollup(&after);
-    tracer_server::jobs::rollup_pending(after.store.as_ref(), tracer_server::now_ms(), 90).unwrap();
+    ashlar_trace_server::jobs::rollup_pending(after.store.as_ref(), ashlar_trace_server::now_ms(), 90).unwrap();
     let expected = rollup_fingerprint(&after);
 
     let racing = TestServer::demo();
@@ -228,12 +228,12 @@ fn a_rollup_racing_ingest_ends_with_the_same_numbers_as_a_rollup_after_it() {
         });
         scope.spawn(|| {
             while !done.load(Ordering::Relaxed) {
-                tracer_server::jobs::rollup_pending(racing.store.as_ref(), tracer_server::now_ms(), 90).unwrap();
+                ashlar_trace_server::jobs::rollup_pending(racing.store.as_ref(), ashlar_trace_server::now_ms(), 90).unwrap();
             }
         });
     });
     // Data that arrived during the last rollup left its day marked dirty; the next pass settles it.
-    tracer_server::jobs::rollup_pending(racing.store.as_ref(), tracer_server::now_ms(), 90).unwrap();
+    ashlar_trace_server::jobs::rollup_pending(racing.store.as_ref(), ashlar_trace_server::now_ms(), 90).unwrap();
     assert_eq!(rollup_fingerprint(&racing), expected);
     assert_eq!(racing.count("SELECT count(*) FROM dirty_days"), 0, "everything was rolled up");
 }

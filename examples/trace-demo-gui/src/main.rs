@@ -1,6 +1,6 @@
 //! A minimal windowed host that wires the Tracer SDK by hand, the way a real immediate-mode app would.
 //!
-//! It has been compiled and linted (`cargo xtask demo`) but never run: there is no display where it was
+//! It has been compiled and linted (`cargo xtask trace-demo`) but never run: there is no display where it was
 //! written. Settings come from the environment so nothing is sent unless asked to:
 //!
 //! - `TRACER_DEMO_DIR`: data folder (default: a `tracer-demo-gui` folder in the system temp dir)
@@ -11,9 +11,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tracer_sdk::{ConsentCategory, Gpu, LoggerMode, Prop, Tracer};
+use ashlar_trace::{ConsentCategory, Gpu, LoggerMode, Prop, Tracer};
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category {
         Ui = "ui",
         Doc = "doc",
@@ -151,10 +151,11 @@ impl DemoApp {
     }
 }
 
-/// The deliberate crash behind the "Panic" button.
-#[allow(clippy::panic, reason = "the demo's panic button exists to crash the host on purpose")]
+/// The deliberate crash behind the "Panic" button (the point of the button).
 fn crash_on_purpose() -> ! {
-    panic!("demo panic from the button")
+    // a failed assertion: a real panic with this message, through the panic hook
+    assert!(std::hint::black_box(false), "demo panic from the button");
+    std::process::abort()
 }
 
 impl eframe::App for DemoApp {

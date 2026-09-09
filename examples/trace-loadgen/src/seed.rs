@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
+use ashlar_trace_server::store::{SqliteStore, Store};
 use rusqlite::Connection;
-use tracer_server::store::{SqliteStore, Store};
 
 const DAY: i64 = 86_400_000;
 const CHUNK: i64 = 500_000;
@@ -70,7 +70,7 @@ pub fn seed(db: &Path, sizes: &Sizes, now_ms: i64) -> Result<(), String> {
         if store.find_app("loadgen").map_err(|e| e.to_string())?.is_none() {
             store.create_app("loadgen", "Load generator", "tk_seeded_loadgen_key", now_ms).map_err(|e| e.to_string())?;
         }
-        let hash = tracer_server::cli::hash_password("seeded admin password").map_err(|e| e.to_string())?;
+        let hash = ashlar_trace_server::cli::hash_password("seeded admin password").map_err(|e| e.to_string())?;
         let _ = store.create_admin("admin", &hash, now_ms);
     }
     let conn = Connection::open(db).map_err(|e| e.to_string())?;
@@ -215,7 +215,7 @@ pub fn command(opts: &HashMap<String, String>) -> Result<(), String> {
     let sizes = Sizes::scaled(scale);
     eprintln!("seeding {db} at scale {scale}");
     let started = Instant::now();
-    seed(Path::new(db), &sizes, tracer_server::now_ms())?;
+    seed(Path::new(db), &sizes, ashlar_trace_server::now_ms())?;
     eprintln!("seeded in {:.1}s", started.elapsed().as_secs_f64());
     Ok(())
 }

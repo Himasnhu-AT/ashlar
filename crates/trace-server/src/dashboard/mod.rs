@@ -145,7 +145,7 @@ fn ingest_url(state: &AppState, headers: &HeaderMap) -> String {
     });
     let scheme = if state.config.secure_cookies { "https" } else { "http" };
     let authority = host.map_or_else(|| state.config.bind.to_string(), str::to_string);
-    format!("{scheme}://{authority}{}", tracer_proto::routes::INGEST)
+    format!("{scheme}://{authority}{}", ashlar_trace_proto::routes::INGEST)
 }
 
 /// Everything an app page needs before it loads its own data.

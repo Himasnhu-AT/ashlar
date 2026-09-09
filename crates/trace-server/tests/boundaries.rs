@@ -5,12 +5,12 @@ mod common;
 
 use std::time::{Duration, Instant};
 
+use ashlar_trace_proto::MAX_ENVELOPE_BYTES;
+use ashlar_trace_server::http::limiter::{Limiters, MAX_TRACKED, TokenBuckets};
+use ashlar_trace_server::ingest::DAY_MS;
+use ashlar_trace_server::store::Store;
 use common::{TestServer, gzip, now};
 use serde_json::{Value, json};
-use tracer_proto::MAX_ENVELOPE_BYTES;
-use tracer_server::http::limiter::{Limiters, MAX_TRACKED, TokenBuckets};
-use tracer_server::ingest::DAY_MS;
-use tracer_server::store::Store;
 
 fn envelope_json(items: Vec<Value>) -> Value {
     json!({"schema": 1, "app": {"name": "demo", "version": "1.0.0"}, "install_id": "i", "session_id": "s", "sent_at": now(), "items": items})
@@ -127,7 +127,7 @@ fn identifier_lengths_are_exact() {
 #[test]
 fn items_on_either_side_of_midnight_land_on_the_right_day_and_a_session_may_span_it() {
     let server = TestServer::demo();
-    let day = tracer_server::now_ms() / DAY_MS - 3;
+    let day = ashlar_trace_server::now_ms() / DAY_MS - 3;
     let midnight = ((day + 1) * DAY_MS) as u64;
     let env = json!({"schema": 1, "app": {"name": "demo", "version": "1.0.0"}, "install_id": "i", "session_id": "s", "sent_at": now(),
     "items": [
@@ -141,7 +141,7 @@ fn items_on_either_side_of_midnight_land_on_the_right_day_and_a_session_may_span
     assert_eq!(server.count("SELECT day FROM events WHERE id = 2"), day + 1);
     // The session belongs to the day it started; its later activity does not move it.
     assert_eq!(server.count("SELECT day FROM sessions"), day);
-    tracer_server::jobs::rollup_pending(server.store.as_ref(), tracer_server::now_ms(), 90).unwrap();
+    ashlar_trace_server::jobs::rollup_pending(server.store.as_ref(), ashlar_trace_server::now_ms(), 90).unwrap();
     assert_eq!(server.count(&format!("SELECT sessions FROM daily_sessions WHERE day = {day}")), 1);
     assert_eq!(server.count(&format!("SELECT count(*) FROM daily_sessions WHERE day = {}", day + 1)), 0);
     assert_eq!(server.count(&format!("SELECT sum(count) FROM daily_events WHERE day = {day}")), 1);
@@ -151,7 +151,7 @@ fn items_on_either_side_of_midnight_land_on_the_right_day_and_a_session_may_span
 #[test]
 fn retention_keeps_the_day_exactly_n_days_old_and_drops_the_one_before() {
     let server = TestServer::demo();
-    let nowms = tracer_server::now_ms();
+    let nowms = ashlar_trace_server::now_ms();
     let today = nowms / DAY_MS;
     for (n, age) in [89, 90, 91].into_iter().enumerate() {
         let env = json!({"schema": 1, "app": {"name": "demo", "version": "1.0.0"}, "install_id": "i", "session_id": format!("s{n}"), "sent_at": now(),
@@ -159,7 +159,7 @@ fn retention_keeps_the_day_exactly_n_days_old_and_drops_the_one_before() {
         server.ingest_json(&serde_json::to_vec(&env).unwrap());
     }
     // Days 89 and 90 are inside the clamp window (90 days); 91 was clamped to the window's edge on the way in.
-    let stats = tracer_server::jobs::run_retention(server.store.as_ref(), nowms, 90).unwrap();
+    let stats = ashlar_trace_server::jobs::run_retention(server.store.as_ref(), nowms, 90).unwrap();
     let days: Vec<i64> = {
         let conn = rusqlite::Connection::open(&server.db_path).unwrap();
         let mut stmt = conn.prepare("SELECT day FROM events ORDER BY day").unwrap();
@@ -169,7 +169,7 @@ fn retention_keeps_the_day_exactly_n_days_old_and_drops_the_one_before() {
     assert!(days.iter().all(|d| *d >= today - 90), "{days:?}");
     let _ = stats;
     // One day later the oldest of those is past retention.
-    let stats = tracer_server::jobs::run_retention(server.store.as_ref(), nowms + DAY_MS, 90).unwrap();
+    let stats = ashlar_trace_server::jobs::run_retention(server.store.as_ref(), nowms + DAY_MS, 90).unwrap();
     assert!(stats.events >= 1);
     assert!(server.count("SELECT min(day) FROM events") >= today - 89);
 }
@@ -180,17 +180,17 @@ fn the_size_ceiling_turns_off_again_once_the_database_shrinks() {
     let blob = "b".repeat(30_000);
     // At most 20 crashes are taken per envelope, so fill the file with several.
     for batch in 0..4 {
-        let crashes: Vec<tracer_proto::Item> = (0..20)
-            .map(|n| tracer_proto::Item {
+        let crashes: Vec<ashlar_trace_proto::Item> = (0..20)
+            .map(|n| ashlar_trace_proto::Item {
                 id: format!("big{batch}-{n}"),
                 ts: now(),
-                body: tracer_proto::ItemBody::Crash(tracer_proto::Crash {
+                body: ashlar_trace_proto::ItemBody::Crash(ashlar_trace_proto::Crash {
                     backtrace: Some(format!("0: demo::fill{batch}_{n}\n{blob}")),
-                    ..tracer_proto::Crash::default()
+                    ..ashlar_trace_proto::Crash::default()
                 }),
             })
             .collect();
-        let prepared = tracer_server::ingest::prepare(common::envelope("i", "s", crashes), tracer_server::now_ms()).unwrap();
+        let prepared = ashlar_trace_server::ingest::prepare(common::envelope("i", "s", crashes), ashlar_trace_server::now_ms()).unwrap();
         server.store.ingest(server.app_id, &prepared).unwrap();
     }
     let body = serde_json::to_vec(&envelope_json(vec![event("probe1", "file.open")])).unwrap();

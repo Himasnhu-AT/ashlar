@@ -3,10 +3,10 @@
 
 mod common;
 
-use tracer_proto::{AppInfo, Device, Envelope, Event, FrameStats, Item, ItemBody, Perf, ProcessKind, SessionEnd, SessionStatus, SessionTotals};
-use tracer_server::ingest::{DAY_MS, prepare};
-use tracer_server::jobs;
-use tracer_server::store::{SqliteStore, Store};
+use ashlar_trace_proto::{AppInfo, Device, Envelope, Event, FrameStats, Item, ItemBody, Perf, ProcessKind, SessionEnd, SessionStatus, SessionTotals};
+use ashlar_trace_server::ingest::{DAY_MS, prepare};
+use ashlar_trace_server::jobs;
+use ashlar_trace_server::store::{SqliteStore, Store};
 
 const DAY: i64 = 20_000;
 /// Noon on day 20000.
@@ -217,7 +217,7 @@ fn rollup_numbers_are_exact() {
 #[test]
 fn drops_survive_a_rollup() {
     let fx = Fixture::new();
-    let drops = ItemBody::Drops(tracer_proto::Drops { reasons: [("queue_full".to_string(), 7)].into() });
+    let drops = ItemBody::Drops(ashlar_trace_proto::Drops { reasons: [("queue_full".to_string(), 7)].into() });
     fx.send("A", "A1", "macos", "1.0", ProcessKind::Gui, T, vec![(T - 10, drops)]);
     jobs::rollup_recent(&fx.store, T, 3, 90).unwrap();
     assert_eq!(fx.sql::<i64>("SELECT count FROM daily_drops WHERE reason = 'queue_full'"), 7);

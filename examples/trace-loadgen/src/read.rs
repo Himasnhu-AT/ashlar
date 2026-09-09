@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tracer_server::jobs;
-use tracer_server::store::SqliteStore;
+use ashlar_trace_server::jobs;
+use ashlar_trace_server::store::SqliteStore;
 
 use crate::run::{self, Phase, RunArgs};
 use crate::spawn;
@@ -104,7 +104,7 @@ pub fn command(opts: &HashMap<String, String>) -> Result<(), String> {
 
 fn rollups(db: &PathBuf) -> Result<(), String> {
     let store = SqliteStore::open(db).map_err(|e| e.to_string())?;
-    let now = tracer_server::now_ms();
+    let now = ashlar_trace_server::now_ms();
     let t = Instant::now();
     let closed = jobs::close_stale_sessions(&store, now).map_err(|e| e.to_string())?;
     println!("close stale sessions: {:.0} ms ({closed} closed)", ms(t));
@@ -178,7 +178,7 @@ fn contend(dir: &std::path::Path, opts: &HashMap<String, String>) -> Result<(), 
     let which = opts.get("jobs").cloned().unwrap_or_else(|| "rollup prune".to_string());
     let binary = std::env::var_os("LOADGEN_SERVER_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_exe().unwrap_or_default().with_file_name("tracer-server"));
+        .unwrap_or_else(|| std::env::current_exe().unwrap_or_default().with_file_name("ashlar-trace-server"));
     // Three phases of the same load: quiet, jobs running, quiet again.
     let jobs_thread = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs_f64(secs));

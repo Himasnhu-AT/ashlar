@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use tracer_proto::{Event, MAX_PROP_STR_LEN, MAX_PROPS, PropValue, validate_name};
+use ashlar_trace_proto::{Event, MAX_PROP_STR_LEN, MAX_PROPS, PropValue, validate_name};
 
 use crate::Prop;
 use crate::config::Config;
@@ -77,7 +77,7 @@ pub(super) fn build_event(
 
 #[cfg(test)]
 mod tests {
-    use tracer_proto::{Catalog, CatalogEvent};
+    use ashlar_trace_proto::{Catalog, CatalogEvent};
 
     use super::*;
 

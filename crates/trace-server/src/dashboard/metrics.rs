@@ -8,8 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use ashlar_trace_proto::FrameStats;
 use serde::Serialize;
-use tracer_proto::FrameStats;
 
 use super::fmt;
 use crate::store::{DayTotals, PerfRow};

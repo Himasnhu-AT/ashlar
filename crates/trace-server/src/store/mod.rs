@@ -6,7 +6,7 @@ pub mod read;
 pub mod sqlite;
 pub mod types;
 
-use tracer_proto::IngestResponse;
+use ashlar_trace_proto::IngestResponse;
 
 use crate::ingest::Prepared;
 

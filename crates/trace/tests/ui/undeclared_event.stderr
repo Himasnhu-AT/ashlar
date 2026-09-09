@@ -1,7 +1,7 @@
 error[E0599]: no variant, associated function, or constant named `FileClose` found for enum `AppEvent` in the current scope
   --> tests/ui/undeclared_event.rs:10:28
    |
- 1 | / tracer_sdk::events! {
+ 1 | / ashlar_trace::events! {
  2 | |     pub enum Category { File = "file" }
  3 | |     pub enum AppEvent {
  4 | |         FileOpen = "file.open" in File,
@@ -12,18 +12,18 @@ error[E0599]: no variant, associated function, or constant named `FileClose` fou
 10 |       tracer.track(AppEvent::FileClose);
    |                              ^^^^^^^^^ variant, associated function, or constant not found in `AppEvent`
 
-error[E0277]: the trait bound `&str: tracer_sdk::Event` is not satisfied
+error[E0277]: the trait bound `&str: ashlar_trace::Event` is not satisfied
   --> tests/ui/undeclared_event.rs:11:18
    |
 11 |     tracer.track("file.close");
-   |            ----- ^^^^^^^^^^^^ the trait `tracer_sdk::Event` is not implemented for `&str`
+   |            ----- ^^^^^^^^^^^^ the trait `ashlar_trace::Event` is not implemented for `&str`
    |            |
    |            required by a bound introduced by this call
    |
-help: the trait `tracer_sdk::Event` is implemented for `AppEvent`
+help: the trait `ashlar_trace::Event` is implemented for `AppEvent`
   --> tests/ui/undeclared_event.rs:1:1
    |
- 1 | / tracer_sdk::events! {
+ 1 | / ashlar_trace::events! {
  2 | |     pub enum Category { File = "file" }
  3 | |     pub enum AppEvent {
  4 | |         FileOpen = "file.open" in File,
@@ -35,4 +35,4 @@ note: required by a bound in `Tracer::track`
    |
    |     pub fn track<E: Event>(&self, event: E) {
    |                     ^^^^^ required by this bound in `Tracer::track`
-   = note: this error originates in the macro `tracer_sdk::events` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `ashlar_trace::events` (in Nightly builds, run with -Z macro-backtrace for more info)

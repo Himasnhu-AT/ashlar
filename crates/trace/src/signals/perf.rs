@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tracer_proto::{FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
+use ashlar_trace_proto::{FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
 
 use super::{Shared, lock, sys};
 
@@ -167,7 +167,7 @@ impl Shared {
 mod tests {
     use std::time::Duration;
 
-    use tracer_proto::{CrashKind, FRAME_BUCKETS, ItemBody, Perf, Signal};
+    use ashlar_trace_proto::{CrashKind, FRAME_BUCKETS, ItemBody, Perf, Signal};
 
     use super::*;
     use crate::signals::testutil::Fixture;

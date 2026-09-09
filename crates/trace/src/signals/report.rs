@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use tracer_proto::{Breadcrumb, Crash, Device, Perf, Signal};
+use ashlar_trace_proto::{Breadcrumb, Crash, Device, Perf, Signal};
 
 use super::{Shared, now_ms, sys};
 
@@ -213,8 +213,8 @@ pub(super) fn format_utc(ms: u64) -> String {
 mod tests {
     use std::time::Duration;
 
+    use ashlar_trace_proto::{CrashKind, Signal};
     use log::Log;
-    use tracer_proto::{CrashKind, Signal};
 
     use super::*;
     use crate::signals::testutil::{Fixture, TempDir};
@@ -238,7 +238,7 @@ mod tests {
             ram_mb: Some(32768),
             ..Device::default()
         };
-        let mut frames = tracer_proto::FrameStats::empty();
+        let mut frames = ashlar_trace_proto::FrameStats::empty();
         frames.record(4_000);
         frames.record(20_000);
         let perf = Perf {

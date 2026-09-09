@@ -88,6 +88,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 
 [[package]]
+name = "ashlar-example-trace-demo-gui"
+version = "0.1.0"
+dependencies = [
+ "ashlar-trace",
+ "eframe",
+ "log",
+]
+
+[[package]]
+name = "ashlar-trace"
+version = "0.1.0"
+dependencies = [
+ "ashlar-trace-proto",
+ "flate2",
+ "getrandom 0.4.3",
+ "log",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
+name = "ashlar-trace-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,15 +414,6 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
-
-[[package]]
-name = "demo-gui"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "log",
- "tracer-sdk",
-]
 
 [[package]]
 name = "dispatch"
@@ -2324,28 +2346,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
-]
-
-[[package]]
-name = "tracer-proto"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "tracer-sdk"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "getrandom 0.4.3",
- "log",
- "serde",
- "serde_json",
- "sysinfo",
- "thiserror 2.0.21",
- "tracer-proto",
- "ureq",
 ]
 
 [[package]]

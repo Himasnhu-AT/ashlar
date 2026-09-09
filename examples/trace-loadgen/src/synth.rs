@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use tracer_proto::{
+use ashlar_trace_proto::{
     AppInfo, Breadcrumb, Catalog, CatalogEvent, Crash, CrashKind, Device, Envelope, Event, FrameStats, Item, ItemBody, Perf, PropValue, SessionEnd,
     SessionStart, SessionStatus, SessionTotals,
 };
@@ -172,7 +172,7 @@ pub fn envelope(profile: &Profile, rng: &mut Rng, seq: u64, now_ms: u64) -> Enve
 
     Envelope {
         schema: 1,
-        app: AppInfo { name: "demo".into(), version: format!("1.{version}.0"), build: None, process: tracer_proto::ProcessKind::Gui },
+        app: AppInfo { name: "demo".into(), version: format!("1.{version}.0"), build: None, process: ashlar_trace_proto::ProcessKind::Gui },
         install_id: format!("inst{install:08x}"),
         session_id: format!("sess{:08x}{seq:012x}", profile.seed as u32),
         device: Some(Device { os_name: ["macos", "windows", "linux"][(install % 3) as usize].into(), arch: "x86_64".into(), ..Device::default() }),

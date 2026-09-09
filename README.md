@@ -38,3 +38,11 @@ fn main() -> Result<(), ashlar::app::Error> {
 
 `App::cli()` turns the same definition into a `-cli` binary with `commands`, `exec`, `run`,
 `mcp` and `serve`; `--control <port>` lets an agent drive the window. See `examples/notes`.
+
+## Telemetry
+
+Crash, performance and usage telemetry with a server you host yourself: `ashlar-trace` (the
+client SDK), `ashlar-trace-server` (ingest, SQLite storage and a dashboard in one binary),
+`ashlar-trace-proto` (the wire format), and `ashlar-telemetry`, which wires the client into an app
+in a few lines (command chokepoint, logging, frame loop, native dialogs). See
+[docs/trace](docs/trace/README.md).

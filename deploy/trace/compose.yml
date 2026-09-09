@@ -1,13 +1,13 @@
 # Runs the Tracer server with its data in a named volume. From the repository root:
-#   docker compose -f deploy/compose.yml up -d
+#   docker compose -f deploy/trace/compose.yml up -d
 # Put a TLS-terminating reverse proxy in front of it before exposing it to the internet,
 # and then set TRACER_TRUST_PROXY=1. Dashboard cookies are Secure by default, which needs HTTPS: to sign in
 # over plain HTTP on this machine only, set TRACER_SECURE_COOKIES=0.
 services:
   tracer:
     build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+      context: ../..
+      dockerfile: deploy/trace/Dockerfile
     restart: unless-stopped
     ports:
       - "127.0.0.1:8090:8090"

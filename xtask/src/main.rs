@@ -8,6 +8,8 @@
 //! - `msrv`: `cargo check` on the workspace's `rust-version` toolchain.
 //! - `advisories`: cargo-deny on advisories, bans and sources (needs the network).
 //! - `bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT]`: see `bench.rs`.
+//! - `trace-stress`, `trace-load`, `trace-demo`: the telemetry crates' benchmarks and stress tests,
+//!   a load profile against a spawned server, and the windowed demo's check (see `trace.rs`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -15,12 +17,16 @@ use std::process::{Command, ExitCode};
 mod bench;
 mod names;
 mod panics;
+mod trace;
 
 /// Rank of each workspace crate. A crate may depend only on crates of a lower rank.
 /// 0–1 core (headless, wasm-clean) · 2–4 services · 5 ui · 6 runtime · 7 umbrella · 8 examples.
 /// Nothing below 5 may depend on a UI crate. Keep docs/architecture.md in sync.
 const LAYERS: &[(&str, u8)] = &[
     ("ashlar-command", 0),
+    ("ashlar-trace-proto", 0),
+    ("ashlar-trace", 1),
+    ("ashlar-trace-server", 2),
     ("ashlar-fs", 0),
     ("ashlar-jobs", 0),
     ("ashlar-log", 0),
@@ -37,6 +43,8 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar", 7),
     ("ashlar-example-gallery", 8),
     ("ashlar-example-notes", 8),
+    ("ashlar-example-trace-demo-cli", 8),
+    ("ashlar-example-trace-loadgen", 8),
     ("xtask", 9),
 ];
 /// Crates no rank 0–4 crate may depend on (directly).
@@ -302,7 +310,7 @@ fn advisories() -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT]>";
+const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | trace-stress | trace-load | trace-demo>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -319,6 +327,9 @@ fn main() -> ExitCode {
         "msrv" => msrv(),
         "advisories" => advisories(),
         "bench" => bench::bench(&root(), rest),
+        "trace-stress" => trace::stress(),
+        "trace-load" => trace::load(),
+        "trace-demo" => trace::demo(),
         _ => Err(USAGE.into()),
     };
     match r {

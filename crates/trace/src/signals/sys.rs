@@ -1,7 +1,7 @@
 //! This process's CPU and memory, and static device details. Real values need the `sysinfo` feature; without
 //! it every field here is absent and nothing is sampled.
 
-use tracer_proto::Device;
+use ashlar_trace_proto::Device;
 
 /// One reading of this process.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -15,8 +15,8 @@ pub(crate) struct Sample {
 mod imp {
     use std::sync::{Mutex, PoisonError};
 
+    use ashlar_trace_proto::Device;
     use sysinfo::{CpuRefreshKind, MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
-    use tracer_proto::Device;
 
     use super::Sample;
 
@@ -64,7 +64,7 @@ mod imp {
 
 #[cfg(not(all(feature = "sysinfo", not(target_arch = "wasm32"))))]
 mod imp {
-    use tracer_proto::Device;
+    use ashlar_trace_proto::Device;
 
     use super::Sample;
 

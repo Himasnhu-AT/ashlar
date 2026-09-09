@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 
-use tracer_proto::{Breadcrumb, Signal};
+use ashlar_trace_proto::{Breadcrumb, Signal};
 
 use super::scrub::{MAX_LABEL, MAX_LOG_LINE};
 use super::{Shared, lock, now_ms, report};
@@ -218,8 +218,8 @@ pub(super) fn read_saved(dir: &Path) -> Vec<Breadcrumb> {
 mod tests {
     use std::sync::Mutex as StdMutex;
 
+    use ashlar_trace_proto::Signal;
     use log::Log;
-    use tracer_proto::Signal;
 
     use super::*;
     use crate::signals::testutil::{Fixture, serial};
@@ -286,15 +286,15 @@ mod tests {
         fixture.signals.tick_at(fixture.at(std::time::Duration::from_secs(1)));
         assert!(fixture.dir.path().join(FILE_NAME).exists());
         let shared = &fixture.signals.shared;
-        *shared.last_crash.lock().unwrap() = Some(tracer_proto::Crash::default());
-        shared.perf.lock().unwrap().last = Some(tracer_proto::Perf::default());
+        *shared.last_crash.lock().unwrap() = Some(ashlar_trace_proto::Crash::default());
+        shared.perf.lock().unwrap().last = Some(ashlar_trace_proto::Perf::default());
 
         fixture.signals.forget();
         assert!(shared.ring.snapshot(true).is_empty());
         assert!(shared.last_crash.lock().unwrap().is_none());
         assert!(shared.last_perf().is_none());
         // A crash after the forget carries nothing from before it.
-        let crash = shared.crash_base(tracer_proto::CrashKind::Handled, true);
+        let crash = shared.crash_base(ashlar_trace_proto::CrashKind::Handled, true);
         assert!(crash.breadcrumbs.is_empty() && crash.perf.is_none());
         // And the emptied ring is not written back out as if it had changed.
         std::fs::remove_file(fixture.dir.path().join(FILE_NAME)).unwrap();

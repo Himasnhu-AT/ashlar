@@ -1,5 +1,5 @@
 //! Edge cases and light versions of the stress tests, through the public API. These run in the gate; the
-//! heavy versions are in `stress.rs` and run with `cargo xtask stress`.
+//! heavy versions are in `stress.rs` and run with `cargo xtask trace-stress`.
 
 // This whole file is test code, but the lint only exempts `#[test]` functions, not their helpers.
 #![allow(clippy::unwrap_used, clippy::panic)]
@@ -42,9 +42,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use ashlar_trace::proto::{CrashKind, Envelope, ItemBody, SessionStatus};
+use ashlar_trace::{Builder, ConsentCategory, Signal, Tracer};
 use support::{AppEvent, Category, Chaos, Rng, TempDir};
-use tracer_sdk::proto::{CrashKind, Envelope, ItemBody, SessionStatus};
-use tracer_sdk::{Builder, ConsentCategory, Signal, Tracer};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -636,7 +636,7 @@ fn every_call_on_a_disabled_tracer_is_a_harmless_no_op() {
     let clone = tracer.clone();
     assert!(!tracer.is_enabled());
     tracer.track(AppEvent::FileOpen);
-    tracer.track_with(AppEvent::FileSave, &[("count", tracer_sdk::Prop::Int(1))]);
+    tracer.track_with(AppEvent::FileSave, &[("count", ashlar_trace::Prop::Int(1))]);
     tracer.track_id(Category::File, "file.x");
     tracer.set_focused(true);
     tracer.note_input();
@@ -700,12 +700,17 @@ fn builder_settings_and_child_exits_reach_the_server() {
     let server = recorder();
     let tracer = builder(dir.path(), &server)
         .build("abc1234")
-        .process(tracer_sdk::ProcessKind::Service)
-        .gpu(tracer_sdk::Gpu { name: "Example GPU".to_owned(), vendor: Some("Example".to_owned()), backend: Some("metal".to_owned()), driver: None })
+        .process(ashlar_trace::ProcessKind::Service)
+        .gpu(ashlar_trace::Gpu {
+            name: "Example GPU".to_owned(),
+            vendor: Some("Example".to_owned()),
+            backend: Some("metal".to_owned()),
+            driver: None,
+        })
         .signals(&Signal::ALL)
         .without(Signal::Hang)
         .without(Signal::Sys)
-        .logger(tracer_sdk::LoggerMode::None)
+        .logger(ashlar_trace::LoggerMode::None)
         .inspect(true)
         .init();
     #[cfg(unix)]
@@ -724,7 +729,7 @@ fn builder_settings_and_child_exits_reach_the_server() {
 
     let sent = envelopes(&server);
     let first = &sent[0];
-    assert_eq!((first.app.build.as_deref(), first.app.process), (Some("abc1234"), tracer_sdk::ProcessKind::Service));
+    assert_eq!((first.app.build.as_deref(), first.app.process), (Some("abc1234"), ashlar_trace::ProcessKind::Service));
     let gpu = first.device.as_ref().and_then(|device| device.gpu.as_ref()).unwrap();
     assert_eq!((gpu.name.as_str(), gpu.backend.as_deref()), ("Example GPU", Some("metal")));
     let items = items_of(&server, &session);

@@ -59,7 +59,7 @@ pub fn app_picker(apps: &[(AppRecord, crate::store::AppGlance)]) -> Markup {
             section class="empty" {
                 h2 { "No apps yet" }
                 p { "Create one on the server, then send data to it:" }
-                p { code { "tracer-server app create <slug> <name>" } }
+                p { code { "ashlar-trace-server app create <slug> <name>" } }
                 p class="note" { "The command prints the app's first write key." }
             }
         } @else {

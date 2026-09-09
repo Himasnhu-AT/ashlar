@@ -5,7 +5,7 @@ use std::panic::PanicHookInfo;
 use std::process::ExitStatus;
 use std::sync::{Arc, Weak};
 
-use tracer_proto::{CrashKind, ItemBody, Signal};
+use ashlar_trace_proto::{CrashKind, ItemBody, Signal};
 
 use super::Shared;
 use super::scrub::{MAX_BACKTRACE, MAX_LABEL, MAX_MESSAGE};
@@ -129,7 +129,7 @@ fn signal_of(_status: &ExitStatus) -> Option<i32> {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use tracer_proto::{Crash, ItemBody, Signal};
+    use ashlar_trace_proto::{Crash, ItemBody, Signal};
 
     use super::*;
     use crate::signals::testutil::{Fixture, serial};

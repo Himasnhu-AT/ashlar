@@ -1,6 +1,6 @@
-use tracer_sdk::{Event, EventCategory, Tracer};
+use ashlar_trace::{Event, EventCategory, Tracer};
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     /// What a command belongs to.
     pub enum Category {
         File = "file",
@@ -19,7 +19,7 @@ tracer_sdk::events! {
 }
 
 mod nested {
-    tracer_sdk::events! {
+    ashlar_trace::events! {
         pub(crate) enum Group { Only = "only" }
         pub(crate) enum Nothing {}
     }

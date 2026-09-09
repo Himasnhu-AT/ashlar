@@ -1,4 +1,4 @@
-//! Always-on crash, performance and usage telemetry to a self-hosted tracer server.
+//! Always-on crash, performance and usage telemetry to a self-hosted ashlar-trace server.
 //!
 //! One [`Telemetry`] client per process, started once from a [`TelemetryConfig`]. It is **on
 //! whenever an endpoint is configured**: every category is allowed and there is no notice
@@ -11,7 +11,7 @@
 //!
 //! | Hook | How |
 //! |---|---|
-//! | crashes | start the client before the app's own panic hook; tracer's hook chains to it |
+//! | crashes | start the client before the app's own panic hook; the SDK's hook chains to it |
 //! | log lines → crash breadcrumbs (redacted) | [`Telemetry::wrap_logger`], e.g. with `ashlar_log::logging::install_wrapped` |
 //! | commands (id, ok, ms; top level; rapid repeats folded) | `journal.set_observer(telemetry.command_observer())` (`ashlar_command::Journal`) |
 //! | saves | [`TelemetryConfig::save_commands`], or [`Telemetry::saved`] |
@@ -34,12 +34,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ashlar_command::{CommandRun, RunObserver};
+/// The ashlar-trace SDK, for tests (`Tracer`, `Config`, transports) and hosts that need more.
+pub use ashlar_trace as sdk;
+pub use ashlar_trace::{ProcessKind, TurnGuard};
+use ashlar_trace::{Prop, Tracer};
 pub use fold::REPEAT_WINDOW;
 pub use redact::redact;
-/// The tracer SDK, for tests (`Tracer`, `Config`, transports) and hosts that need more.
-pub use tracer_sdk as sdk;
-pub use tracer_sdk::{ProcessKind, TurnGuard};
-use tracer_sdk::{Prop, Tracer};
 #[cfg(not(target_arch = "wasm32"))]
 pub use transport::Https;
 
@@ -48,7 +48,7 @@ pub const QUIT_FLUSH: Duration = Duration::from_millis(1500);
 /// The developer's switch: set (to anything but empty, `0` or `false`), telemetry is off.
 pub const DISABLED_ENV: &str = "TRACER_DISABLED";
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category {
         Command = "command",
         App = "app",
@@ -262,8 +262,8 @@ impl Telemetry {
         cfg: &TelemetryConfig,
         target: &Target,
         data_dir: &Path,
-        transport: impl tracer_sdk::transport::Transport,
-        configure: impl FnOnce(&mut tracer_sdk::Config),
+        transport: impl ashlar_trace::transport::Transport,
+        configure: impl FnOnce(&mut ashlar_trace::Config),
     ) -> Telemetry {
         let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
             .data_dir(data_dir)

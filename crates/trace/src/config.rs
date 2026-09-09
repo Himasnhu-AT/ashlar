@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tracer_proto::{Catalog, Gpu, ProcessKind, Signal};
+use ashlar_trace_proto::{Catalog, Gpu, ProcessKind, Signal};
 
 /// How the SDK captures log lines as crash breadcrumbs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

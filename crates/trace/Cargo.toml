@@ -1,15 +1,11 @@
 [package]
-name = "tracer-sdk"
+name = "ashlar-trace"
 description = "Crash, performance and usage telemetry for desktop apps, with a self-hostable backend"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
 keywords = ["telemetry", "crash-reporting", "analytics", "metrics"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
-readme = "../../README.md"
 
 [features]
 default = ["http", "sysinfo"]
@@ -19,7 +15,7 @@ http = ["dep:ureq"]
 sysinfo = ["dep:sysinfo"]
 
 [dependencies]
-tracer-proto.workspace = true
+ashlar-trace-proto = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 log = { workspace = true, features = ["std"] }

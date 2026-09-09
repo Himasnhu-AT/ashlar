@@ -7,8 +7,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use ashlar_trace_proto::UnixMs;
 use serde::{Deserialize, Serialize};
-use tracer_proto::UnixMs;
 
 use super::files::{now_ms, read_json, write_json};
 

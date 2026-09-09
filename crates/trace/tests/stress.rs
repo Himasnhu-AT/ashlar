@@ -1,4 +1,4 @@
-//! Benchmarks and heavy stress tests. Everything here is `#[ignore]`d: it is run by `cargo xtask stress`,
+//! Benchmarks and heavy stress tests. Everything here is `#[ignore]`d: it is run by `cargo xtask trace-stress`,
 //! in a release build and one test at a time, never by the gate.
 //!
 //! The numbers are wall-clock timings from `Instant`, taken in batches so that the clock's own cost does
@@ -14,8 +14,8 @@ use std::hint::black_box;
 use std::sync::Barrier;
 use std::time::{Duration, Instant};
 
+use ashlar_trace::{ConsentCategory, LoggerMode, Prop, Signal, Tracer};
 use support::{AppEvent, Category, Instant200, TempDir};
-use tracer_sdk::{ConsentCategory, LoggerMode, Prop, Signal, Tracer};
 
 const BATCH: u32 = 1_000;
 
@@ -136,7 +136,7 @@ fn host_calls(tracer: &Tracer, threads: usize, label: &str) {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_host_thread_calls() {
     let dir = TempDir::new();
     let tracer = host_tracer(&dir, 1 << 18);
@@ -149,7 +149,7 @@ fn bench_host_thread_calls() {
 
 /// The longest single call seen. Every call is timed on its own here, so the figures include the clock.
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_worst_single_call() {
     let calls: u64 = std::env::var("TRACER_STRESS_CALLS").ok().and_then(|text| text.parse().ok()).unwrap_or(10_000_000);
     let dir = TempDir::new();
@@ -203,7 +203,7 @@ fn bench_worst_single_call() {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_worker_throughput() {
     println!("\n### Worker throughput\n");
     for (label, endpoint) in [("queue to spool (nothing sent)", false), ("queue to spool to an instant transport", true)] {
@@ -289,7 +289,7 @@ fn timed_init(dir: &TempDir, signals: &[Signal]) -> (Duration, Tracer) {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_init_and_shutdown() {
     println!("\n### `Builder::init` wall time, median of 5, and the first flush after it\n");
     println!("| {:<52} | init ms   | first flush ms |", "state of the data directory");
@@ -373,7 +373,7 @@ fn seconds(variable: &str, default: u64) -> Duration {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_idle_and_steady_cpu() {
     let length = seconds("TRACER_STRESS_IDLE_SECS", 30);
     println!("\n### CPU used by the whole process over {length:?}, host thread asleep or pacing\n");
@@ -410,7 +410,7 @@ fn bench_idle_and_steady_cpu() {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_memory_stays_flat_with_the_server_unreachable() {
     let length = seconds("TRACER_STRESS_MEMORY_SECS", 300);
     println!("\n### Resident memory, 120 frames/s and 50 events/s, server unreachable, spool cap 64 KiB, over {length:?}\n");
@@ -469,7 +469,7 @@ fn bench_memory_stays_flat_with_the_server_unreachable() {
 }
 
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_worker_throughput_with_many_adopted_folders() {
     let dir = TempDir::new();
     leave_folders(&dir, 1_000, 0);
@@ -495,7 +495,7 @@ fn bench_worker_throughput_with_many_adopted_folders() {
 
 /// What the compression level costs and buys, on a body shaped like a real batch.
 #[test]
-#[ignore = "benchmark; run with cargo xtask stress"]
+#[ignore = "benchmark; run with cargo xtask trace-stress"]
 fn bench_gzip_levels() {
     use std::io::Write;
 
@@ -543,7 +543,7 @@ fn seeds() -> std::ops::RangeInclusive<u64> {
 }
 
 #[test]
-#[ignore = "heavy; run with cargo xtask stress"]
+#[ignore = "heavy; run with cargo xtask trace-stress"]
 fn stress_flood_with_exact_accounting() {
     println!("\n### Flood: 32 threads, 20,000 calls each, misbehaving transport, exact accounting\n");
     let mut statuses = std::collections::BTreeMap::new();
@@ -560,7 +560,7 @@ fn stress_flood_with_exact_accounting() {
 }
 
 #[test]
-#[ignore = "heavy; run with cargo xtask stress"]
+#[ignore = "heavy; run with cargo xtask trace-stress"]
 fn stress_flood_with_consent_and_forget() {
     println!("\n### Flood: 32 threads, 20,000 calls each, with consent changes, forgets and flushes\n");
     let mut requests = 0;
@@ -578,7 +578,7 @@ fn stress_child_process() {
 }
 
 #[test]
-#[ignore = "heavy; run with cargo xtask stress"]
+#[ignore = "heavy; run with cargo xtask trace-stress"]
 fn stress_many_processes_on_one_data_directory() {
     println!("\n### 20 real processes on one data directory, some killed\n");
     for seed in seeds() {
@@ -595,7 +595,7 @@ fn thread_count() -> Option<usize> {
 }
 
 #[test]
-#[ignore = "heavy; run with cargo xtask stress"]
+#[ignore = "heavy; run with cargo xtask trace-stress"]
 fn stress_a_thousand_starts_and_stops_leak_nothing() {
     println!("\n### 1,000 starts and stops in one process\n");
     let dir = TempDir::new();

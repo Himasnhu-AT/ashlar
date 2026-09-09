@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tracer_proto::{CrashKind, ItemBody, Signal};
+use ashlar_trace_proto::{CrashKind, ItemBody, Signal};
 
 /// Longest and shortest time the watchdog sleeps between checks.
 const MAX_POLL: Duration = Duration::from_millis(500);
@@ -175,12 +175,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use tracer_proto::{CrashKind, ItemBody, Signal};
+    use ashlar_trace_proto::{CrashKind, ItemBody, Signal};
 
     use super::*;
     use crate::signals::testutil::{Fixture, wait_until};
 
-    fn hang_items(fixture: &Fixture) -> Vec<tracer_proto::Crash> {
+    fn hang_items(fixture: &Fixture) -> Vec<ashlar_trace_proto::Crash> {
         fixture
             .sink
             .bodies()

@@ -1,7 +1,7 @@
 //! Pins the wire format. If one of these fails, an existing client or server would break:
 //! add a new optional field instead of changing an old one.
 
-use tracer_proto::*;
+use ashlar_trace_proto::*;
 
 const FULL: &str = include_str!("fixtures/envelope_full.json");
 const FUTURE: &str = include_str!("fixtures/envelope_future.json");
@@ -79,12 +79,12 @@ fn name_validation() {
 
 #[test]
 fn frame_stats_arithmetic_saturates_instead_of_overflowing() {
-    let mut huge = tracer_proto::FrameStats::empty();
+    let mut huge = ashlar_trace_proto::FrameStats::empty();
     huge.count = u64::MAX;
     huge.sum_us = u64::MAX;
     huge.slow = u64::MAX;
     huge.frozen = u64::MAX;
-    huge.buckets = vec![u64::MAX; tracer_proto::FRAME_BUCKETS];
+    huge.buckets = vec![u64::MAX; ashlar_trace_proto::FRAME_BUCKETS];
     let mut total = huge.clone();
     total.merge(&huge);
     assert_eq!((total.count, total.sum_us, total.slow, total.frozen), (u64::MAX, u64::MAX, u64::MAX, u64::MAX));

@@ -15,13 +15,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tracer_sdk::proto::{
+use ashlar_trace::proto::{
     CrashKind, Envelope, ForgetRequest, HEADER_APP_KEY, Item, ItemBody, MAX_ENVELOPE_BYTES, PropValue, SCHEMA_VERSION, SessionStatus, routes,
 };
-use tracer_sdk::transport::{Reply, Request, Transport, TransportError};
-use tracer_sdk::{Builder, ConsentCategory, Prop, Signal, Tracer};
+use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
+use ashlar_trace::{Builder, ConsentCategory, Prop, Signal, Tracer};
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     enum Category { File = "file", Edit = "edit", View = "view" }
     enum AppEvent {
         FileOpen = "file.open" in File,
@@ -1050,7 +1050,7 @@ fn a_leftover_marker_respects_consent_and_disabled_signals() {
 
 // ---- catalog ----
 
-fn session_starts(server: &Server) -> Vec<tracer_sdk::proto::SessionStart> {
+fn session_starts(server: &Server) -> Vec<ashlar_trace::proto::SessionStart> {
     let starts = server.items().into_iter().filter_map(|(_, item)| match item.body {
         ItemBody::SessionStart(start) => Some(start),
         _ => None,
@@ -1706,7 +1706,7 @@ impl log::Log for OwnLines {
     }
 
     fn log(&self, record: &log::Record<'_>) {
-        if record.target() == "tracer_sdk" {
+        if record.target() == "ashlar_trace" {
             self.0.lock().unwrap().push(format!("{} {}", record.level(), record.args()));
         }
     }

@@ -37,12 +37,12 @@ impl Repeats {
     }
 }
 
-/// A command id as a tracer event name: `file.openRecent` → `file.open_recent`. Called once per
+/// A command id as an event name: `file.openRecent` → `file.open_recent`. Called once per
 /// distinct registered id (a bounded set), so keeping the names for the life of the process is a
 /// few kilobytes.
 pub(crate) fn event_name(id: &str) -> Option<&'static str> {
     let snake = snake_case(id);
-    tracer_sdk::proto::validate_name(&snake).ok()?;
+    ashlar_trace::proto::validate_name(&snake).ok()?;
     Some(Box::leak(snake.into_boxed_str()))
 }
 

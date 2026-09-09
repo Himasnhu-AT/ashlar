@@ -1,7 +1,7 @@
 //! Row types returned by the dashboard's read queries. Plain data, no behaviour.
 
+use ashlar_trace_proto::FrameStats;
 use serde::Serialize;
-use tracer_proto::FrameStats;
 
 /// A logged-in dashboard user.
 #[derive(Debug, Clone, PartialEq, Eq)]

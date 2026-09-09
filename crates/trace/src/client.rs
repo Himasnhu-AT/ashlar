@@ -5,7 +5,7 @@ use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracer_proto::{CatalogEvent, ConsentCategory, Gpu, ProcessKind, Signal};
+use ashlar_trace_proto::{CatalogEvent, ConsentCategory, Gpu, ProcessKind, Signal};
 
 use crate::catalog::{Event, EventCategory, Prop};
 use crate::config::{Config, LoggerMode};

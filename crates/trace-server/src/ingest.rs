@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use tracer_proto::{
+use ashlar_trace_proto::{
     Breadcrumb, CatalogEvent, Crash, CrashKind, Device, Envelope, Event, FRAME_BUCKETS, FrameStats, Gpu, ItemBody, MAX_NAME_LEN, MAX_PROP_STR_LEN,
     MAX_PROPS, Perf, PropValue, SessionEnd, SessionStatus, SessionTotals, validate_name,
 };
@@ -203,8 +203,8 @@ fn note_session(span: &mut Option<(i64, i64)>, ts: i64) {
     *span = Some(span.map_or((ts, ts), |(first, last)| (first.min(ts), last.max(ts))));
 }
 
-fn process_name(kind: tracer_proto::ProcessKind) -> &'static str {
-    use tracer_proto::ProcessKind::*;
+fn process_name(kind: ashlar_trace_proto::ProcessKind) -> &'static str {
+    use ashlar_trace_proto::ProcessKind::*;
     match kind {
         Gui => "gui",
         Cli => "cli",
@@ -474,8 +474,8 @@ fn is_runtime_frame(frame: &str) -> bool {
         "rust_panic",
         "rust_eh_personality",
         "__rust",
-        "tracer_sdk::",
-        "<tracer_sdk::",
+        "ashlar_trace::",
+        "<ashlar_trace::",
     ];
     PREFIXES.iter().any(|prefix| frame.starts_with(prefix))
 }
@@ -495,7 +495,7 @@ fn fnv128_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tracer_proto::{AppInfo, Item, ProcessKind};
+    use ashlar_trace_proto::{AppInfo, Item, ProcessKind};
 
     const NOW: i64 = 1_791_900_100_000;
 
@@ -535,8 +535,7 @@ mod tests {
 
     #[test]
     fn runtime_and_panic_frames_are_skipped() {
-        let trace =
-            "0: std::panicking::begin_panic\n1: core::panicking::panic_fmt\n2: rust_begin_unwind\n3: tracer_sdk::signals::crash::hook\n4: demo::load";
+        let trace = "0: std::panicking::begin_panic\n1: core::panicking::panic_fmt\n2: rust_begin_unwind\n3: ashlar_trace::signals::crash::hook\n4: demo::load";
         assert_eq!(app_frames(trace), vec!["demo::load".to_string()]);
     }
 

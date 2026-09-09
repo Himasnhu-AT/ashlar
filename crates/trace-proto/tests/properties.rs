@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use tracer_proto::*;
+use ashlar_trace_proto::*;
 
 /// SplitMix64.
 struct Rng(u64);

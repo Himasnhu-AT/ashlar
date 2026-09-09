@@ -29,7 +29,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use tracer_proto::{
+use ashlar_trace_proto::{
     AppInfo, Catalog, ConsentCategory, Crash, CrashKind, Item, ItemBody, SCHEMA_VERSION, SessionEnd, SessionStart, SessionStatus, SessionTotals,
     Signal, UnixMs,
 };

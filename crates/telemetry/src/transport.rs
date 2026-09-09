@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracer_sdk::transport::{Reply, Request, Transport, TransportError};
+use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
 
 /// HTTPS with ureq, rustls and the RustCrypto provider (no `ring`, no bundled roots) and the
 /// operating system's certificate verifier. Plain HTTP only to a loopback address
@@ -42,7 +42,7 @@ impl Https {
 impl Transport for Https {
     fn send(&mut self, request: &Request<'_>) -> Result<Reply, TransportError> {
         let url = format!("{}{}", self.endpoint, request.path);
-        let mut b = self.agent.post(&url).header(tracer_sdk::proto::HEADER_APP_KEY, request.app_key).header("content-type", "application/json");
+        let mut b = self.agent.post(&url).header(ashlar_trace::proto::HEADER_APP_KEY, request.app_key).header("content-type", "application/json");
         if request.gzip {
             b = b.header("content-encoding", "gzip");
         }

@@ -5,15 +5,15 @@ mod common;
 
 use std::collections::{BTreeMap, HashMap};
 
-use common::{TestServer, now};
-use tracer_proto::{
+use ashlar_trace_proto::{
     AppInfo, Breadcrumb, Catalog, CatalogEvent, Crash, CrashKind, Device, Drops, Envelope, Event, FrameStats, Item, ItemBody, Perf, ProcessKind,
     SessionEnd, SessionStart, SessionStatus, SessionTotals,
 };
-use tracer_server::dashboard::auth::sha256_hex;
-use tracer_server::dashboard::view::enc;
-use tracer_server::ingest::DAY_MS;
-use tracer_server::store::Store;
+use ashlar_trace_server::dashboard::auth::sha256_hex;
+use ashlar_trace_server::dashboard::view::enc;
+use ashlar_trace_server::ingest::DAY_MS;
+use ashlar_trace_server::store::Store;
+use common::{TestServer, now};
 
 const SCRIPT: &str = "<script>alert(1)</script>";
 const PASSWORD: &str = "correct horse battery";
@@ -56,7 +56,7 @@ impl Browser {
         let token = "ab".repeat(32);
         ensure_admin(server);
         let admin_id = server.count("SELECT id FROM admins LIMIT 1");
-        let now = tracer_server::now_ms();
+        let now = ashlar_trace_server::now_ms();
         if server.count(&format!("SELECT count(*) FROM admin_sessions WHERE token_hash = '{}'", sha256_hex(&token))) == 0 {
             server.store.admin_session_create(&sha256_hex(&token), admin_id, now, now + DAY_MS).unwrap();
         }
@@ -126,8 +126,8 @@ fn between<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
 
 fn ensure_admin(server: &TestServer) {
     if server.count("SELECT count(*) FROM admins") == 0 {
-        let hash = tracer_server::cli::hash_password(PASSWORD).unwrap();
-        server.store.create_admin("admin", &hash, tracer_server::now_ms()).unwrap();
+        let hash = ashlar_trace_server::cli::hash_password(PASSWORD).unwrap();
+        server.store.create_admin("admin", &hash, ashlar_trace_server::now_ms()).unwrap();
     }
 }
 
@@ -255,7 +255,7 @@ fn seeded() -> TestServer {
         assert_eq!(reply.status, 200, "{}", reply.body);
         assert_eq!(reply.json()["rejected"], 0, "{}", reply.body);
     }
-    let today = tracer_server::now_ms() / DAY_MS;
+    let today = ashlar_trace_server::now_ms() / DAY_MS;
     server.store.rollup(today - 1, today).unwrap();
     ensure_admin(&server);
     server
@@ -498,7 +498,7 @@ fn an_empty_database_renders_every_page() {
     let mut b = Browser::signed_in(&bare);
     let picker = b.get("/");
     assert_eq!(picker.status, 200);
-    assert!(picker.body.contains("tracer-server app create"));
+    assert!(picker.body.contains("ashlar-trace-server app create"));
 }
 
 #[test]
@@ -608,7 +608,7 @@ fn secure_cookie_flag_follows_the_setting() {
 
 #[test]
 fn cookies_are_secure_by_default_and_plain_http_is_an_explicit_opt_out() {
-    assert!(tracer_server::config::Config::default().secure_cookies);
+    assert!(ashlar_trace_server::config::Config::default().secure_cookies);
     let server = TestServer::demo();
     ensure_admin(&server);
     let login = Browser::new(&server).login("admin", PASSWORD);
@@ -670,7 +670,7 @@ fn password_checks_wait_for_a_free_slot() {
     let server = TestServer::demo();
     ensure_admin(&server);
     let slots = server.state.login_slots.clone();
-    let all = slots.clone().try_acquire_many_owned(tracer_server::http::LOGIN_CONCURRENCY as u32).unwrap();
+    let all = slots.clone().try_acquire_many_owned(ashlar_trace_server::http::LOGIN_CONCURRENCY as u32).unwrap();
     let base = server.base.clone();
     let started = std::time::Instant::now();
     let worker = std::thread::spawn(move || {
@@ -716,7 +716,7 @@ fn the_login_page_explains_how_to_create_the_first_admin() {
     let server = TestServer::demo();
     let page = Browser::new(&server).get("/login");
     assert_eq!(page.status, 200);
-    assert!(page.body.contains("tracer-server admin create"));
+    assert!(page.body.contains("ashlar-trace-server admin create"));
     assert!(!page.body.contains("type=\"password\""));
 }
 
@@ -783,7 +783,7 @@ fn resolve_ignore_and_reopen_change_the_status() {
 #[test]
 fn an_issue_of_another_app_cannot_be_changed() {
     let server = seeded();
-    server.store.create_app("other", "Other", "tk_other_key", tracer_server::now_ms()).unwrap();
+    server.store.create_app("other", "Other", "tk_other_key", ashlar_trace_server::now_ms()).unwrap();
     let mut b = Browser::signed_in(&server);
     let csrf = b.csrf();
     let id = issue_id(&server, "while saving");
@@ -811,7 +811,7 @@ fn write_keys_can_be_created_and_revoked() {
     assert!(!listing.body.contains(&key) && !listing.body.contains("New write key"));
 
     // Revoke it through its id from the form action.
-    let id = tracer_server::dashboard::key_id(&key);
+    let id = ashlar_trace_server::dashboard::key_id(&key);
     assert!(listing.body.contains(&format!("/apps/demo/settings/keys/{id}/revoke")));
     let revoked = b.post(&format!("/apps/demo/settings/keys/{id}/revoke"), &[("csrf", &csrf)]);
     assert_eq!(revoked.status, 303);
@@ -823,7 +823,7 @@ fn write_keys_can_be_created_and_revoked() {
     assert_eq!(server.post_raw("/v1/ingest", Some(&server.key), false, &envelope).status, 200);
 
     // The seeded key can be revoked too.
-    let original = tracer_server::dashboard::key_id(&server.key);
+    let original = ashlar_trace_server::dashboard::key_id(&server.key);
     assert_eq!(b.post(&format!("/apps/demo/settings/keys/{original}/revoke"), &[("csrf", &csrf)]).status, 303);
     assert_eq!(server.post_raw("/v1/ingest", Some(&server.key), false, &envelope).status, 401);
 }
@@ -831,10 +831,10 @@ fn write_keys_can_be_created_and_revoked() {
 #[test]
 fn a_key_of_another_app_cannot_be_revoked_here() {
     let server = seeded();
-    server.store.create_app("other", "Other", "tk_other_key", tracer_server::now_ms()).unwrap();
+    server.store.create_app("other", "Other", "tk_other_key", ashlar_trace_server::now_ms()).unwrap();
     let mut b = Browser::signed_in(&server);
     let csrf = b.csrf();
-    let foreign = tracer_server::dashboard::key_id("tk_other_key");
+    let foreign = ashlar_trace_server::dashboard::key_id("tk_other_key");
     assert_eq!(b.post(&format!("/apps/demo/settings/keys/{foreign}/revoke"), &[("csrf", &csrf)]).status, 404);
     assert!(server.store.lookup_key("tk_other_key").unwrap().is_some());
 }
@@ -847,7 +847,7 @@ fn hostile_text_is_escaped_on_every_page() {
     let mut env = envelope("i7", "s7", evil, evil, vec![]);
     env.items = vec![start("s7-start", false), event("s7-e", 10, "file.open"), end("s7-end", 200, SessionStatus::Exited, 5, 0, 0)];
     assert_eq!(server.ingest(&env).status, 200);
-    let today = tracer_server::now_ms() / DAY_MS;
+    let today = ashlar_trace_server::now_ms() / DAY_MS;
     server.store.rollup(today - 1, today).unwrap();
     let mut b = Browser::signed_in(&server);
     for path in ["/apps/demo", "/apps/demo/usage", "/apps/demo/performance", "/apps/demo/reports", "/apps/demo/crashes"] {
@@ -872,7 +872,7 @@ fn hostile_text_is_escaped_on_every_page() {
 
 #[test]
 fn the_issue_page_shows_every_detail_a_crash_carries() {
-    use tracer_proto::{Crash, CrashKind, Device, FrameStats, Gpu, Item, ItemBody, Perf};
+    use ashlar_trace_proto::{Crash, CrashKind, Device, FrameStats, Gpu, Item, ItemBody, Perf};
     let server = TestServer::demo();
     let t = common::now();
     let mut frames = FrameStats::empty();

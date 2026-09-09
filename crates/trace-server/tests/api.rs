@@ -3,18 +3,18 @@ mod common;
 
 use std::collections::BTreeMap;
 
+use ashlar_trace_proto::{Catalog, CatalogEvent, Crash, CrashKind, Event, ItemBody, Perf, SessionEnd, SessionStart, SessionStatus, SessionTotals};
+use ashlar_trace_server::store::Store;
 use common::{TestServer, envelope, gzip, item};
-use tracer_proto::{Catalog, CatalogEvent, Crash, CrashKind, Event, ItemBody, Perf, SessionEnd, SessionStart, SessionStatus, SessionTotals};
-use tracer_server::store::Store;
 
-const FULL: &str = include_str!("../../tracer-proto/tests/fixtures/envelope_full.json");
-const FUTURE: &str = include_str!("../../tracer-proto/tests/fixtures/envelope_future.json");
+const FULL: &str = include_str!("../../trace-proto/tests/fixtures/envelope_full.json");
+const FUTURE: &str = include_str!("../../trace-proto/tests/fixtures/envelope_future.json");
 
-fn event(id: &str, name: &str) -> tracer_proto::Item {
+fn event(id: &str, name: &str) -> ashlar_trace_proto::Item {
     item(id, ItemBody::Event(Event { name: name.into(), category: "file".into(), ..Event::default() }))
 }
 
-fn crash(id: &str, backtrace: &str) -> tracer_proto::Item {
+fn crash(id: &str, backtrace: &str) -> ashlar_trace_proto::Item {
     item(
         id,
         ItemBody::Crash(Crash {
@@ -31,7 +31,7 @@ fn totals(duration_s: u64) -> SessionTotals {
     SessionTotals { seq: 1, duration_s, focused_s: duration_s, active_s: duration_s / 2, idle_s: 0 }
 }
 
-fn start_with_catalog(id: &str, names: &[&str]) -> tracer_proto::Item {
+fn start_with_catalog(id: &str, names: &[&str]) -> ashlar_trace_proto::Item {
     let events = names.iter().map(|name| CatalogEvent { name: (*name).into(), category: "file".into() }).collect();
     item(
         id,
@@ -118,7 +118,7 @@ fn unknown_missing_and_revoked_keys_are_401() {
 #[test]
 fn oversized_and_gzip_bomb_bodies_are_413() {
     let server = TestServer::demo();
-    let big = vec![b' '; tracer_proto::MAX_ENVELOPE_BYTES + 10_000];
+    let big = vec![b' '; ashlar_trace_proto::MAX_ENVELOPE_BYTES + 10_000];
     assert_eq!(server.post_raw("/v1/ingest", Some(&server.key), false, &big).status, 413);
 
     // About 64 MiB of spaces compresses to tens of kilobytes; it must be refused without being inflated.
@@ -273,7 +273,7 @@ fn forget_removes_the_install_everywhere_and_leaves_others() {
     };
     server.ingest(&envelope("gone", "sg", items("g")));
     server.ingest(&envelope("stay", "ss", items("s")));
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     assert_eq!(server.count("SELECT count(*) FROM daily_installs"), 2);
 
     let reply = server.forget("gone");
@@ -292,7 +292,7 @@ fn forget_removes_the_install_everywhere_and_leaves_others() {
 fn hostile_values_are_truncated_not_fatal() {
     let server = TestServer::demo();
     let mut props = BTreeMap::new();
-    props.insert("note".to_string(), tracer_proto::PropValue::Str("x".repeat(10_000)));
+    props.insert("note".to_string(), ashlar_trace_proto::PropValue::Str("x".repeat(10_000)));
     let long_event = item("e1", ItemBody::Event(Event { name: "a".into(), category: "b".into(), dynamic: false, props }));
     let big_crash =
         item("c1", ItemBody::Crash(Crash { message: Some("m".repeat(100_000)), backtrace: Some("b".repeat(300_000)), ..Crash::default() }));

@@ -2,8 +2,8 @@
 //! parameters, and ends in a `LIMIT`. Anything over time reads the `daily_*` rollups, which outlive
 //! retention; raw tables are read only for detail views and recent rows.
 
+use ashlar_trace_proto::{FRAME_BUCKETS, FrameStats};
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use tracer_proto::{FRAME_BUCKETS, FrameStats};
 
 use super::types::{
     AppGlance, Breakdown, CatalogEntry, CrashBrief, CrashRow, CustomRow, DayTotals, DropRow, EventRow, IssueFilter, IssueRow, IssueSort, PerfRow,

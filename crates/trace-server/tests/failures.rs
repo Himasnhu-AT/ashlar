@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ashlar_trace_proto::{Event, ItemBody};
+use ashlar_trace_server::MIGRATIONS;
+use ashlar_trace_server::store::{SqliteStore, Store};
 use common::{TestServer, envelope, item};
-use tracer_proto::{Event, ItemBody};
-use tracer_server::MIGRATIONS;
-use tracer_server::store::{SqliteStore, Store};
 
-fn event(id: &str) -> tracer_proto::Item {
+fn event(id: &str) -> ashlar_trace_proto::Item {
     item(id, ItemBody::Event(Event { name: "file.open".into(), category: "file".into(), ..Event::default() }))
 }
 
@@ -111,7 +111,9 @@ fn a_database_from_a_newer_server_is_refused_with_a_clear_message() {
     drop(SqliteStore::open(&config.db_path()).unwrap());
     rusqlite::Connection::open(config.db_path()).unwrap().execute_batch("PRAGMA user_version = 99;").unwrap();
     let mut out = Vec::new();
-    let error = tracer_server::cli::execute(tracer_server::cli::Command::AppList, &config, &mut out, &mut std::io::empty()).unwrap_err().to_string();
+    let error = ashlar_trace_server::cli::execute(ashlar_trace_server::cli::Command::AppList, &config, &mut out, &mut std::io::empty())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("newer"), "{error}");
 }
 
@@ -124,7 +126,7 @@ struct Running {
 }
 
 fn binary() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_tracer-server"))
+    Command::new(env!("CARGO_BIN_EXE_ashlar-trace-server"))
 }
 
 fn start(dir: &std::path::Path, port: u16) -> Running {

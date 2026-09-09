@@ -1,6 +1,6 @@
 # ashlar-telemetry
 
-Always-on crash, performance and usage telemetry to a self-hosted tracer server, shared by every
+Always-on crash, performance and usage telemetry to a self-hosted ashlar-trace server, shared by every
 app built on ashlar.
 
 - **On whenever an endpoint is configured.** Every category is allowed and there is no notice
@@ -14,7 +14,7 @@ app built on ashlar.
 
 | Hook | Where |
 |---|---|
-| Panics | tracer's hook, chained to the app's own (start the client first) |
+| Panics | the SDK's hook, chained to the app's own (start the client first) |
 | Log breadcrumbs | `Telemetry::wrap_logger` + `ashlar_log::logging::install_wrapped` |
 | Commands (id, ok, ms; rapid repeats folded) | `Journal::set_observer(telemetry.command_observer())` |
 | Saves | `TelemetryConfig::save_commands`, or `Telemetry::saved` |

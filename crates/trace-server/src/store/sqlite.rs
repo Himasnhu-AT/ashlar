@@ -10,8 +10,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use ashlar_trace_proto::{FRAME_BUCKETS, FrameStats, IngestResponse, SessionStatus};
 use rusqlite::{Connection, OptionalExtension, params};
-use tracer_proto::{FRAME_BUCKETS, FrameStats, IngestResponse, SessionStatus};
 
 use super::types::{
     AdminSession, AppGlance, Breakdown, CatalogEntry, CrashBrief, CrashRow, CustomRow, DayTotals, DropRow, EventRow, IssueFilter, IssueRow, PerfRow,
@@ -986,11 +986,11 @@ fn store_crash(tx: &Connection, ctx: &Ctx<'_>, item: &PreparedItem, prepared: &P
         perf,
         ctx.device_json
     ])?;
-    if crash.fatal && crash.kind == tracer_proto::CrashKind::Panic {
+    if crash.fatal && crash.kind == ashlar_trace_proto::CrashKind::Panic {
         tx.prepare_cached("UPDATE sessions SET status = 'crashed' WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND status = 'ok'")?
             .execute(params![app_id, batch.session_id, batch.install_id])?;
     }
-    if crash.kind == tracer_proto::CrashKind::Panic {
+    if crash.kind == ashlar_trace_proto::CrashKind::Panic {
         // The session may already be known to have ended in a crash (the end arrived first).
         let ended_crashed: bool = tx
             .prepare_cached("SELECT EXISTS(SELECT 1 FROM sessions WHERE app_id = ?1 AND session_id = ?2 AND install_id = ?3 AND status = 'crashed')")?

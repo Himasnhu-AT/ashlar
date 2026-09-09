@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tracer_proto::{Breadcrumb, Crash, CrashKind, Perf, Signal};
+use ashlar_trace_proto::{Breadcrumb, Crash, CrashKind, Perf, Signal};
 
 use crate::config::{Config, LoggerMode};
 use crate::sink::Sink;
@@ -26,8 +26,8 @@ mod testutil;
 
 /// Static details about this machine for the envelope header; see `sys::device_info`. The graphics
 /// adapter comes from the host, which is the only one that knows it.
-pub(crate) fn device_info(config: &Config) -> tracer_proto::Device {
-    tracer_proto::Device { gpu: config.gpu.clone(), ..sys::device_info() }
+pub(crate) fn device_info(config: &Config) -> ashlar_trace_proto::Device {
+    ashlar_trace_proto::Device { gpu: config.gpu.clone(), ..sys::device_info() }
 }
 
 /// The settings the signal modules read, copied out of [`Config`] once.

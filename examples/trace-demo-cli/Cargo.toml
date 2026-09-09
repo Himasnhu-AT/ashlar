@@ -1,19 +1,22 @@
 [package]
-name = "demo-cli"
+name = "ashlar-example-trace-demo-cli"
 description = "A scriptable host process that exercises the SDK end to end"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 publish = false
 
+[[bin]]
+name = "demo-cli"
+path = "src/main.rs"
+
 [dependencies]
-tracer-sdk.workspace = true
+ashlar-trace = { workspace = true, features = ["http", "sysinfo"] }
 log.workspace = true
 
 [dev-dependencies]
-tracer-proto.workspace = true
-tracer-server = { path = "../../crates/tracer-server" }
+ashlar-trace-proto = { workspace = true }
+ashlar-trace-server = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
 ureq = { version = "3", default-features = false, features = ["gzip"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

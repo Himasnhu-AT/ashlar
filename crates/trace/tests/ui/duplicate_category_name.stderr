@@ -1,7 +1,7 @@
 error[E0080]: evaluation panicked: tracer: a category name is used twice in Category
  --> tests/ui/duplicate_category_name.rs:1:1
   |
-1 | / tracer_sdk::events! {
+1 | / ashlar_trace::events! {
 2 | |     pub enum Category { File = "file", Edit = "edit", Documents = "file" }
 3 | |     pub enum AppEvent {
 4 | |         FileOpen = "file.open" in File,
@@ -9,4 +9,4 @@ error[E0080]: evaluation panicked: tracer: a category name is used twice in Cate
 6 | | }
   | |_^ evaluation of `_` failed here
   |
-  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `tracer_sdk::events` (in Nightly builds, run with -Z macro-backtrace for more info)
+  = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `ashlar_trace::events` (in Nightly builds, run with -Z macro-backtrace for more info)

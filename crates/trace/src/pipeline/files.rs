@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ashlar_trace_proto::UnixMs;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tracer_proto::UnixMs;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -132,7 +132,7 @@ pub(crate) mod testing {
     impl TempDir {
         pub(crate) fn new(label: &str) -> Self {
             let unique = NEXT.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!("tracer-sdk-{label}-{}-{unique}-{}", std::process::id(), super::now_ms()));
+            let path = std::env::temp_dir().join(format!("ashlar-trace-{label}-{}-{unique}-{}", std::process::id(), super::now_ms()));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }

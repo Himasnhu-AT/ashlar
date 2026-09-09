@@ -16,8 +16,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use ashlar_trace_proto::{AppInfo, ConsentCategory, Device, Item, ItemBody, UnixMs};
 use serde::{Deserialize, Serialize};
-use tracer_proto::{AppInfo, ConsentCategory, Device, Item, ItemBody, UnixMs};
 
 use super::DropCounts;
 use super::files::{read_json, read_own_file, write_atomic};
@@ -808,7 +808,7 @@ fn count_evicted(bytes: &[u8], drops: &DropCounts) {
 
 #[cfg(test)]
 mod tests {
-    use tracer_proto::{Drops, ProcessKind, SCHEMA_VERSION, SessionTotals};
+    use ashlar_trace_proto::{Drops, ProcessKind, SCHEMA_VERSION, SessionTotals};
 
     use super::super::files::testing::TempDir;
     use super::super::files::write_json;

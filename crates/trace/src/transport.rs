@@ -48,7 +48,7 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
 mod http {
     use std::time::Duration;
 
-    use tracer_proto::HEADER_APP_KEY;
+    use ashlar_trace_proto::HEADER_APP_KEY;
 
     use super::{Reply, Request, Transport, TransportError, parse_retry_after};
 

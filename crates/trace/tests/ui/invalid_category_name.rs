@@ -1,4 +1,4 @@
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category { File = "file", Edit = "edit menu" }
     pub enum AppEvent {
         FileOpen = "file.open" in File,

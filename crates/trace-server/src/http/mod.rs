@@ -11,6 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use ashlar_trace_proto::{ForgetRequest, HEADER_APP_KEY, MAX_ENVELOPE_BYTES, SCHEMA_VERSION, routes};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Request, State};
@@ -21,7 +22,6 @@ use http_body_util::BodyExt;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 use tower_service::Service;
-use tracer_proto::{ForgetRequest, HEADER_APP_KEY, MAX_ENVELOPE_BYTES, SCHEMA_VERSION, routes};
 
 pub use limiter::Limiters;
 
@@ -332,7 +332,7 @@ async fn ingest_handler(State(state): State<AppState>, request: Request) -> Resp
     if let Err(status) = check_schema(&bytes) {
         return failure(status, if status == StatusCode::UNPROCESSABLE_ENTITY { "unsupported schema version" } else { "malformed envelope" });
     }
-    let envelope: tracer_proto::Envelope = match serde_json::from_slice(&bytes) {
+    let envelope: ashlar_trace_proto::Envelope = match serde_json::from_slice(&bytes) {
         Ok(envelope) => envelope,
         Err(_) => return failure(StatusCode::BAD_REQUEST, "malformed envelope"),
     };

@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tracer_sdk::transport::{Reply, Request, Transport, TransportError};
+use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
 
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category { File = "file", Edit = "edit", View = "view" }
     pub enum AppEvent {
         FileOpen = "file.open" in File,
@@ -118,8 +118,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tracer_sdk::proto::{Envelope, ItemBody, routes};
-use tracer_sdk::{ConsentCategory, Prop, Signal, Tracer};
+use ashlar_trace::proto::{Envelope, ItemBody, routes};
+use ashlar_trace::{ConsentCategory, Prop, Signal, Tracer};
 
 /// One request a [`Chaos`] transport was given, and what it answered (0 for a network error).
 pub struct Seen {
@@ -563,7 +563,7 @@ pub fn child_process() -> bool {
 }
 
 /// What all the processes sent, as the server would hold it: one copy of each item.
-fn sent_items(dir: &TempDir) -> Vec<(Envelope, tracer_sdk::proto::Item)> {
+fn sent_items(dir: &TempDir) -> Vec<(Envelope, ashlar_trace::proto::Item)> {
     let mut seen = HashSet::new();
     let mut items = Vec::new();
     for entry in std::fs::read_dir(dir.path().join("sent")).unwrap().flatten() {
@@ -671,13 +671,13 @@ pub fn many_processes(seed: u64, count: usize, test: &str) {
             let count_of = |pick: &dyn Fn(&ItemBody) -> bool| of_session.iter().filter(|body| pick(body)).count() as u64;
             let sent_events = count_of(&|body| matches!(body, ItemBody::Event(_)));
             let starts_sent = count_of(&|body| matches!(body, ItemBody::SessionStart(_)));
-            let clean_ends = count_of(&|body| matches!(body, ItemBody::SessionEnd(end) if end.status == tracer_sdk::proto::SessionStatus::Exited));
+            let clean_ends = count_of(&|body| matches!(body, ItemBody::SessionEnd(end) if end.status == ashlar_trace::proto::SessionStatus::Exited));
             let abnormal_ends =
-                count_of(&|body| matches!(body, ItemBody::SessionEnd(end) if end.status == tracer_sdk::proto::SessionStatus::Abnormal));
+                count_of(&|body| matches!(body, ItemBody::SessionEnd(end) if end.status == ashlar_trace::proto::SessionStatus::Abnormal));
             let unclean: Vec<_> = of_session
                 .iter()
                 .filter_map(|body| match body {
-                    ItemBody::Crash(crash) if crash.kind == tracer_sdk::proto::CrashKind::UncleanExit => Some(crash),
+                    ItemBody::Crash(crash) if crash.kind == ashlar_trace::proto::CrashKind::UncleanExit => Some(crash),
                     _ => None,
                 })
                 .collect();

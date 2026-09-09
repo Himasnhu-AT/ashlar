@@ -11,7 +11,7 @@ use crate::http::{self, AppState};
 use crate::jobs;
 use crate::store::{SqliteStore, Store, StoreError};
 
-pub const USAGE: &str = "usage: tracer-server <command>
+pub const USAGE: &str = "usage: ashlar-trace-server <command>
 
 commands:
   serve                       run the HTTP server, rollup timer and retention timer
@@ -179,7 +179,7 @@ fn serve(config: &Config) -> Result<(), CliError> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     let result = runtime.block_on(async {
         let listener = tokio::net::TcpListener::bind(config.bind).await?;
-        log::info!("tracer-server {} listening on {}", env!("CARGO_PKG_VERSION"), listener.local_addr()?);
+        log::info!("ashlar-trace-server {} listening on {}", env!("CARGO_PKG_VERSION"), listener.local_addr()?);
         if let Some(warning) = bind_warning(config) {
             log::warn!("{warning}");
         }
@@ -261,7 +261,7 @@ pub fn main(args: Vec<String>) -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("tracer-server: {error}");
+            eprintln!("ashlar-trace-server: {error}");
             std::process::ExitCode::from(if matches!(error, CliError::Usage(_) | CliError::Config(_)) { 2 } else { 1 })
         }
     }

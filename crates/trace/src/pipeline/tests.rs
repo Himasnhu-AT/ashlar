@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tracer_proto::{Catalog, CatalogEvent, ConsentCategory, Crash, CrashKind, Item, ItemBody, Perf, SessionStatus, Signal};
+use ashlar_trace_proto::{Catalog, CatalogEvent, ConsentCategory, Crash, CrashKind, Item, ItemBody, Perf, SessionStatus, Signal};
 
 use super::files::testing::TempDir;
 use super::files::{lock, read_json, write_json};
@@ -117,7 +117,10 @@ fn an_unclean_session_is_reported_with_ids_derived_from_its_session_id() {
             .filter(|(session, _, _)| *session == gone)
             .map(|(_, category, item)| (category, item))
             .filter(|(_, item)| {
-                !matches!(item.body, ItemBody::SessionStart(_) | ItemBody::SessionEnd(tracer_proto::SessionEnd { status: SessionStatus::Exited, .. }))
+                !matches!(
+                    item.body,
+                    ItemBody::SessionStart(_) | ItemBody::SessionEnd(ashlar_trace_proto::SessionEnd { status: SessionStatus::Exited, .. })
+                )
             })
             .collect()
     };
@@ -270,7 +273,7 @@ fn session_time_is_focused_active_or_idle() {
     let pipeline = idle(&config);
     let start = pipeline.shared.started;
     let at = |seconds: u64| start + Duration::from_secs(seconds);
-    let split = |totals: tracer_proto::SessionTotals| (totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s);
+    let split = |totals: ashlar_trace_proto::SessionTotals| (totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s);
     // A host that never says otherwise counts as focused; without input nothing is active.
     assert_eq!(split(pipeline.shared.sample(at(10))), (10, 10, 0, 10));
     // Input within `idle_after` makes focused time active.
@@ -417,7 +420,7 @@ mod review {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use tracer_proto::routes;
+    use ashlar_trace_proto::routes;
 
     use super::*;
     use crate::transport::{Reply, Request, Transport, TransportError};
@@ -742,7 +745,7 @@ mod time_and_limits {
 
     const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
-    fn totals_tuple(totals: tracer_proto::SessionTotals) -> (u64, u64, u64, u64) {
+    fn totals_tuple(totals: ashlar_trace_proto::SessionTotals) -> (u64, u64, u64, u64) {
         (totals.duration_s, totals.focused_s, totals.active_s, totals.idle_s)
     }
 
@@ -854,9 +857,13 @@ mod time_and_limits {
         let first = idle(&config);
         let gone = first.session_id();
         // More saved log lines than fit in one spool line.
-        let crumb =
-            serde_json::to_string(&tracer_proto::Breadcrumb { ts: 1, level: "warn".to_owned(), target: "host".to_owned(), message: "x".repeat(500) })
-                .unwrap();
+        let crumb = serde_json::to_string(&ashlar_trace_proto::Breadcrumb {
+            ts: 1,
+            level: "warn".to_owned(),
+            target: "host".to_owned(),
+            message: "x".repeat(500),
+        })
+        .unwrap();
         std::fs::write(first.session_dir().join("breadcrumbs.jsonl"), format!("{crumb}\n").repeat(600)).unwrap();
         drop(first);
         let _next = idle(&config);

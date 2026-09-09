@@ -7,14 +7,14 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use common::{TestServer, envelope, item, now};
-use tracer_proto::{
+use ashlar_trace_proto::{
     Catalog, CatalogEvent, Crash, CrashKind, Drops, Event, Item, ItemBody, Perf, SessionEnd, SessionStart, SessionStatus, SessionTotals,
 };
-use tracer_server::config::Config;
-use tracer_server::http::ServerLimits;
-use tracer_server::ingest::{DAY_MS, prepare};
-use tracer_server::store::Store;
+use ashlar_trace_server::config::Config;
+use ashlar_trace_server::http::ServerLimits;
+use ashlar_trace_server::ingest::{DAY_MS, prepare};
+use ashlar_trace_server::store::Store;
+use common::{TestServer, envelope, item, now};
 
 fn totals(duration_s: u64) -> SessionTotals {
     SessionTotals { seq: 1, duration_s, focused_s: duration_s, active_s: duration_s / 2, idle_s: 0 }
@@ -66,9 +66,9 @@ fn items_without_a_session_item_create_no_session_row() {
     assert_eq!(server.text("SELECT session_id FROM crashes"), "s-phantom");
     assert_eq!(server.text("SELECT session_id FROM events"), "s-phantom");
     // The stale closer and the rollups therefore have nothing to count.
-    let later = tracer_server::now_ms() + 3 * DAY_MS;
-    assert_eq!(tracer_server::jobs::close_stale_sessions(server.store.as_ref(), later).unwrap(), 0);
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    let later = ashlar_trace_server::now_ms() + 3 * DAY_MS;
+    assert_eq!(ashlar_trace_server::jobs::close_stale_sessions(server.store.as_ref(), later).unwrap(), 0);
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     assert_eq!(server.count("SELECT count(*) FROM daily_sessions"), 0);
     // The install still counts as active for the day (it sent events), which is what the rollup promises.
     assert_eq!(server.count("SELECT count(*) FROM daily_installs"), 1);
@@ -180,7 +180,7 @@ fn never_fired_uses_the_catalog_most_installs_reported() {
     let flood_refs: Vec<&str> = flood.iter().map(String::as_str).collect();
     server.ingest(&envelope("evil", "s-evil", vec![start_with("st-evil", "evil", Some(&flood_refs))]));
     server.ingest(&envelope("a", "s-a", vec![event("fired", "real.one")]));
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
 
     let never: Vec<String> = server.store.never_fired(server.app_id, Some("1.0.0")).unwrap().into_iter().map(|e| e.name).collect();
     assert_eq!(never, ["real.two"], "the forged catalog adds nothing");
@@ -196,8 +196,8 @@ fn declared_travels_through_the_rollup() {
         "s",
         vec![start_with("st", "h", Some(&["file.open"])), event("e1", "file.open"), event("e2", "file.open"), event("e3", "made.up")],
     ));
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
-    let today = tracer_server::now_ms() / DAY_MS;
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
+    let today = ashlar_trace_server::now_ms() / DAY_MS;
     let declared = server.store.events_ranked(server.app_id, today - 1, today, None, true).unwrap();
     let undeclared = server.store.events_ranked(server.app_id, today - 1, today, None, false).unwrap();
     assert_eq!(declared.iter().map(|e| (e.name.as_str(), e.count)).collect::<Vec<_>>(), [("file.open", 2)]);
@@ -325,7 +325,7 @@ fn a_crash_flood_is_capped_per_envelope_and_new_issues_per_day() {
     // overflow issue, which keeps counting what would have been new issues.
     for batch in 0..20 {
         let crashes: Vec<Item> = (0..20).map(|n| panic_crash(&format!("f{batch}-{n}"), 1000, &format!("0: demo::flood{batch}_{n}"))).collect();
-        server.store.ingest(server.app_id, &prepare(envelope("i", "s", crashes), tracer_server::now_ms()).unwrap()).unwrap();
+        server.store.ingest(server.app_id, &prepare(envelope("i", "s", crashes), ashlar_trace_server::now_ms()).unwrap()).unwrap();
     }
     let issues = server.count("SELECT count(*) FROM issues");
     assert_eq!(issues, 201, "200 real issues and one overflow issue");
@@ -350,7 +350,7 @@ fn item_ids_and_times_are_bounded() {
     let reply = server.ingest(&envelope("i", "s", vec![long_id, ok_id, ancient, future]));
     assert_eq!(reply.counts().0, 3);
     assert_eq!(reply.counts().2, 1);
-    let nowms = tracer_server::now_ms();
+    let nowms = ashlar_trace_server::now_ms();
     assert!(server.count("SELECT min(ts) FROM events") >= nowms - 90 * DAY_MS - 5_000, "an ancient time is clamped into the retention window");
     assert!(server.count("SELECT max(ts) FROM events") <= nowms + 3_600_000 + 5_000, "a far future time is clamped to an hour ahead");
 }
@@ -365,9 +365,9 @@ fn rollups_fold_the_long_tail_of_versions_and_event_names() {
             vec![item(&format!("h{n}"), ItemBody::SessionHeartbeat(totals(1))), event(&format!("e{n}"), &format!("junk.event{n}"))],
         );
         env.app.version = format!("9.{n}.0");
-        server.store.ingest(server.app_id, &prepare(env, tracer_server::now_ms()).unwrap()).unwrap();
+        server.store.ingest(server.app_id, &prepare(env, ashlar_trace_server::now_ms()).unwrap()).unwrap();
     }
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     assert_eq!(server.count("SELECT sum(sessions) FROM daily_sessions"), 80, "nothing is lost, only grouped");
     assert!(server.count("SELECT count(DISTINCT version) FROM daily_sessions") <= 51);
     assert!(server.count("SELECT count(*) FROM daily_sessions WHERE version = 'other'") >= 1);
@@ -377,13 +377,16 @@ fn rollups_fold_the_long_tail_of_versions_and_event_names() {
 #[test]
 fn rollup_runs_per_app_and_leaves_other_apps_alone() {
     let server = TestServer::demo();
-    let second = server.store.create_app("second", "Second", "tk_second_key", tracer_server::now_ms()).unwrap();
+    let second = server.store.create_app("second", "Second", "tk_second_key", ashlar_trace_server::now_ms()).unwrap();
     server.ingest(&envelope("a", "s", vec![item("h", ItemBody::SessionHeartbeat(totals(1)))]));
     server
         .store
-        .ingest(second.id, &prepare(envelope("b", "t", vec![item("h2", ItemBody::SessionHeartbeat(totals(1)))]), tracer_server::now_ms()).unwrap())
+        .ingest(
+            second.id,
+            &prepare(envelope("b", "t", vec![item("h2", ItemBody::SessionHeartbeat(totals(1)))]), ashlar_trace_server::now_ms()).unwrap(),
+        )
         .unwrap();
-    tracer_server::jobs::rollup_recent(server.store.as_ref(), tracer_server::now_ms(), 3, 90).unwrap();
+    ashlar_trace_server::jobs::rollup_recent(server.store.as_ref(), ashlar_trace_server::now_ms(), 3, 90).unwrap();
     assert_eq!(server.count("SELECT count(DISTINCT app_id) FROM daily_sessions"), 2);
     assert_eq!(server.count("SELECT count(*) FROM daily_installs"), 2);
 }
@@ -392,7 +395,7 @@ fn rollup_runs_per_app_and_leaves_other_apps_alone() {
 fn retention_also_prunes_drops_and_catalogs() {
     let server = TestServer::demo();
     let conn = rusqlite::Connection::open(&server.db_path).unwrap();
-    let now = tracer_server::now_ms();
+    let now = ashlar_trace_server::now_ms();
     let old_day = now / DAY_MS - 200;
     conn.execute("INSERT INTO daily_drops (app_id, day, reason, count) VALUES (?1, ?2, 'queue_full', 5)", rusqlite::params![server.app_id, old_day])
         .unwrap();
@@ -408,7 +411,7 @@ fn retention_also_prunes_drops_and_catalogs() {
         "s",
         vec![start_with("st", "fresh", Some(&["file.open"])), item("d", ItemBody::Drops(Drops { reasons: [("queue_full".to_string(), 2)].into() }))],
     ));
-    tracer_server::jobs::run_retention(server.store.as_ref(), now, 90).unwrap();
+    ashlar_trace_server::jobs::run_retention(server.store.as_ref(), now, 90).unwrap();
     assert_eq!(server.count(&format!("SELECT count(*) FROM daily_drops WHERE day = {old_day}")), 0);
     assert_eq!(server.count("SELECT count(*) FROM daily_drops"), 1, "recent drops stay");
     assert_eq!(server.count("SELECT count(*) FROM catalogs"), 1);
@@ -432,7 +435,7 @@ fn ingest_answers_507_over_the_size_ceiling_while_everything_else_keeps_working(
                 crash
             })
             .collect();
-        server.store.ingest(server.app_id, &prepare(envelope("i", "s", crashes), tracer_server::now_ms()).unwrap()).unwrap();
+        server.store.ingest(server.app_id, &prepare(envelope("i", "s", crashes), ashlar_trace_server::now_ms()).unwrap()).unwrap();
     }
     assert!(server.store.size_bytes().unwrap() > 1024 * 1024);
     let body = serde_json::to_vec(&envelope("i", "s", vec![event("e", "file.open")])).unwrap();
@@ -444,10 +447,10 @@ fn ingest_answers_507_over_the_size_ceiling_while_everything_else_keeps_working(
     assert_eq!(server.get("/login").status, 200);
     assert_eq!(server.forget("i").status, 200);
     // Login sessions are still written when the ceiling is reached.
-    let hash = tracer_server::cli::hash_password("a long enough password").unwrap();
-    server.store.create_admin("root", &hash, tracer_server::now_ms()).unwrap();
+    let hash = ashlar_trace_server::cli::hash_password("a long enough password").unwrap();
+    server.store.create_admin("root", &hash, ashlar_trace_server::now_ms()).unwrap();
     let id = server.count("SELECT id FROM admins");
-    server.store.admin_session_create("aa", id, 1, tracer_server::now_ms() + DAY_MS).unwrap();
+    server.store.admin_session_create("aa", id, 1, ashlar_trace_server::now_ms() + DAY_MS).unwrap();
 }
 
 #[test]

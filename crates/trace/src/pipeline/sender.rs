@@ -7,10 +7,10 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
-use tracer_proto::{
+use ashlar_trace_proto::{
     AppInfo, Device, Drops, ForgetRequest, IngestResponse, Item, ItemBody, MAX_ENVELOPE_BYTES, SCHEMA_VERSION, Signal, UnixMs, routes,
 };
+use serde::Serialize;
 
 use super::Shared;
 use super::files::{lock, now_ms, write_json};
@@ -535,7 +535,7 @@ fn gzip(_bytes: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use tracer_proto::{Envelope, ProcessKind};
+    use ashlar_trace_proto::{Envelope, ProcessKind};
 
     use super::*;
 

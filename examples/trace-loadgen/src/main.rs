@@ -1,4 +1,4 @@
-//! `loadgen`: drives a tracer-server over real HTTP with realistic envelopes, seeds large databases and
+//! `loadgen`: drives a ashlar-trace-server over real HTTP with realistic envelopes, seeds large databases and
 //! measures the dashboard's read path.
 //!
 //! ```text

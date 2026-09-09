@@ -1,9 +1,9 @@
 # Integrating the SDK into a host app
 
-This guide walks through adding `tracer-sdk` to an application. Every snippet is taken from, or was checked against, one of the two demo hosts in this repository:
+This guide walks through adding `ashlar-trace` to an application. Every snippet is taken from, or was checked against, one of the two demo hosts in this repository:
 
-- [`examples/demo-cli`](../examples/demo-cli): a scriptable command-line process. It is the one the end-to-end tests drive, so everything it does is tested against a real server.
-- [`examples/demo-gui`](../examples/demo-gui): a small `eframe`/`egui` window that wires the SDK the way a real GUI host would. It compiles and passes clippy (`cargo xtask demo`); it has not been run, because it needs a display.
+- [`examples/trace-demo-cli`](../../examples/trace-demo-cli): a scriptable command-line process. It is the one the end-to-end tests drive, so everything it does is tested against a real server.
+- [`examples/trace-demo-gui`](../../examples/trace-demo-gui): a small `eframe`/`egui` window that wires the SDK the way a real GUI host would. It compiles and passes clippy (`cargo xtask trace-demo`); it has not been run, because it needs a display.
 
 What the SDK may collect is listed in [privacy.md](privacy.md). How the pieces fit together is in [architecture.md](architecture.md).
 
@@ -11,7 +11,7 @@ What the SDK may collect is listed in [privacy.md](privacy.md). How the pieces f
 
 ```toml
 [dependencies]
-tracer-sdk = "0.1"
+ashlar-trace = "0.1"
 ```
 
 Default features are `http` (a blocking HTTPS client on the SDK's own thread) and `sysinfo` (process CPU and memory, device details). Without `http`, nothing leaves the machine unless you supply a `Transport` through `Builder::transport`. Without `sysinfo`, the CPU, memory and device fields are simply absent.
@@ -23,7 +23,7 @@ The SDK needs Rust 1.90, has no async runtime, forbids `unsafe`, and never write
 Events are declared once, as two enums. A name that is not lower-case `snake_case` (dots allowed, at most 64 bytes), or that is used twice, fails the build.
 
 ```rust
-tracer_sdk::events! {
+ashlar_trace::events! {
     pub enum Category {
         File = "file",
         Edit = "edit",
@@ -58,7 +58,7 @@ let tracer = builder.init();
 
 What each setting means:
 
-- **Key, name, version.** `Tracer::builder(write_key, app_name, app_version)`. The write key comes from `tracer-server app create` (see [self-hosting.md](self-hosting.md)). It is not a secret: it ships inside the app and only allows ingest.
+- **Key, name, version.** `Tracer::builder(write_key, app_name, app_version)`. The write key comes from `ashlar-trace-server app create` (see [self-hosting.md](self-hosting.md)). It is not a secret: it ships inside the app and only allows ingest.
 - **`data_dir`.** The host's own data directory. The SDK keeps its files in a `tracer` folder inside it (see section 3.2 of the architecture). Each host picks its own location, so this is required. If it is empty or the folder cannot be created, `init` returns a disabled tracer rather than failing.
 - **`endpoint`.** The server's base URL, such as `https://telemetry.example.com`, with no path. Without one the SDK records into its spool and sends nothing.
 - **`build`.** An optional build identifier such as a commit hash, shown next to the version.
@@ -271,7 +271,7 @@ if ui.checkbox(&mut allowed, "Usage").changed() {
 self.tracer.forget();
 ```
 
-- If you never call `notice_shown()`, no data ever arrives. The SDK says so once through the `log` facade (a warning with target `tracer_sdk`), and `flush_blocking` returns false while data is waiting for the notice. A tool without a user interface of its own that shares the data directory with your app needs nothing: it sends once the app has shown the notice.
+- If you never call `notice_shown()`, no data ever arrives. The SDK says so once through the `log` facade (a warning with target `ashlar_trace`), and `flush_blocking` returns false while data is waiting for the notice. A tool without a user interface of its own that shares the data directory with your app needs nothing: it sends once the app has shown the notice.
 - A category the user switches off before closing the notice is deleted from disk and never sent.
 - If your notice is shown elsewhere, for example by an installer, build with `.send_before_notice(true)`.
 - `set_consent(category, false)` takes effect at once and deletes that category's unsent items from the spool. The choice is saved and survives restarts. Other running processes of the same host pick it up within a tick.
@@ -307,15 +307,15 @@ assert_eq!(tracer.install_id(), "");
 
 `demo-cli` runs its whole `normal` scenario against a disabled tracer in a unit test.
 
-To test against a real server, run `tracer-server` in-process on `127.0.0.1:0` with a temporary data directory, as `examples/demo-cli/tests/e2e.rs` does. Set `.configure(|c| ...)` intervals to milliseconds so tests need no long sleeps.
+To test against a real server, run `ashlar-trace-server` in-process on `127.0.0.1:0` with a temporary data directory, as `examples/trace-demo-cli/tests/e2e.rs` does. Set `.configure(|c| ...)` intervals to milliseconds so tests need no long sleeps.
 
 ## 12. The web build
 
-On `wasm32` the SDK compiles but does nothing: `Builder::init` always returns a disabled tracer, so the same code path works unchanged and costs nothing. There is no data directory, no thread and no request on the web target. (`cargo xtask wasm` keeps `tracer-proto` and `tracer-sdk` building for it.)
+On `wasm32` the SDK compiles but does nothing: `Builder::init` always returns a disabled tracer, so the same code path works unchanged and costs nothing. There is no data directory, no thread and no request on the web target. (`cargo xtask wasm` keeps `ashlar-trace-proto` and `ashlar-trace` building for it.)
 
 ## 13. Cost and limits
 
-Measured with `cargo xtask stress` (release build, a 15-core laptop, a real `Tracer` on a temporary folder and a transport that accepts at once). Run it on your own hardware; the tables it prints are the source of these numbers.
+Measured with `cargo xtask trace-stress` (release build, a 15-core laptop, a real `Tracer` on a temporary folder and a transport that accepts at once). Run it on your own hardware; the tables it prints are the source of these numbers.
 
 **Per call on a host thread, one thread** (median, 99th percentile):
 
