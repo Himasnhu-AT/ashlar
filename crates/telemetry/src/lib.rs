@@ -218,6 +218,9 @@ pub struct Telemetry {
     save_commands: Arc<[&'static str]>,
     first_frame: Arc<AtomicBool>,
     repeats: Arc<Mutex<fold::Repeats>>,
+    /// The process-wide dialog hook this client installed (it holds a clone of the client until
+    /// [`Telemetry::quit`] removes it).
+    dialog_hook: Arc<Mutex<Option<ashlar_native::modal::ModalHook>>>,
 }
 
 impl Default for Telemetry {
@@ -235,6 +238,7 @@ impl Telemetry {
             save_commands: Arc::from(Vec::new()),
             first_frame: Arc::default(),
             repeats: Arc::default(),
+            dialog_hook: Arc::default(),
         }
     }
 
@@ -287,7 +291,14 @@ impl Telemetry {
         } else {
             Status { active: false, server: None, off: Some(Off::NoDataDir) }
         };
-        Telemetry { tracer, status, save_commands: Arc::from(cfg.save_commands.clone()), first_frame: Arc::default(), repeats: Arc::default() }
+        Telemetry {
+            tracer,
+            status,
+            save_commands: Arc::from(cfg.save_commands.clone()),
+            first_frame: Arc::default(),
+            repeats: Arc::default(),
+            dialog_hook: Arc::default(),
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -403,19 +414,23 @@ impl Telemetry {
     }
 
     /// Pause hang detection around every native file dialog and message box
-    /// (`ashlar_native::modal`). Process-wide; nothing to do when off.
+    /// (`ashlar_native::modal`). Process-wide; nothing to do when off. The hook keeps the client
+    /// alive until [`Telemetry::quit`] removes it, so call `quit` before the process ends: the
+    /// session ends (and its last performance window is sent) when the last clone is dropped.
     pub fn pause_hangs_in_dialogs(&self) {
         if !self.tracer.is_enabled() {
             return;
         }
         let tracer = self.tracer.clone();
-        ashlar_native::modal::set_hook(Some(Arc::new(move |open| {
+        let hook: ashlar_native::modal::ModalHook = Arc::new(move |open| {
             if open {
                 tracer.pause_hang_detection();
             } else {
                 tracer.resume_hang_detection();
             }
-        })));
+        });
+        ashlar_native::modal::set_hook(Some(hook.clone()));
+        *self.dialog_hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook);
     }
 
     /// Send what is waiting, for at most `timeout`. True when nothing is left that could be sent
@@ -424,8 +439,12 @@ impl Telemetry {
         self.tracer.flush_blocking(timeout)
     }
 
-    /// The app is quitting: send what is waiting, for at most [`QUIT_FLUSH`].
+    /// The app is quitting: send what is waiting, for at most [`QUIT_FLUSH`], and remove the
+    /// dialog hook this client installed, so that dropping the app's own clones ends the session.
     pub fn quit(&self) {
+        if let Some(hook) = self.dialog_hook.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            ashlar_native::modal::clear_if(&hook);
+        }
         if self.tracer.is_enabled() {
             let _ = self.flush(QUIT_FLUSH);
         }

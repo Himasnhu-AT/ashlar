@@ -16,6 +16,14 @@ pub fn set_hook(hook: Option<ModalHook>) {
     *HOOK.write().unwrap_or_else(PoisonError::into_inner) = hook;
 }
 
+/// Remove `hook` if it is still the installed one (another may have replaced it since).
+pub fn clear_if(hook: &ModalHook) {
+    let mut slot = HOOK.write().unwrap_or_else(PoisonError::into_inner);
+    if slot.as_ref().is_some_and(|h| Arc::ptr_eq(h, hook)) {
+        *slot = None;
+    }
+}
+
 /// Run `f`, a blocking native call, between the hook's `true` and `false`.
 pub fn around<T>(f: impl FnOnce() -> T) -> T {
     let hook = HOOK.read().unwrap_or_else(PoisonError::into_inner).clone();
@@ -54,5 +62,13 @@ mod tests {
         set_hook(None);
         assert_eq!(around(|| 1), 1);
         assert_eq!(*seen.lock().unwrap(), [true, false, true, false]);
+        // clear_if removes only the hook it is given
+        let a: ModalHook = Arc::new(|_| {});
+        let b: ModalHook = Arc::new(|_| {});
+        set_hook(Some(a.clone()));
+        clear_if(&b);
+        assert!(HOOK.read().unwrap().is_some());
+        clear_if(&a);
+        assert!(HOOK.read().unwrap().is_none());
     }
 }
