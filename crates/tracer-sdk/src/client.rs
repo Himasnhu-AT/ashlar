@@ -103,6 +103,16 @@ impl Builder {
         self
     }
 
+    /// For a host whose telemetry is not optional: every category is allowed and the notice counts as
+    /// shown from `init`, whatever choice an earlier run saved (the saved file is left as it is), and
+    /// `set_consent` and `notice_shown` do nothing. Off by default. Combine with
+    /// `honor_do_not_track(false)` to ignore `DO_NOT_TRACK` too; `TRACER_DISABLED` still switches the
+    /// SDK off.
+    pub fn force_consent(mut self, force: bool) -> Self {
+        self.config.force_consent = force;
+        self
+    }
+
     /// Replaces the set of built-in signals. All are on by default.
     pub fn signals(mut self, signals: &[Signal]) -> Self {
         self.config.signals = signals.to_vec();

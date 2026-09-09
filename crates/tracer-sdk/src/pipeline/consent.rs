@@ -51,6 +51,9 @@ pub(super) struct Consent {
     unsynced: AtomicBool,
     /// The file has existed at some point in this run, so if it disappears it is put back.
     persisted: AtomicBool,
+    /// The host forces consent ([`crate::Config::force_consent`]): everything is allowed and the notice
+    /// counts as shown, whatever the file says. The file is neither read nor written.
+    forced: bool,
 }
 
 impl Consent {
@@ -67,12 +70,32 @@ impl Consent {
             unsaved: AtomicBool::new(false),
             unsynced: AtomicBool::new(false),
             persisted: AtomicBool::new(path_exists),
+            forced: false,
+        }
+    }
+
+    /// Everything allowed and the notice shown, for this process, whatever the saved file says; the file
+    /// is left as it is (another process of the host without the option still reads it).
+    pub(super) fn forced(dir: &Path) -> Self {
+        let all = CATEGORIES.iter().fold(0, |bits, category| bits | bit(*category));
+        Self {
+            bits: AtomicU8::new(all),
+            notice_shown: AtomicBool::new(true),
+            path: dir.join(CONSENT_FILE),
+            file: Mutex::new(()),
+            unsaved: AtomicBool::new(false),
+            unsynced: AtomicBool::new(false),
+            persisted: AtomicBool::new(false),
+            forced: true,
         }
     }
 
     /// Takes over what the file says now, if it can be read. Returns the categories that were allowed
     /// and no longer are.
     pub(super) fn refresh(&self) -> Vec<ConsentCategory> {
+        if self.forced {
+            return Vec::new();
+        }
         let _file = lock(&self.file);
         self.read_file()
     }
@@ -119,8 +142,11 @@ impl Consent {
         }
     }
 
-    /// Changes one category and saves the file.
+    /// Changes one category and saves the file. Does nothing when consent is forced.
     pub(super) fn set(&self, category: ConsentCategory, allowed: bool) {
+        if self.forced {
+            return;
+        }
         let _file = lock(&self.file);
         // Start from the file, so that a choice another process made for another category is kept.
         self.read_file();
@@ -137,6 +163,9 @@ impl Consent {
     }
 
     pub(super) fn set_notice_shown(&self) {
+        if self.forced {
+            return;
+        }
         let _file = lock(&self.file);
         self.read_file();
         self.notice_shown.store(true, Ordering::Relaxed);
@@ -214,6 +243,25 @@ mod tests {
 
     fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |name| pairs.iter().find(|(n, _)| *n == name).map(|(_, v)| (*v).to_owned())
+    }
+
+    #[test]
+    fn forced_consent_ignores_the_saved_file_and_leaves_it_alone() {
+        let dir = TempDir::new("consent");
+        let saved = Consent::load(dir.path());
+        for category in CATEGORIES {
+            saved.set(category, false);
+        }
+        let before = std::fs::read(dir.path().join(CONSENT_FILE)).unwrap();
+        let forced = Consent::forced(dir.path());
+        assert!(CATEGORIES.iter().all(|category| forced.get(*category)) && forced.notice_shown());
+        // nothing switches it off in this process: neither a change nor the file
+        forced.set(ConsentCategory::Usage, false);
+        forced.set_in_memory(ConsentCategory::Usage, true);
+        assert!(forced.refresh().is_empty());
+        assert!(CATEGORIES.iter().all(|category| forced.get(*category)));
+        forced.set_notice_shown();
+        assert_eq!(std::fs::read(dir.path().join(CONSENT_FILE)).unwrap(), before, "the file is not touched");
     }
 
     #[test]

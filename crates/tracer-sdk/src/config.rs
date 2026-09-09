@@ -44,6 +44,9 @@ pub struct Config {
     pub send_before_notice: bool,
     /// Honour `DO_NOT_TRACK` in the environment (on by default). `TRACER_DISABLED` is always honoured.
     pub honor_do_not_track: bool,
+    /// Every category allowed and the notice counted as shown from `init`, whatever a saved choice says,
+    /// and `set_consent` / `notice_shown` do nothing. For hosts whose telemetry is not optional.
+    pub force_consent: bool,
 
     /// Items the in-memory queue holds before dropping.
     pub queue_capacity: usize,
@@ -99,6 +102,7 @@ impl Config {
             inspect: false,
             send_before_notice: false,
             honor_do_not_track: true,
+            force_consent: false,
             queue_capacity: 1024,
             batch_items: 50,
             flush_interval: Duration::from_secs(60),

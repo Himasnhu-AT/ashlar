@@ -55,6 +55,28 @@ fn crash() -> ItemBody {
 }
 
 #[test]
+fn forced_consent_keeps_the_session_start_despite_a_saved_opt_out() {
+    let dir = TempDir::new("pipeline");
+    let sdk = dir.path().join(SDK_DIR);
+    std::fs::create_dir_all(&sdk).unwrap();
+    assert!(write_json(&sdk.join("consent.json"), &serde_json::json!({"crash": false, "performance": false, "usage": false, "notice_shown": false})));
+    let mut forced = config(dir.path());
+    forced.force_consent = true;
+    let pipeline = idle(&forced);
+    assert!(!pipeline.notice_pending());
+    assert!([ConsentCategory::Crash, ConsentCategory::Performance, ConsentCategory::Usage].into_iter().all(|c| pipeline.consent(c)));
+    assert!(spooled(dir.path()).iter().any(|(_, _, item)| matches!(item.body, ItemBody::SessionStart(_))), "session_start kept");
+    // without the option the same file holds the session start back
+    let other = TempDir::new("pipeline");
+    std::fs::create_dir_all(other.path().join(SDK_DIR)).unwrap();
+    assert!(write_json(&other.path().join(SDK_DIR).join("consent.json"), &serde_json::json!({"crash": false, "performance": false, "usage": false})));
+    let plain = idle(&config(other.path()));
+    assert!(!plain.consent(ConsentCategory::Usage));
+    pipeline.shutdown();
+    plain.shutdown();
+}
+
+#[test]
 fn session_start_is_on_disk_after_start_with_catalog_and_selection() {
     let dir = TempDir::new("pipeline");
     let pipeline = idle(&config(dir.path()));

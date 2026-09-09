@@ -566,7 +566,7 @@ impl Pipeline {
             off: AtomicBool::new(!usable),
             closed: AtomicBool::new(false),
             enabled: config.signals.iter().fold(0, |bits, signal| bits | signal_bit(*signal)),
-            consent: Consent::load(&dir),
+            consent: if config.force_consent { Consent::forced(&dir) } else { Consent::load(&dir) },
             install_id: Mutex::new(identity.install_id.clone()),
             identity: Mutex::new(identity),
             identity_unsaved: AtomicBool::new(identity_unsaved),
