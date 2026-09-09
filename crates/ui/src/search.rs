@@ -3,8 +3,11 @@
 //! Escape clears a non-empty query (and keeps the focus); a second Escape gives the focus up.
 //! Enter reports `submitted`. [`SearchField::focus`] moves the keyboard focus to it (bind it to
 //! the app's Find shortcut).
+//!
+//! The look follows the tokens; an app with its own house style can set the height, fully rounded
+//! ends, the editor's margins and paint the search glyph from its own icon set.
 
-use egui::{Key, Margin, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Key, Margin, Painter, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::automation::{self, Details, Role};
 use crate::tokens::{self, Tokens};
@@ -27,11 +30,15 @@ pub struct SearchField<'a> {
     hint: &'a str,
     width: Option<f32>,
     max_len: usize,
+    height: Option<f32>,
+    rounded: bool,
+    text_margin: Option<Margin>,
+    icon: Option<&'a dyn Fn(&Painter, Rect, Color32)>,
 }
 
 impl<'a> SearchField<'a> {
     pub fn new(id: &'a str, text: &'a mut String) -> Self {
-        SearchField { id, text, hint: "Search", width: None, max_len: 512 }
+        SearchField { id, text, hint: "Search", width: None, max_len: 512, height: None, rounded: false, text_margin: None, icon: None }
     }
     /// Placeholder shown while empty (localized by the app).
     pub fn hint(mut self, hint: &'a str) -> Self {
@@ -48,6 +55,29 @@ impl<'a> SearchField<'a> {
         self
     }
 
+    /// Height in points (default: the tokens' control height), 12–96.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = height.is_finite().then(|| height.clamp(12.0, 96.0));
+        self
+    }
+    /// Fully rounded (pill) ends instead of the tokens' control radius.
+    pub fn rounded(mut self, rounded: bool) -> Self {
+        self.rounded = rounded;
+        self
+    }
+    /// Margins of the text inside the area right of the glyph (default: none at the sides,
+    /// vertically centred).
+    pub fn text_margin(mut self, margin: Margin) -> Self {
+        self.text_margin = Some(margin);
+        self
+    }
+    /// Paint the search glyph with the app's own icon: called with the glyph's square cell (the
+    /// left end of the field) and the colour to use.
+    pub fn icon(mut self, paint: &'a dyn Fn(&Painter, Rect, Color32)) -> Self {
+        self.icon = Some(paint);
+        self
+    }
+
     /// Request keyboard focus for the field `id` in `ui`'s scope (takes effect next frame).
     pub fn focus(ui: &Ui, id: &str) {
         let text_id = ui.make_persistent_id(id).with("text");
@@ -58,7 +88,7 @@ impl<'a> SearchField<'a> {
         let t = tokens::current(ui.ctx());
         let id = ui.make_persistent_id(self.id);
         let width = self.width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or_else(|| ui.available_width()).clamp(60.0, 4096.0);
-        let h = t.control_height;
+        let h = self.height.unwrap_or(t.control_height);
         let (rect, _) = ui.allocate_exact_size(vec2(width, h), Sense::hover());
         let icon_w = h;
         let clear_w = if self.text.is_empty() { 0.0 } else { h };
@@ -74,11 +104,11 @@ impl<'a> SearchField<'a> {
             egui::TextEdit::singleline(self.text)
                 .id(id.with("text"))
                 .hint_text(self.hint)
-                .frame(egui::Frame::NONE)
                 .char_limit(self.max_len)
                 .desired_width(edit_rect.width())
                 .font(font)
-                .margin(Margin::symmetric(0, ((h - row_h) / 2.0).max(0.0).floor() as i8)),
+                // egui ignores `margin` once a frame is set: the margin goes on the frame
+                .frame(egui::Frame::NONE.inner_margin(self.text_margin.unwrap_or(Margin::symmetric(0, ((h - row_h) / 2.0).max(0.0).floor() as i8)))),
         );
         let mut changed = response.changed() || self.text.len() != before;
         let mut cleared = false;
@@ -106,7 +136,9 @@ impl<'a> SearchField<'a> {
             ui.painter().line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(1.5, col));
             clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Clear search"));
             let sid = self.id;
-            automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), "Clear search", Role::Button, true, Details::default());
+            if !sid.is_empty() {
+                automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), "Clear search", Role::Button, true, Details::default());
+            }
             if clear.clicked() {
                 self.text.clear();
                 changed = true;
@@ -116,15 +148,21 @@ impl<'a> SearchField<'a> {
         }
         let focused = response.has_focus();
         let border = if focused { Stroke::new(1.5, t.focus) } else { Stroke::new(1.0, t.border) };
-        let bg = egui::epaint::RectShape::new(rect, t.radius.md, t.surface.sunken, border, StrokeKind::Inside);
+        let radius = if self.rounded { egui::CornerRadius::same((h / 2.0).min(127.0) as u8) } else { egui::CornerRadius::same(t.radius.md) };
+        let bg = egui::epaint::RectShape::new(rect, radius, t.surface.sunken, border, StrokeKind::Inside);
         ui.painter().set(bg_idx, bg);
-        // magnifier
-        let c = pos2(rect.left() + icon_w / 2.0 - 1.0, rect.center().y - 1.0);
-        let r = h * 0.17;
-        let glyph = Stroke::new(1.5, t.text.secondary);
-        ui.painter().circle_stroke(c, r, glyph);
-        let d = Vec2::splat(std::f32::consts::FRAC_1_SQRT_2);
-        ui.painter().line_segment([c + d * r, c + d * (r + h * 0.16)], glyph);
+        let cell = Rect::from_min_size(rect.min, Vec2::splat(icon_w));
+        if let Some(paint) = self.icon {
+            paint(ui.painter(), cell, t.text.secondary);
+        } else {
+            // magnifier
+            let c = pos2(cell.center().x - 1.0, cell.center().y - 1.0);
+            let r = h * 0.17;
+            let glyph = Stroke::new(1.5, t.text.secondary);
+            ui.painter().circle_stroke(c, r, glyph);
+            let d = Vec2::splat(std::f32::consts::FRAC_1_SQRT_2);
+            ui.painter().line_segment([c + d * r, c + d * (r + h * 0.16)], glyph);
+        }
         automation::register_with(ui, &response, self.id, self.hint, Role::Search, Details { value: Some(self.text.as_str()), selected: None });
         SearchResponse { response, changed, submitted, cleared }
     }
@@ -199,6 +237,24 @@ mod tests {
         h.step();
         assert_eq!(h.state().text, "");
         assert_eq!(h.state().cleared, 1);
+    }
+
+    #[test]
+    fn house_style_options() {
+        let painted = std::cell::Cell::new(None);
+        let mut text = String::new();
+        let mut h = Harness::builder().with_size(vec2(300.0, 60.0)).build_ui(|ui| {
+            let icon = |_: &Painter, cell: Rect, _: Color32| painted.set(Some(cell));
+            SearchField::new("files.search", &mut text).height(22.0).rounded(true).text_margin(Margin::same(3)).icon(&icon).width(180.0).show(ui);
+        });
+        h.step();
+        drop(h);
+        let cell = painted.get().unwrap();
+        assert_eq!(cell.size(), vec2(22.0, 22.0));
+        // hostile sizes fall back or clamp
+        let mut t = String::new();
+        assert_eq!(SearchField::new("x", &mut t).height(f32::NAN).height, None);
+        assert_eq!(SearchField::new("x", &mut t).height(1e9).height, Some(96.0));
     }
 
     #[test]

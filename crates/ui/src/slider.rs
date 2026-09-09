@@ -2,7 +2,7 @@
 //!
 //! - [`Slider`]: a horizontal track. Dragging follows the pointer; a click jumps there (one-shot
 //!   commit); arrow keys step.
-//! - [`Knob`]: a rotary control. Dragging up or down turns it (Shift ×10, Alt ×0.1), a double
+//! - [`Knob`]: a rotary control. Dragging up or down turns it (Shift ×10, Alt or ⌘/Ctrl ×0.1), a double
 //!   click returns it to its default, arrow keys step.
 //!
 //! Escape during a drag restores the start value and reports [`crate::edit::EditPhase::Cancel`].
