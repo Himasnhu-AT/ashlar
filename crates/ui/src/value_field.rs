@@ -1,9 +1,12 @@
 //! Numeric drag/scrub field with an explicit edit phase.
 //!
-//! Drag horizontally to scrub (Shift ×10, Alt ×0.1), click or press Enter to type a value, use
+//! Drag horizontally to scrub (Shift ×10, Alt or ⌘/Ctrl ×0.1), click or press Enter to type a value, use
 //! the arrow keys to step. Every change is reported as an [`Edit`] so the app maps one drag or one
 //! typed entry to one undo step (see [`crate::edit`]). Escape cancels a drag or a typed entry and
 //! restores the value it started from.
+//!
+//! [`ValueField::hot_text`] draws the value as bare scrubbable text (the "hot text" of inspectors
+//! in compositing and editing apps) instead of a boxed field.
 //!
 //! The text comes from a [`ValueFormat`]: [`Decimal`] for plain numbers, or the app's own (a
 //! timecode, a frequency, a percentage) through [`FnFormat`] — the "formatted value field".
@@ -28,7 +31,7 @@
 use std::fmt::Write as _;
 use std::ops::RangeInclusive;
 
-use egui::{Align2, CursorIcon, Key, Response, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, text::LayoutJob};
+use egui::{Align2, Color32, CursorIcon, Key, Response, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, text::LayoutJob};
 
 use crate::automation::{self, Details, Role};
 use crate::cache;
@@ -119,12 +122,13 @@ pub struct ValueField<'a> {
     step: f64,
     key_step: Option<f64>,
     width: Option<f32>,
+    hot: Option<Color32>,
 }
 
 impl<'a> ValueField<'a> {
     /// `id` is the automation id (also scopes egui state); `label` is the accessible name.
     pub fn new(id: &'a str, label: &'a str, value: &'a mut f64, format: &'a dyn ValueFormat) -> Self {
-        ValueField { id, label, value, format, range: f64::MIN..=f64::MAX, speed: None, step: 0.0, key_step: None, width: None }
+        ValueField { id, label, value, format, range: f64::MIN..=f64::MAX, speed: None, step: 0.0, key_step: None, width: None, hot: None }
     }
     pub fn range(mut self, range: RangeInclusive<f64>) -> Self {
         self.range = range;
@@ -145,6 +149,13 @@ impl<'a> ValueField<'a> {
         self.key_step = Some(step);
         self
     }
+    /// Draw the value as bare text in `color` (no box), sized to the text, brighter and
+    /// underlined while hovered or dragged. The editor a click opens is `width` wide (default
+    /// three control heights).
+    pub fn hot_text(mut self, color: Color32) -> Self {
+        self.hot = Some(color);
+        self
+    }
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
@@ -163,9 +174,27 @@ impl<'a> ValueField<'a> {
         let id = ui.make_persistent_id(self.id);
         let editing_id = id.with("editing");
         let width = self.width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(t.control_height * 3.0).min(4096.0);
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, t.control_height), Sense::hover());
+        let editing = ui.data(|d| d.get_temp::<String>(editing_id));
+        let font = Tokens::font(t.type_scale.body);
+        // hot text is laid out first: its size is the text's
+        let hot = match (self.hot, &editing) {
+            (Some(color), None) => {
+                let shown = *self.value;
+                let revision = cache::hash_of(&(shown.to_bits(), self.format.tag(), font.size.to_bits()));
+                let format = self.format;
+                let galley = cache::galley(ui, (id, "hot"), revision, || {
+                    let mut text = String::new();
+                    format.format(shown, &mut text);
+                    LayoutJob::simple_singleline(text, font.clone(), color)
+                });
+                Some((color, galley))
+            }
+            _ => None,
+        };
+        let size = hot.as_ref().map_or(Vec2::new(width, t.control_height), |(_, g)| g.size() + Vec2::splat(4.0));
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
 
-        if let Some(buffer) = ui.data(|d| d.get_temp::<String>(editing_id)) {
+        if let Some(buffer) = editing {
             return self.show_editor(ui, rect, id, editing_id, buffer, bounds, &t);
         }
 
@@ -202,10 +231,30 @@ impl<'a> ValueField<'a> {
         if response.hovered() || response.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
         }
-        let hot = response.hovered() || response.dragged();
+        let lit = response.hovered() || response.dragged();
+        if let Some((color, galley)) = hot {
+            let color = if !enabled {
+                t.text.disabled
+            } else if lit {
+                t.accent_hover
+            } else {
+                color
+            };
+            let painter = ui.painter();
+            if lit && enabled {
+                let y = rect.max.y - 1.0;
+                painter.line_segment([egui::pos2(rect.min.x + 2.0, y), egui::pos2(rect.max.x - 2.0, y)], Stroke::new(1.0, color.gamma_multiply(0.6)));
+            }
+            let text = galley.text().to_owned();
+            painter.galley_with_override_text_color(rect.min + Vec2::splat(2.0), galley, color);
+            let shown = *value;
+            response.widget_info(|| WidgetInfo::slider(enabled, shown, self.label));
+            automation::register_with(ui, &response, self.id, self.label, Role::Field, Details { value: Some(&text), selected: None });
+            return ValueResponse { response, edit };
+        }
         let text_color = if !enabled {
             t.text.disabled
-        } else if hot {
+        } else if lit {
             t.accent_hover
         } else {
             t.text.primary
@@ -215,7 +264,7 @@ impl<'a> ValueField<'a> {
         painter.rect_filled(rect, radius, t.surface.sunken);
         let border = if response.has_focus() {
             Stroke::new(1.5, t.focus)
-        } else if hot {
+        } else if lit {
             Stroke::new(1.0, t.border_strong)
         } else {
             Stroke::new(1.0, t.border)
@@ -223,7 +272,6 @@ impl<'a> ValueField<'a> {
         painter.rect_stroke(rect, radius, border, StrokeKind::Inside);
         let shown = *value;
         let format = self.format;
-        let font = Tokens::font(t.type_scale.body);
         let revision = cache::hash_of(&(shown.to_bits(), format.tag(), text_color, font.size.to_bits()));
         let galley = cache::galley(ui, (id, "value"), revision, || {
             let mut text = String::new();
@@ -340,6 +388,52 @@ mod tests {
             h.hover_at(*p);
             h.step();
         }
+    }
+
+    fn hot_harness(value: f64) -> Harness<'static, State> {
+        Harness::builder().with_size(Vec2::new(300.0, 80.0)).build_ui_state(
+            move |ui, s: &mut State| {
+                let fmt = Decimal { decimals: 1, suffix: " px" };
+                let out = ValueField::new("test.hot", "Width", &mut s.value, &fmt)
+                    .range(0.0..=100.0)
+                    .speed(1.0)
+                    .hot_text(Color32::LIGHT_BLUE)
+                    .width(64.0)
+                    .show(ui);
+                s.rect = out.response.rect;
+                s.edits.extend(out.edit);
+            },
+            State { value, edits: Vec::new(), rect: egui::Rect::NOTHING },
+        )
+    }
+
+    #[test]
+    fn hot_text_is_sized_to_its_text_scrubs_and_types() {
+        let mut h = hot_harness(10.0);
+        h.step();
+        let r = h.state().rect;
+        assert!(r.width() < 60.0 && r.height() < Tokens::dark().control_height, "{r:?}");
+        let c = r.center();
+        // ⌘/Ctrl is fine (×0.1), like Alt
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+        drag(&mut h, c, &[c + egui::vec2(10.0, 0.0), c + egui::vec2(20.0, 0.0)]);
+        h.drop_at(c + egui::vec2(20.0, 0.0));
+        h.step();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        let v = h.state().value;
+        assert!(v > 10.0 && v <= 12.5, "{v}");
+        assert_eq!(h.state().edits.last().map(|e| e.phase), Some(EditPhase::Commit));
+        // a click opens the editor (the field's width) and Enter commits the typed value
+        let c = h.state().rect.center();
+        crate::test_support::click(&mut h, c);
+        h.run_steps(2);
+        assert_eq!(h.state().rect.width(), 64.0);
+        h.event(egui::Event::Text("42".into()));
+        h.step();
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().value, 42.0);
+        assert!(h.state().rect.width() < 60.0, "back to hot text");
     }
 
     #[test]

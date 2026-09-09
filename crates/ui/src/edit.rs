@@ -113,11 +113,11 @@ pub(crate) struct Drag {
     pub cancelled: bool,
 }
 
-/// Speed multiplier from modifiers: Shift is coarse (×10), Alt (Option) is fine (×0.1).
+/// Speed multiplier from modifiers: Shift is coarse (×10), Alt (Option) or ⌘/Ctrl is fine (×0.1).
 pub(crate) fn speed_multiplier(modifiers: egui::Modifiers) -> f64 {
     if modifiers.shift {
         10.0
-    } else if modifiers.alt {
+    } else if modifiers.alt || modifiers.command {
         0.1
     } else {
         1.0
