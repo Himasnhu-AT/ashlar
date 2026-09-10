@@ -19,22 +19,17 @@
 //! apps and are built from these pieces.
 
 pub mod automation;
-pub mod buttons;
 pub mod cache;
 pub mod commands;
 pub mod devtools;
 pub mod dialog;
-pub mod docking;
 pub mod edit;
 pub mod fonts;
-pub mod icons;
 pub mod layout;
-pub mod printing;
 pub mod search;
 pub mod slider;
 pub mod status_bar;
 pub mod swatches;
-pub mod tabs;
 #[cfg(feature = "telemetry")]
 pub mod telemetry;
 pub mod theme;
