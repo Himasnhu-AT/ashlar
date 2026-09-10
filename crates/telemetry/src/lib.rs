@@ -54,12 +54,17 @@ pub const DISABLED_ENV: &str = "TRACER_DISABLED";
 pub const COURIER_ENV: &str = "ASHLAR_TELEMETRY_COURIER";
 /// How long a courier keeps trying to deliver; what is left then waits for the next process.
 pub const COURIER_BUDGET: Duration = Duration::from_secs(20);
-/// After its first clean delivery a courier stays this long, picking up what runs that end meanwhile
-/// leave behind (a script calling the tool many times in a row), so they need not start one each.
+/// A courier stays until no run has asked for it for this long, picking up what runs that end
+/// meanwhile leave behind (a script calling the tool many times in a row), so they need not start
+/// one each.
 pub const COURIER_LINGER: Duration = Duration::from_millis(1500);
 /// The file in the SDK's folder a running courier holds locked: one courier per data folder.
 #[cfg(not(target_arch = "wasm32"))]
 const COURIER_LOCK: &str = "courier.lock";
+/// The note a run that left data behind writes (its process id and the time) before it looks
+/// for a running courier; the courier stays while it keeps changing.
+#[cfg(not(target_arch = "wasm32"))]
+const COURIER_WANTED: &str = "courier.wanted";
 
 ashlar_trace::events! {
     pub enum Category {
@@ -518,6 +523,11 @@ impl Telemetry {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn courier_wanted(data_dir: &Path) -> PathBuf {
+    data_dir.join("tracer").join(COURIER_WANTED)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn courier_lock(data_dir: &Path) -> PathBuf {
     data_dir.join("tracer").join(COURIER_LOCK)
 }
@@ -530,7 +540,7 @@ fn spawn_courier(_lock: Option<&Path>) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_courier(lock: Option<&Path>) -> bool {
     let Some(lock) = lock else { return false };
-    if courier_running(lock) {
+    if ask_for_courier(lock) {
         return true;
     }
     let Ok(program) = std::env::current_exe() else { return false };
@@ -544,6 +554,19 @@ fn spawn_courier(lock: Option<&Path>) -> bool {
         command.process_group(0);
     }
     command.spawn().is_ok()
+}
+
+/// Leave the note that a run has data waiting, then say whether a courier (holding `lock`) is
+/// running to take it. Asked first, looked second: a courier that is leaving reads the note after
+/// it lets go of the lock, so either it sees this note or this run sees the lock free.
+#[cfg(not(target_arch = "wasm32"))]
+fn ask_for_courier(lock: &Path) -> bool {
+    static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let note = format!("{} {} {:?}", std::process::id(), ASKED.fetch_add(1, Ordering::Relaxed), std::time::SystemTime::now());
+    if let Some(dir) = lock.parent() {
+        let _ = std::fs::write(dir.join(COURIER_WANTED), note);
+    }
+    courier_running(lock)
 }
 
 /// Whether a courier holds the lock at `path` now.
@@ -563,59 +586,80 @@ pub fn serve_courier(cfg: &TelemetryConfig, data_dir: Option<&Path>) -> bool {
     }
     #[cfg(not(target_arch = "wasm32"))]
     if let (Ok(target), Some(dir)) = (resolve(cfg, &|k| std::env::var(k).ok()), data_dir) {
-        let transport = Https::new(&target.endpoint);
-        run_courier(cfg, &target, dir, transport, |_| {}, COURIER_BUDGET, COURIER_LINGER);
+        run_courier(cfg, &target, dir, || Https::new(&target.endpoint), |_| {}, COURIER_BUDGET, COURIER_LINGER);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (cfg, data_dir);
     true
 }
 
-/// The courier's work, with a given transport (tests).
+/// The courier's work, with a given transport (tests). It stays while runs keep asking for it (the
+/// note in [`COURIER_WANTED`] changes) and leaves once nothing has asked for [`COURIER_LINGER`]
+/// (`linger`). A run that asks while this one is leaving sees it running and starts none, so after
+/// letting go of the lock it looks at the note once more and takes over again if it changed.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_courier(
+fn run_courier<T: ashlar_trace::transport::Transport>(
     cfg: &TelemetryConfig,
     target: &Target,
     data_dir: &Path,
-    transport: impl ashlar_trace::transport::Transport,
-    configure: impl FnOnce(&mut ashlar_trace::Config),
+    transport: impl Fn() -> T,
+    configure: impl Fn(&mut ashlar_trace::Config),
     budget: Duration,
     linger: Duration,
 ) -> bool {
+    /// Passes in a row that leave data unsent (offline, a server error) before it gives up.
+    const MAX_FAILED_PASSES: u32 = 3;
     let path = courier_lock(data_dir);
     if path.parent().is_none_or(|dir| std::fs::create_dir_all(dir).is_err()) {
         return false;
     }
-    let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path) else { return false };
-    if lock.try_lock().is_err() {
-        return false;
-    }
-    let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
-        .data_dir(data_dir)
-        .endpoint(&target.endpoint)
-        .process(cfg.process)
-        .catalog::<AppEvent>()
-        .courier(true)
-        .force_consent(true)
-        .honor_do_not_track(false)
-        .transport(transport)
-        .configure(|c| {
-            c.shutdown_timeout = Duration::from_secs(1);
-            configure(c);
-        })
-        .init();
+    let wanted = || std::fs::read(courier_wanted(data_dir)).unwrap_or_default();
     let started = Instant::now();
     let left = || budget.saturating_sub(started.elapsed());
-    let mut clean = tracer.flush_blocking(left());
-    let lingering = Instant::now();
-    // Each pass with nothing new to send makes no request.
-    while clean && lingering.elapsed() < linger && !left().is_zero() {
-        std::thread::sleep(Duration::from_millis(250).min(linger));
-        clean = tracer.flush_blocking(left());
+    let mut clean = false;
+    loop {
+        let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path) else { return false };
+        if lock.try_lock().is_err() {
+            return clean;
+        }
+        let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
+            .data_dir(data_dir)
+            .endpoint(&target.endpoint)
+            .process(cfg.process)
+            .catalog::<AppEvent>()
+            .courier(true)
+            .force_consent(true)
+            .honor_do_not_track(false)
+            .transport(transport())
+            .configure(|c| {
+                c.shutdown_timeout = Duration::from_secs(1);
+                configure(c);
+            })
+            .init();
+        let mut failed = 0;
+        let mut quiet_since = Instant::now();
+        let mut asked = wanted();
+        loop {
+            // What the note said before this pass: a run that asked earlier had ended its session.
+            let before = wanted();
+            if before != asked {
+                asked = before.clone();
+                quiet_since = Instant::now();
+            }
+            // Each pass with nothing new to send makes no request.
+            clean = tracer.flush_blocking(left());
+            failed = if clean { 0 } else { failed + 1 };
+            if failed >= MAX_FAILED_PASSES || left().is_zero() || (clean && quiet_since.elapsed() >= linger && wanted() == before) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250).min(linger.max(Duration::from_millis(10))));
+        }
+        tracer.shutdown_within(Duration::from_secs(1));
+        drop(lock);
+        if wanted() == asked || failed >= MAX_FAILED_PASSES || left().is_zero() {
+            return clean;
+        }
     }
-    tracer.shutdown_within(Duration::from_secs(1));
-    drop(lock);
-    clean
 }
 
 #[cfg(test)]
@@ -704,7 +748,7 @@ mod tests {
         held.lock().unwrap();
         assert!(courier_running(&lock_path));
         let idle = crate::testing::Recorder::default();
-        assert!(!run_courier(&cfg, &target, dir.path(), idle.clone(), |_| {}, Duration::from_secs(5), Duration::ZERO));
+        assert!(!run_courier(&cfg, &target, dir.path(), || idle.clone(), |_| {}, Duration::from_secs(5), Duration::ZERO));
         assert!(idle.items().is_empty());
         drop(held);
         assert!(!courier_running(&lock_path));
@@ -715,7 +759,7 @@ mod tests {
             &cfg,
             &target,
             dir.path(),
-            fake.clone(),
+            || fake.clone(),
             |c| c.tick_interval = Duration::from_millis(10),
             Duration::from_secs(5),
             Duration::from_millis(300)
@@ -728,6 +772,60 @@ mod tests {
         assert!(fake.envelopes().iter().all(|e| e.session_id == session));
         // and outside a courier, serving is a no-op
         assert!(!serve_courier(&cfg, Some(dir.path())));
+    }
+
+    /// Runs that end one after another while a courier works, with gaps around its linger: every
+    /// run's session is delivered, by that courier or by the one a run that found none would start.
+    /// (The moment between a courier's last pass and its unlock is too short to hit on purpose;
+    /// the note is re-read there all the same.)
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_burst_of_runs_loses_nothing_to_a_courier_that_is_leaving() {
+        use ashlar_trace::proto::ItemBody;
+        use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
+        struct Offline;
+        impl Transport for Offline {
+            fn send(&mut self, _: &Request<'_>) -> Result<Reply, TransportError> {
+                Err(TransportError::Network("offline".into()))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().to_path_buf();
+        let cfg = cfg().process(ProcessKind::Cli);
+        let target = Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_test".into(), host: "127.0.0.1".into() };
+        let fake = crate::testing::Recorder::default();
+        let quick = |c: &mut ashlar_trace::Config| c.tick_interval = Duration::from_millis(5);
+        let courier = |data: std::path::PathBuf, fake: crate::testing::Recorder, cfg: TelemetryConfig, target: Target| {
+            std::thread::spawn(move || run_courier(&cfg, &target, &data, || fake.clone(), quick, Duration::from_secs(20), Duration::from_millis(200)))
+        };
+        let lock = courier_lock(&data);
+        std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        let mut sessions = Vec::new();
+        let mut couriers = vec![courier(data.clone(), fake.clone(), cfg.clone(), target.clone())];
+        std::thread::sleep(Duration::from_millis(50));
+        // gaps around the courier's linger, so some runs end while it is leaving
+        for gap in [0u64, 20, 60, 150, 190, 200, 210, 230, 400, 180, 205, 215, 0, 250] {
+            std::thread::sleep(Duration::from_millis(gap));
+            let run = Telemetry::with_transport(&cfg, &target, &data, Offline, |_| {});
+            sessions.push(run.tracer().session_id());
+            run.command("doc.edit", true, Duration::from_millis(1));
+            assert!(!run.end(Duration::from_millis(1)));
+            std::mem::forget(run);
+            if !ask_for_courier(&lock) {
+                couriers.push(courier(data.clone(), fake.clone(), cfg.clone(), target.clone()));
+            }
+        }
+        for c in couriers {
+            c.join().unwrap();
+        }
+        let delivered: std::collections::HashSet<String> = fake
+            .envelopes()
+            .into_iter()
+            .filter(|e| e.items.iter().any(|i| matches!(&i.body, ItemBody::SessionEnd(_))))
+            .map(|e| e.session_id)
+            .collect();
+        let missing: Vec<&String> = sessions.iter().filter(|s| !delivered.contains(*s)).collect();
+        assert!(missing.is_empty(), "{} of {} sessions not delivered", missing.len(), sessions.len());
     }
 
     #[test]
