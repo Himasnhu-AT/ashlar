@@ -30,8 +30,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
 use ashlar_trace_proto::{
-    AppInfo, Catalog, ConsentCategory, Crash, CrashKind, Item, ItemBody, SCHEMA_VERSION, SessionEnd, SessionStart, SessionStatus, SessionTotals,
-    Signal, UnixMs,
+    AppInfo, Catalog, ConsentCategory, Crash, CrashKind, Item, ItemBody, ProcessKind, SCHEMA_VERSION, SessionEnd, SessionStart, SessionStatus,
+    SessionTotals, Signal, UnixMs,
 };
 
 use self::consent::Consent;
@@ -41,7 +41,7 @@ use self::inspect::Outbox;
 use self::sender::{Message, Worker};
 use self::session::{Marker, SELECTION_FILE, SESSION_FILE, Selection, SessionClock, catalog_hash};
 use self::spool::{DROP_IO, Header, MAX_LINE_BYTES, SPOOL_DIR, Spool, category_code};
-use self::usage::{DROP_PROP, Listening};
+use self::usage::{DROP_PROP, Listening, build_event};
 use crate::config::Config;
 use crate::signals::{self, Signals};
 use crate::sink::{LOG_TARGET, Sink};
@@ -497,6 +497,10 @@ pub(crate) struct Pipeline {
     /// The receiving end of the queue when no worker took it. Kept so the queue stays a queue that
     /// fills up, rather than one that reports its reader gone.
     _parked: Mutex<Option<Receiver<Message>>>,
+    /// Write events and signal items to the spool on the calling thread instead of queueing them
+    /// for the worker: a command-line process ([`ProcessKind::Cli`]). It may exit while the worker
+    /// waits on a slow request, and what only the queue held would be lost with it.
+    direct: bool,
 }
 
 impl Pipeline {
@@ -639,7 +643,8 @@ impl Pipeline {
                 }
             }
         }
-        Arc::new(Self { session_dir, shared, queue, worker: Mutex::new(worker), _parked: Mutex::new(parked) })
+        let direct = config.process == ProcessKind::Cli;
+        Arc::new(Self { session_dir, shared, queue, worker: Mutex::new(worker), _parked: Mutex::new(parked), direct })
     }
 
     /// Hands the pipeline the signal modules so its worker can call [`Signals::tick`] about once a second.
@@ -663,6 +668,18 @@ impl Pipeline {
             }
             None => props,
         };
+        if self.direct {
+            // A file append on the calling thread, so the event is on disk before the process ends.
+            match build_event(name, category, dynamic, props) {
+                Ok((event, dropped_props)) => {
+                    self.shared.drops.add(DROP_PROP, dropped_props);
+                    let item = Item { id: next_item_id(), ts: now_ms(), body: ItemBody::Event(event) };
+                    self.shared.store_queued(self.shared.epoch.load(Ordering::Relaxed), category_code(Signal::Usage.consent()), &item);
+                }
+                Err(reason) => self.shared.drops.add(reason, 1),
+            }
+            return;
+        }
         let message = Message::Event {
             epoch: self.shared.epoch.load(Ordering::Relaxed),
             ts: now_ms(),
@@ -843,6 +860,11 @@ impl Pipeline {
 impl Sink for Pipeline {
     fn submit(&self, signal: Signal, body: ItemBody) {
         if !self.allows(signal) {
+            return;
+        }
+        if self.direct {
+            let item = Item { id: next_item_id(), ts: now_ms(), body };
+            self.shared.store_queued(self.shared.epoch.load(Ordering::Relaxed), category_code(signal.consent()), &item);
             return;
         }
         let message = Message::Item {

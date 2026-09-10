@@ -1117,6 +1117,35 @@ fn shutdown_within_waits_no_longer_than_it_is_told_for_a_slow_server() {
 }
 
 #[test]
+fn a_command_line_process_keeps_its_events_when_it_exits_during_a_slow_send() {
+    if reran_without_kill_switches("a_command_line_process_keeps_its_events_when_it_exits_during_a_slow_send") {
+        return;
+    }
+    let dir = TempDir::new();
+    let slow = Server::default();
+    slow.set_delay(Duration::from_secs(3));
+    let cli = builder(&dir, &slow).process(ashlar_trace::ProcessKind::Cli).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    let session = cli.session_id();
+    // the worker is now in its first request, for the session start
+    std::thread::sleep(Duration::from_millis(100));
+    cli.track(AppEvent::FileOpen);
+    cli.track_id(Category::Edit, "edit.razor");
+    cli.report_handled(&"a handled error", Some("doc.edit"));
+    assert!(!cli.shutdown_within(Duration::from_millis(20)));
+    // the process ends here, with the worker still waiting on the server
+    std::mem::forget(cli);
+    slow.set_delay(Duration::ZERO);
+    let server = Server::default();
+    let next = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    assert!(next.flush_blocking(WAIT));
+    let of_cli: Vec<ItemBody> = server.items().into_iter().filter(|(e, _)| e.session_id == session).map(|(_, i)| i.body).collect();
+    let names: Vec<&str> = of_cli.iter().filter_map(|b| if let ItemBody::Event(e) = b { Some(e.name.as_str()) } else { None }).collect();
+    assert!(names.contains(&"file.open") && names.contains(&"edit.razor"), "{of_cli:?}");
+    assert!(of_cli.iter().any(|b| matches!(b, ItemBody::Crash(c) if c.kind == CrashKind::Handled)), "{of_cli:?}");
+    assert_eq!(ends(&server, &session), vec![SessionStatus::Exited]);
+}
+
+#[test]
 fn a_command_line_process_runs_no_hang_perf_or_sys_signals() {
     if reran_without_kill_switches("a_command_line_process_runs_no_hang_perf_or_sys_signals") {
         return;
