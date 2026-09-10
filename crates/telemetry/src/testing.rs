@@ -33,6 +33,11 @@ impl Transport for Recorder {
 }
 
 impl Recorder {
+    /// Every envelope sent so far, in order.
+    pub fn envelopes(&self) -> Vec<Envelope> {
+        self.sent.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
     /// Every item sent so far, in order.
     pub fn items(&self) -> Vec<ItemBody> {
         self.sent.lock().unwrap_or_else(PoisonError::into_inner).iter().flat_map(|e| e.items.iter().map(|i| i.body.clone())).collect()

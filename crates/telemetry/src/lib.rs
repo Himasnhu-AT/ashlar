@@ -18,6 +18,7 @@
 //! | frames, first frame, focus, input, hang watchdog | [`Telemetry::turn`], [`Telemetry::frame`], [`Telemetry::input`]; `ashlar_ui::telemetry::FrameProbe` does it for an egui loop |
 //! | native dialogs | [`Telemetry::pause_hangs_in_dialogs`] (the `ashlar_native::modal` hook) |
 //! | quit | [`Telemetry::quit`] (sends what is waiting, at most [`QUIT_FLUSH`]) |
+//! | a command-line run ends | [`Telemetry::end`] before every exit, then [`Telemetry::hand_off`] when something is left; [`serve_courier`] first thing in `main` |
 //! | privacy page | [`Telemetry::status`] (read-only) |
 //!
 //! Never sent: command parameters, file names, paths or typed text. Event names and property text
@@ -30,7 +31,7 @@ pub mod testing;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -49,6 +50,16 @@ pub use transport::Https;
 pub const QUIT_FLUSH: Duration = Duration::from_millis(1500);
 /// The developer's switch: set (to anything but empty, `0` or `false`), telemetry is off.
 pub const DISABLED_ENV: &str = "TRACER_DISABLED";
+/// Set in the environment of the background process [`Telemetry::hand_off`] starts.
+pub const COURIER_ENV: &str = "ASHLAR_TELEMETRY_COURIER";
+/// How long a courier keeps trying to deliver; what is left then waits for the next process.
+pub const COURIER_BUDGET: Duration = Duration::from_secs(20);
+/// After its first clean delivery a courier stays this long, picking up what runs that end meanwhile
+/// leave behind (a script calling the tool many times in a row), so they need not start one each.
+pub const COURIER_LINGER: Duration = Duration::from_millis(1500);
+/// The file in the SDK's folder a running courier holds locked: one courier per data folder.
+#[cfg(not(target_arch = "wasm32"))]
+const COURIER_LOCK: &str = "courier.lock";
 
 ashlar_trace::events! {
     pub enum Category {
@@ -221,6 +232,9 @@ pub struct Telemetry {
     /// The process-wide dialog hook this client installed (it holds a clone of the client until
     /// [`Telemetry::quit`] removes it).
     dialog_hook: Arc<Mutex<Option<ashlar_native::modal::ModalHook>>>,
+    /// The courier lock of the data folder, for a client [`Telemetry::start`] started (the only kind
+    /// that can hand off).
+    courier_lock: Option<PathBuf>,
 }
 
 impl Default for Telemetry {
@@ -239,6 +253,7 @@ impl Telemetry {
             first_frame: Arc::default(),
             repeats: Arc::default(),
             dialog_hook: Arc::default(),
+            courier_lock: None,
         }
     }
 
@@ -254,7 +269,11 @@ impl Telemetry {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let transport = Https::new(&target.endpoint);
-            Telemetry::with_transport(cfg, &target, dir, transport, |_| {})
+            let mut telemetry = Telemetry::with_transport(cfg, &target, dir, transport, |_| {});
+            if telemetry.is_enabled() {
+                telemetry.courier_lock = Some(courier_lock(dir));
+            }
+            telemetry
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -298,6 +317,7 @@ impl Telemetry {
             first_frame: Arc::default(),
             repeats: Arc::default(),
             dialog_hook: Arc::default(),
+            courier_lock: None,
         }
     }
 
@@ -439,6 +459,28 @@ impl Telemetry {
         self.tracer.flush_blocking(timeout)
     }
 
+    /// A short-lived process (a command-line run) is about to exit, by `std::process::exit` or by
+    /// returning from `main`: end the session now, as `exited`, and send what is waiting for at most
+    /// `flush`. The end is on disk before the wait, so a short `flush` loses nothing: what could not
+    /// be sent stays in the spool, for [`Telemetry::hand_off`], the next run or the app. Call it on
+    /// every exit path; later calls, and dropping the clones, do nothing more. Afterwards nothing is
+    /// recorded. True when nothing is left that could be sent.
+    pub fn end(&self, flush: Duration) -> bool {
+        if let Some(hook) = self.dialog_hook.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            ashlar_native::modal::clear_if(&hook);
+        }
+        self.tracer.shutdown_within(flush)
+    }
+
+    /// After [`Telemetry::end`] left something unsent: start this program again in the background as
+    /// a courier ([`COURIER_ENV`] set, no arguments, no standard streams), which delivers it and exits,
+    /// so this process need not wait for the network. Unless one is already running for this data
+    /// folder: it takes this run's data too. The program must call [`serve_courier`] first thing in
+    /// `main`. Only for a client [`Telemetry::start`] started; true when a courier is on its way.
+    pub fn hand_off(&self) -> bool {
+        spawn_courier(self.courier_lock.as_deref())
+    }
+
     /// The app is quitting: send what is waiting, for at most [`QUIT_FLUSH`], and remove the
     /// dialog hook this client installed, so that dropping the app's own clones ends the session.
     pub fn quit(&self) {
@@ -449,6 +491,107 @@ impl Telemetry {
             let _ = self.flush(QUIT_FLUSH);
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn courier_lock(data_dir: &Path) -> PathBuf {
+    data_dir.join("tracer").join(COURIER_LOCK)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_courier(_lock: Option<&Path>) -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_courier(lock: Option<&Path>) -> bool {
+    let Some(lock) = lock else { return false };
+    if courier_running(lock) {
+        return true;
+    }
+    let Ok(program) = std::env::current_exe() else { return false };
+    let mut command = std::process::Command::new(program);
+    command.env(COURIER_ENV, "1").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        // Its own process group: a Ctrl-C meant for the tool, or a caller ending the tool's group,
+        // does not cut the delivery short.
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn().is_ok()
+}
+
+/// Whether a courier holds the lock at `path` now.
+#[cfg(not(target_arch = "wasm32"))]
+fn courier_running(path: &Path) -> bool {
+    std::fs::OpenOptions::new().read(true).write(true).open(path).is_ok_and(|file| matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+}
+
+/// First thing in `main` of a program that calls [`Telemetry::hand_off`]: in the courier that call
+/// started, deliver what the program's runs left in `data_dir` and return true, and the program exits
+/// at once (it is not a run of its own). False in every other process, at the cost of one environment
+/// lookup. A courier records nothing of its own, starts no courier, and gives up after
+/// [`COURIER_BUDGET`]; a second one for the same folder ends at once.
+pub fn serve_courier(cfg: &TelemetryConfig, data_dir: Option<&Path>) -> bool {
+    if !switch_on(std::env::var(COURIER_ENV).ok()) {
+        return false;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Ok(target), Some(dir)) = (resolve(cfg, &|k| std::env::var(k).ok()), data_dir) {
+        let transport = Https::new(&target.endpoint);
+        run_courier(cfg, &target, dir, transport, |_| {}, COURIER_BUDGET, COURIER_LINGER);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (cfg, data_dir);
+    true
+}
+
+/// The courier's work, with a given transport (tests).
+#[cfg(not(target_arch = "wasm32"))]
+fn run_courier(
+    cfg: &TelemetryConfig,
+    target: &Target,
+    data_dir: &Path,
+    transport: impl ashlar_trace::transport::Transport,
+    configure: impl FnOnce(&mut ashlar_trace::Config),
+    budget: Duration,
+    linger: Duration,
+) -> bool {
+    let path = courier_lock(data_dir);
+    if path.parent().is_none_or(|dir| std::fs::create_dir_all(dir).is_err()) {
+        return false;
+    }
+    let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path) else { return false };
+    if lock.try_lock().is_err() {
+        return false;
+    }
+    let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
+        .data_dir(data_dir)
+        .endpoint(&target.endpoint)
+        .process(cfg.process)
+        .catalog::<AppEvent>()
+        .courier(true)
+        .force_consent(true)
+        .honor_do_not_track(false)
+        .transport(transport)
+        .configure(|c| {
+            c.shutdown_timeout = Duration::from_secs(1);
+            configure(c);
+        })
+        .init();
+    let started = Instant::now();
+    let left = || budget.saturating_sub(started.elapsed());
+    let mut clean = tracer.flush_blocking(left());
+    let lingering = Instant::now();
+    // Each pass with nothing new to send makes no request.
+    while clean && lingering.elapsed() < linger && !left().is_zero() {
+        std::thread::sleep(Duration::from_millis(250).min(linger));
+        clean = tracer.flush_blocking(left());
+    }
+    tracer.shutdown_within(Duration::from_secs(1));
+    drop(lock);
+    clean
 }
 
 #[cfg(test)]
@@ -509,6 +652,60 @@ mod tests {
         assert_eq!(t, Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_env".into(), host: "127.0.0.1".into() });
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_courier_delivers_what_ended_runs_left_and_only_one_runs_per_folder() {
+        use ashlar_trace::proto::{ItemBody, SessionStatus};
+        use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
+        struct Offline;
+        impl Transport for Offline {
+            fn send(&mut self, _: &Request<'_>) -> Result<Reply, TransportError> {
+                Err(TransportError::Network("offline".into()))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = cfg().process(ProcessKind::Cli);
+        let target = Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_test".into(), host: "127.0.0.1".into() };
+        let run = Telemetry::with_transport(&cfg, &target, dir.path(), Offline, |_| {});
+        let session = run.tracer().session_id();
+        run.command("doc.edit", true, Duration::from_millis(2));
+        assert!(!run.end(Duration::from_millis(50)));
+        // not started by `start`: nothing to hand off to
+        assert!(!run.hand_off());
+        std::mem::forget(run);
+
+        // A courier is running: a second one for the same folder ends at once, and a run sees it.
+        let lock_path = courier_lock(dir.path());
+        let held = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).unwrap();
+        held.lock().unwrap();
+        assert!(courier_running(&lock_path));
+        let idle = crate::testing::Recorder::default();
+        assert!(!run_courier(&cfg, &target, dir.path(), idle.clone(), |_| {}, Duration::from_secs(5), Duration::ZERO));
+        assert!(idle.items().is_empty());
+        drop(held);
+        assert!(!courier_running(&lock_path));
+
+        let fake = crate::testing::Recorder::default();
+        let started = std::time::Instant::now();
+        assert!(run_courier(
+            &cfg,
+            &target,
+            dir.path(),
+            fake.clone(),
+            |c| c.tick_interval = Duration::from_millis(10),
+            Duration::from_secs(5),
+            Duration::from_millis(300)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        let of_run: Vec<ItemBody> = fake.envelopes().into_iter().filter(|e| e.session_id == session).flat_map(|e| e.items).map(|i| i.body).collect();
+        assert!(of_run.iter().any(|b| matches!(b, ItemBody::SessionEnd(end) if end.status == SessionStatus::Exited)), "{of_run:?}");
+        assert!(of_run.iter().any(|b| matches!(b, ItemBody::Event(e) if e.name == "command.run")));
+        // nothing of the courier's own: every envelope is the run's
+        assert!(fake.envelopes().iter().all(|e| e.session_id == session));
+        // and outside a courier, serving is a no-op
+        assert!(!serve_courier(&cfg, Some(dir.path())));
+    }
+
     #[test]
     fn a_disabled_client_touches_nothing() {
         let t = Telemetry::off(Off::Disabled);
@@ -529,6 +726,7 @@ mod tests {
         drop(t.turn());
         t.pause_hangs_in_dialogs();
         t.quit();
+        assert!(t.end(Duration::from_millis(1)) && !t.hand_off());
         assert!(t.tracer().flush_blocking(Duration::from_millis(1)));
         assert_eq!(t.tracer().install_id(), "");
     }
