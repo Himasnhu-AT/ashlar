@@ -18,7 +18,7 @@
 //! | frames, first frame, focus, input, hang watchdog | [`Telemetry::turn`], [`Telemetry::frame`], [`Telemetry::input`]; `ashlar_ui::telemetry::FrameProbe` does it for an egui loop |
 //! | native dialogs | [`Telemetry::pause_hangs_in_dialogs`] (the `ashlar_native::modal` hook) |
 //! | quit | [`Telemetry::quit`] (sends what is waiting, at most [`QUIT_FLUSH`]) |
-//! | a command-line run ends | [`Telemetry::end`] before every exit, then [`Telemetry::hand_off`] when something is left; [`serve_courier`] first thing in `main` |
+//! | a command-line run ends | [`Telemetry::finish`] before every exit ([`Telemetry::end`], then [`Telemetry::hand_off`] when something is left); [`serve_courier`] first thing in `main`; [`Telemetry::finish_on_termination`] for a stdio server |
 //! | privacy page | [`Telemetry::status`] (read-only) |
 //!
 //! Never sent: command parameters, file names, paths or typed text. Event names and property text
@@ -470,6 +470,30 @@ impl Telemetry {
             ashlar_native::modal::clear_if(&hook);
         }
         self.tracer.shutdown_within(flush)
+    }
+
+    /// What a command-line run calls on every exit path: [`Telemetry::end`], then
+    /// [`Telemetry::hand_off`] when something is left. True when nothing was left.
+    pub fn finish(&self, flush: Duration) -> bool {
+        let clean = self.end(flush);
+        if !clean {
+            self.hand_off();
+        }
+        clean
+    }
+
+    /// For a long-running command-line process (a stdio server): when it is asked to stop (SIGINT,
+    /// SIGTERM or SIGHUP on Unix), [`Telemetry::finish`] with `flush`, then stop as asked. Without
+    /// this such a stop leaves the session to be reported as an unclean exit. Nothing to do when off;
+    /// does nothing on other systems.
+    pub fn finish_on_termination(&self, flush: Duration) {
+        if !self.tracer.is_enabled() {
+            return;
+        }
+        let me = self.clone();
+        ashlar_native::terminate::on_terminate(move |_| {
+            me.finish(flush);
+        });
     }
 
     /// After [`Telemetry::end`] left something unsent: start this program again in the background as

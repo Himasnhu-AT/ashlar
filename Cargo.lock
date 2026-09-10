@@ -498,6 +498,7 @@ dependencies = [
  "ashlar-command",
  "block2 0.6.2",
  "keyring-core",
+ "libc",
  "log",
  "muda",
  "objc2 0.6.5",

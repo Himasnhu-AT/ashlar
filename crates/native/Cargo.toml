@@ -111,6 +111,10 @@ ashlar-command = { workspace = true }
 rfd = { workspace = true, optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# signal handlers for `terminate` (always compiled)
+libc = "0.2"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard = { version = "3.6", optional = true }
 

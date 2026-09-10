@@ -113,3 +113,62 @@ fn end_waits_no_longer_than_its_cap_for_a_slow_server_and_the_next_run_sends_the
     assert_eq!(delivered, 1, "{:?} / {:?}", fake.types(), slow.types());
     assert!(!unclean(&fake));
 }
+
+/// A transport that never reaches the server.
+struct Offline;
+
+impl Transport for Offline {
+    fn send(&mut self, _: &Request<'_>) -> Result<Reply, TransportError> {
+        Err(TransportError::Network("offline".into()))
+    }
+}
+
+/// Not a test of its own: a stdio server the test below stops with SIGTERM.
+#[test]
+fn server_child() {
+    let Some(dir) = std::env::var_os("END_TEST_CHILD_DIR") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    let target = ashlar_telemetry::Target { endpoint: "http://127.0.0.1:9".into(), key: "tk_test".into(), host: "127.0.0.1".into() };
+    let t = Telemetry::with_transport(&cfg(), &target, &dir, Offline, |_| {});
+    t.finish_on_termination(Duration::from_millis(50));
+    t.command("doc.edit", true, Duration::from_millis(1));
+    let report = dir.join("session.txt");
+    std::fs::write(dir.join("session.part"), t.tracer().session_id()).unwrap();
+    std::fs::rename(dir.join("session.part"), &report).unwrap();
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_server_stopped_by_sigterm_ends_its_session_and_dies_of_the_signal() {
+    use std::os::unix::process::ExitStatusExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "server_child", "--nocapture", "--test-threads=1"])
+        .env("END_TEST_CHILD_DIR", dir.path())
+        .env_remove("TRACER_DISABLED")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let report = dir.path().join("session.txt");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !report.exists() {
+        assert!(Instant::now() < deadline && child.try_wait().unwrap().is_none(), "the child did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let session = std::fs::read_to_string(&report).unwrap();
+    let status = std::process::Command::new("kill").args(["-TERM", &child.id().to_string()]).status().unwrap();
+    assert!(status.success());
+    let ended = child.wait().unwrap();
+    assert_eq!(ended.signal(), Some(15), "{ended:?}");
+
+    let fake = Recorder::default();
+    let next = client(dir.path(), &fake);
+    assert!(next.end(Duration::from_secs(5)));
+    assert_eq!(ends(&fake, &session), vec![SessionStatus::Exited], "{:?}", fake.types());
+    assert!(!unclean(&fake));
+    assert!(fake.events().contains(&"command.run".to_string()));
+}
