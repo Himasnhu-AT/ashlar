@@ -143,18 +143,47 @@ impl SingleInstance {
     }
 }
 
+/// Why forwarding failed.
+enum SendError {
+    /// The other end closed the connection without answering: no instance runs there (its socket
+    /// outlived it, for example held by a child process that inherited it).
+    Closed,
+    Failed(NativeError),
+}
+
+impl From<SendError> for NativeError {
+    fn from(e: SendError) -> Self {
+        match e {
+            SendError::Closed => NativeError::Os("the running instance closed the connection without accepting the files".into()),
+            SendError::Failed(e) => e,
+        }
+    }
+}
+
 /// Send one message on `stream` and wait for the ack.
-fn send<S: Read + Write>(stream: &mut S, wire: &Wire) -> Result<()> {
-    let mut line = serde_json::to_vec(wire).map_err(|e| NativeError::Os(crate::os_text(e)))?;
+fn send<S: Read + Write>(stream: &mut S, wire: &Wire) -> std::result::Result<(), SendError> {
+    let mut line = serde_json::to_vec(wire).map_err(|e| SendError::Failed(NativeError::Os(crate::os_text(e))))?;
     if line.len() > MAX_MESSAGE {
-        return Err(NativeError::Invalid("too many arguments to forward".into()));
+        return Err(SendError::Failed(NativeError::Invalid("too many arguments to forward".into())));
     }
     line.push(b'\n');
-    stream.write_all(&line).map_err(io)?;
-    stream.flush().map_err(io)?;
+    let closed = |e: std::io::Error| match e.kind() {
+        std::io::ErrorKind::BrokenPipe
+        | std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::ConnectionAborted
+        | std::io::ErrorKind::NotConnected
+        | std::io::ErrorKind::UnexpectedEof => SendError::Closed,
+        _ => SendError::Failed(io(e)),
+    };
+    stream.write_all(&line).map_err(closed)?;
+    stream.flush().map_err(closed)?;
     let mut reply = String::new();
-    BufReader::new(stream.take(16)).read_line(&mut reply).map_err(io)?;
-    if reply.trim() == ACK { Ok(()) } else { Err(NativeError::Os("the running instance did not accept the files".into())) }
+    BufReader::new(stream.take(16)).read_line(&mut reply).map_err(closed)?;
+    match reply.trim() {
+        r if r == ACK => Ok(()),
+        "" => Err(SendError::Closed),
+        _ => Err(SendError::Failed(NativeError::Os("the running instance did not accept the files".into()))),
+    }
 }
 
 /// Read one message from `stream`, check it, ack it.
@@ -254,16 +283,18 @@ mod imp {
                     });
                     return Ok(Launch::Primary(PrimaryGuard { stop, endpoint: endpoint.to_path_buf(), wake }));
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => match connect(endpoint) {
-                    Ok(mut s) => {
-                        send(&mut s, &msg(String::new()))?;
-                        return Ok(Launch::Forwarded);
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    match connect(endpoint).map_err(|_| SendError::Closed).and_then(|mut s| send(&mut s, &msg(String::new()))) {
+                        Ok(()) => return Ok(Launch::Forwarded),
+                        // Nobody listens, or something holds the socket but closes without answering
+                        // (a crashed instance's socket, inherited by a child it spawned): no instance
+                        // runs there. Remove it and retry.
+                        Err(SendError::Closed) => {
+                            let _ = std::fs::remove_file(endpoint);
+                        }
+                        Err(SendError::Failed(e)) => return Err(e),
                     }
-                    // Nobody listens: a crashed instance left its socket. Remove it and retry.
-                    Err(_) => {
-                        let _ = std::fs::remove_file(endpoint);
-                    }
-                },
+                }
                 Err(e) => return Err(io(e)),
             }
         }
@@ -387,6 +418,28 @@ mod tests {
         drop(first);
         let third = instance.claim(&[], |_| {}).unwrap();
         assert!(matches!(third, Launch::Primary(_)));
+    }
+
+    /// A crashed instance's socket can outlive it in a child process that inherited it (a helper it
+    /// spawned, or any process started while the socket was being made): connecting works, but the
+    /// connection closes without an answer. That is no running instance either: take it over.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_that_closes_without_answering_is_taken_over() {
+        let dir = short_dir();
+        let instance = SingleInstance::new("t.held").in_dir(dir.path());
+        let ep = instance.endpoint().unwrap();
+        let holder = std::os::unix::net::UnixListener::bind(&ep).unwrap();
+        let closer = std::thread::spawn(move || {
+            // accept one connection and close it unanswered, like a process that holds the socket
+            // but runs no listener
+            if let Ok((s, _)) = holder.accept() {
+                drop(s);
+            }
+            holder
+        });
+        assert!(matches!(instance.claim(&[], |_| {}).unwrap(), Launch::Primary(_)));
+        drop(closer.join());
     }
 
     #[cfg(unix)]
