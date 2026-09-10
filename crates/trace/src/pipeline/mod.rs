@@ -149,6 +149,10 @@ struct Shared {
     off: AtomicBool,
     /// The session has ended.
     closed: AtomicBool,
+    /// The shutdown that ended it left nothing that could be sent.
+    ended_clean: AtomicBool,
+    /// False for a courier, which records no session start, heartbeat or end of its own.
+    own_session: bool,
     /// Bit set of the signals the host enabled.
     enabled: u8,
     consent: Consent,
@@ -529,7 +533,8 @@ impl Pipeline {
         let hash = catalog_hash(&config.catalog);
         let mut selection = Selection::default();
         let mut carry_catalog = false;
-        if usable {
+        // A courier sends no session start, so it has no selection of its own to record.
+        if usable && !config.courier {
             let saved = read_json::<Selection>(&dir.join(SELECTION_FILE)).unwrap_or_default();
             carry_catalog = hash.as_ref().is_some_and(|hash| !saved.is_acknowledged(&config.app_version, hash));
             let mut events = config.listen_events.clone();
@@ -565,6 +570,7 @@ impl Pipeline {
             },
             off: AtomicBool::new(!usable),
             closed: AtomicBool::new(false),
+            ended_clean: AtomicBool::new(false),
             enabled: config.signals.iter().fold(0, |bits, signal| bits | signal_bit(*signal)),
             consent: if config.force_consent { Consent::forced(&dir) } else { Consent::load(&dir) },
             install_id: Mutex::new(identity.install_id.clone()),
@@ -580,7 +586,11 @@ impl Pipeline {
             disk: Mutex::new(spool),
             drops: DropCounts::default(),
             clock: Mutex::new(SessionClock::new(now, config.tick_interval.min(MAX_TICK).saturating_mul(MAX_TICKS_PER_SAMPLE).max(MIN_SAMPLE_CAP))),
-            marker_removed: Mutex::new(false),
+            // A process that records neither sessions nor crashes has nothing a marker could report: it
+            // leaves none, so ending it any way at all never reads as an unclean exit.
+            // A courier has no session of its own to mark.
+            marker_removed: Mutex::new(config.courier || !config.signals.iter().any(|signal| matches!(signal, Signal::Session | Signal::Crash))),
+            own_session: !config.courier,
             focused: AtomicBool::new(true),
             last_input: AtomicU64::new(0),
             panicked: AtomicBool::new(false),
@@ -608,7 +618,7 @@ impl Pipeline {
                 shared.maintain();
             }
             let mut catalog_item = None;
-            if shared.permitted(Signal::Session) {
+            if shared.own_session && shared.permitted(Signal::Session) {
                 let mut catalog = carry_catalog.then(|| config.catalog.clone());
                 if let Some(Catalog { events }) = &mut catalog {
                     events.sort();
@@ -764,11 +774,20 @@ impl Pipeline {
         }
     }
 
-    /// Ends the session and stops the worker. Called once, from the last [`crate::Tracer`] guard.
-    pub(crate) fn shutdown(&self) {
+    /// [`Pipeline::shutdown_with`] with the configured `shutdown_timeout`.
+    #[cfg(test)]
+    pub(crate) fn shutdown(&self) -> bool {
+        self.shutdown_with(None)
+    }
+
+    /// Ends the session and stops the worker, waiting for it at most `wait` (`shutdown_timeout` when
+    /// `None`). Runs once, from [`crate::Tracer::shutdown`] or the last [`crate::Tracer`] guard; later
+    /// calls return how that one went. True when the worker stopped in time with nothing left that it
+    /// could send.
+    pub(crate) fn shutdown_with(&self, wait: Option<Duration>) -> bool {
         let shared = &self.shared;
         if shared.closed.swap(true, Ordering::SeqCst) {
-            return;
+            return shared.ended_clean.load(Ordering::SeqCst);
         }
         if !shared.off.load(Ordering::Relaxed) {
             // The end of the session is written here, on the calling thread, so that it is on disk even
@@ -777,7 +796,7 @@ impl Pipeline {
             // The clock is held across the write so that the worker cannot slip a heartbeat in after it.
             let mut clock = lock(&shared.clock);
             let totals = clock.end();
-            if shared.permitted(Signal::Session) {
+            if shared.own_session && shared.permitted(Signal::Session) {
                 let crashed = shared.panicked.load(Ordering::Relaxed) && std::thread::panicking();
                 let status = if crashed { SessionStatus::Crashed } else { SessionStatus::Exited };
                 let end = SessionEnd { status, totals, errors: errors_of(shared.errors.load(Ordering::Relaxed), crashed) };
@@ -789,8 +808,9 @@ impl Pipeline {
             let _ = std::fs::remove_file(self.session_dir.join(SESSION_FILE));
         }
         let handle = lock(&self.worker).take();
+        let mut clean = shared.off.load(Ordering::Relaxed);
         if let Some(handle) = handle {
-            let deadline = deadline_in(shared.timing.shutdown);
+            let deadline = deadline_in(wait.unwrap_or(shared.timing.shutdown));
             let mut control = lock(&shared.control);
             control.stop = true;
             self.wake();
@@ -799,6 +819,7 @@ impl Pipeline {
                 control = shared.control_changed.wait_timeout(control, step).unwrap_or_else(PoisonError::into_inner).0;
             }
             let stopped = control.stopped;
+            clean = stopped && control.flush_clean;
             drop(control);
             if stopped {
                 let _ = handle.join();
@@ -809,6 +830,8 @@ impl Pipeline {
         // Give up the session folder. What could not be sent stays in it, without a marker, and the next
         // process to look sends it.
         lock(&shared.disk).release();
+        shared.ended_clean.store(clean, Ordering::SeqCst);
+        clean
     }
 
     /// Nudges the worker out of its wait. If the queue is full it is awake already.

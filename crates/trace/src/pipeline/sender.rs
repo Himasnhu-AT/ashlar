@@ -243,6 +243,7 @@ impl Worker {
             // Stored while the clock is held, as the session end is, so the two cannot change places.
             let mut clock = lock(&shared.clock);
             if let Some(totals) = clock.next_heartbeat()
+                && shared.own_session
                 && shared.permitted(Signal::Session)
             {
                 shared.store(category_code(Signal::Session.consent()), &shared.item(ItemBody::SessionHeartbeat(totals)), false);

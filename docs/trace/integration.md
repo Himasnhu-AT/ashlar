@@ -238,16 +238,20 @@ Counters are reported per performance window as the increase since the previous 
 
 ## 8. Short-lived tools
 
-A command-line tool that runs for a moment never reaches the periodic send. Use `ProcessKind::Cli` and finish with `flush_blocking`:
+A command-line tool that runs for a moment never reaches the periodic send, and one that ends with `std::process::exit` never drops its `Tracer`, so dropping cannot end its session. Use `ProcessKind::Cli` and end the session yourself on every exit path:
 
 ```rust
-if !tracer.flush_blocking(Duration::from_secs(5)) {
-    // Not everything could be sent in time. It stays in the spool; the next run sends it.
-}
-drop(tracer); // ends the session and tries one last send
+let clean = tracer.shutdown_within(Duration::from_millis(25));
+std::process::exit(code);
 ```
 
-`flush_blocking` returns true when this process has nothing left that it could send. It never waits longer than the timeout, so a tool that is offline exits promptly. Data it could not send is kept (within the spool caps) and goes out the next time any process of the same host starts.
+`shutdown_within` does what dropping the last handle does: it closes the session as `exited`, on disk, before it waits; then it gives the worker at most the time you pass for one last send. Later calls, and the final drop, do nothing more, and nothing is recorded after it. It returns true when nothing is left that could be sent. `shutdown` is the same with the configured `shutdown_timeout`. What could not be sent is kept (within the spool caps) and goes out with the next process of the same host. `flush_blocking` still works for a tool that wants to send before it ends.
+
+`ProcessKind::Cli` also leaves out what only makes sense for an app with a main loop: the hang watchdog, performance windows (frames) and CPU and memory sampling (`CLI_OFF`), whatever `signals` says.
+
+A send costs at least one round trip to the server, often several (a new connection each run), which is far more than a tool that agents call many times in a row should add. Keep the wait at exit short and hand what is left to a **courier**: a background process, started from the same program, built with `Builder::courier(true)`. A courier only delivers what other processes of the host left in the spool, reporting the ones that ended uncleanly as any process does; it opens no session of its own (no start, end, heartbeat or marker) and starts no panic hook, watchdog or logger. `ashlar-telemetry` packages this (`Telemetry::end`, `Telemetry::hand_off`, `serve_courier`).
+
+A process that records neither sessions nor crashes leaves no session marker, so however it ends it is never reported as an unclean exit.
 
 A stdio protocol server can use the SDK freely: nothing it does touches stdout.
 
@@ -338,7 +342,7 @@ The allocation counts are from reading the code, not from a counting allocator (
 
 **What a host thread can wait for.** Nothing that touches the disk or the network. `track` is an atomic check, a set lookup and a `try_send` into a queue that was allocated at startup; when the queue is full the event is dropped and counted with one atomic add. `frame`, the turn calls, `note_input`, counters and gauges are atomic operations only. Over ten million calls of each, with the worker flushing every 20 ms, the longest single call was a few milliseconds, and so was the longest gap in an empty loop that only reads the clock: on a desktop operating system the scheduler can take a thread away at any point, and no library can promise otherwise. What the SDK promises is that it adds no wait of its own.
 
-Calls that do touch the disk, briefly, on the calling thread: `init`, `set_consent`, `notice_shown`, `forget`, and the panic hook. `flush_blocking` and dropping the last `Tracer` wait for the worker, up to the timeout you give and `shutdown_timeout`.
+Calls that do touch the disk, briefly, on the calling thread: `init`, `set_consent`, `notice_shown`, `forget`, and the panic hook. `flush_blocking`, `shutdown_within` and dropping the last `Tracer` wait for the worker, up to the timeout you give and `shutdown_timeout`.
 
 **With many threads at once** the calls stay lock-free but share memory, so they slow each other down: with 8 threads calling the same thing as fast as they can, `track` is about 55 ns, `frame` about 200 ns, a kept log line about 2 µs. Counters and gauges on a realtime thread are one atomic operation on memory nothing else writes to, if you give that thread its own counter.
 
@@ -376,5 +380,5 @@ Calls that do touch the disk, briefly, on the calling thread: `init`, `set_conse
 5. Install the SDK's logger or wrap yours.
 6. Report handled errors and abnormal child exits.
 7. Show the first-run notice and call `notice_shown()` when the user closes it (nothing is sent before that); add the three switches and a "forget me" action.
-8. In short-lived tools, end with `flush_blocking`.
+8. In short-lived tools, end with `shutdown_within` before every exit.
 9. Update the host's own privacy text from [privacy.md](privacy.md).

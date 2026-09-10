@@ -20,6 +20,6 @@ pub mod transport;
 pub use ashlar_trace_proto as proto;
 pub use ashlar_trace_proto::{ConsentCategory, Gpu, ProcessKind, Signal};
 pub use catalog::{Event, EventCategory, Prop};
-pub use client::{Builder, Tracer, TurnGuard};
+pub use client::{Builder, CLI_OFF, Tracer, TurnGuard};
 pub use config::{Config, LoggerMode};
 pub use signals::rt::{Counter, Gauge};

@@ -113,6 +113,16 @@ impl Builder {
         self
     }
 
+    /// Makes this process a courier: it only sends what other processes of the host left in the spool,
+    /// for a short-lived tool that hands its unsent data to a background process instead of waiting for
+    /// the network itself. It reports earlier runs that ended uncleanly, as every process does, but opens
+    /// no session of its own (no session start or end, no heartbeats, no marker) and starts no signal
+    /// module (no panic hook, watchdog or logger). Use [`Tracer::flush_blocking`], then drop it.
+    pub fn courier(mut self, courier: bool) -> Self {
+        self.config.courier = courier;
+        self
+    }
+
     /// Replaces the set of built-in signals. All are on by default.
     pub fn signals(mut self, signals: &[Signal]) -> Self {
         self.config.signals = signals.to_vec();
@@ -162,23 +172,44 @@ impl Builder {
         if cfg!(target_arch = "wasm32") || self.config.data_dir.as_os_str().is_empty() {
             return Tracer::disabled();
         }
-        let pipeline = Pipeline::start(&self.config, self.transport);
+        let mut config = self.config;
+        if config.process == ProcessKind::Cli {
+            // A command-line process has no main loop to hang and no frames: no watchdog thread, no
+            // performance windows, no CPU and memory sampling.
+            config.signals.retain(|signal| !CLI_OFF.contains(signal));
+        }
+        let pipeline = Pipeline::start(&config, self.transport);
         let sink: Arc<dyn Sink> = pipeline.clone();
-        let signals = Signals::start(&self.config, sink);
+        let signals = if config.courier {
+            // The pipeline keeps the signal list, to report what earlier runs left; nothing here records.
+            Signals::start(&Config { signals: Vec::new(), logger: LoggerMode::None, ..config.clone() }, sink)
+        } else {
+            Signals::start(&config, sink)
+        };
         pipeline.attach(signals.clone());
         Tracer { inner: Some(Arc::new(Inner { pipeline, signals })) }
     }
 }
+
+/// The built-in signals a [`ProcessKind::Cli`] process never starts, whatever the builder says.
+pub const CLI_OFF: [Signal; 3] = [Signal::Hang, Signal::Perf, Signal::Sys];
 
 struct Inner {
     pipeline: Arc<Pipeline>,
     signals: Arc<Signals>,
 }
 
+impl Inner {
+    /// Ends the session once; later calls (and the drop) only report how the first one went.
+    fn shutdown(&self, wait: Option<Duration>) -> bool {
+        self.signals.shutdown();
+        self.pipeline.shutdown_with(wait)
+    }
+}
+
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.signals.shutdown();
-        self.pipeline.shutdown();
+        self.shutdown(None);
     }
 }
 
@@ -404,6 +435,22 @@ impl Tracer {
     /// True when nothing is left to send.
     pub fn flush_blocking(&self, timeout: Duration) -> bool {
         self.inner.as_ref().is_none_or(|inner| inner.pipeline.flush_blocking(timeout))
+    }
+
+    /// Ends the session now, as dropping the last clone would: the open performance window is closed,
+    /// the session's end is written to disk as `exited`, and the worker gets `shutdown_timeout` for one
+    /// last send. For processes that end without dropping their handles, such as through
+    /// `std::process::exit`. Idempotent: later calls, and the final drop, do nothing more. After it,
+    /// every call on any clone records nothing. True when the last send left nothing that could be sent.
+    pub fn shutdown(&self) -> bool {
+        self.inner.as_ref().is_none_or(|inner| inner.shutdown(None))
+    }
+
+    /// [`Tracer::shutdown`], waiting at most `wait` for the last send instead of `shutdown_timeout`.
+    /// The session's end is on disk before the wait starts, so a short `wait` loses nothing: what
+    /// could not be sent stays in the spool for the next process of the same host.
+    pub fn shutdown_within(&self, wait: Duration) -> bool {
+        self.inner.as_ref().is_none_or(|inner| inner.shutdown(Some(wait)))
     }
 
     /// Writes a human-readable report (session, device, recent logs, last crash) the user can attach to

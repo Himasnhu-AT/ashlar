@@ -1048,6 +1048,164 @@ fn a_leftover_marker_respects_consent_and_disabled_signals() {
     assert!(matches!(&recovered[0].body, ItemBody::SessionEnd(end) if end.status == SessionStatus::Abnormal));
 }
 
+// ---- ending explicitly (short-lived processes) ----
+
+fn ends(server: &Server, session: &str) -> Vec<SessionStatus> {
+    let ends = server.items().into_iter().filter(|(envelope, _)| envelope.session_id == session).filter_map(|(_, item)| match item.body {
+        ItemBody::SessionEnd(end) => Some(end.status),
+        _ => None,
+    });
+    ends.collect()
+}
+
+#[test]
+fn shutdown_ends_the_session_for_a_process_that_exits_without_dropping() {
+    if reran_without_kill_switches("shutdown_ends_the_session_for_a_process_that_exits_without_dropping") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::offline();
+    let tracer = builder(&dir, &server).process(ashlar_trace::ProcessKind::Cli).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    let session = tracer.session_id();
+    let marker = session_dir(&dir, &tracer).join("session.json");
+    assert!(marker.exists());
+    let clone = tracer.clone();
+    tracer.track(AppEvent::FileOpen);
+    // Offline: nothing can be sent, so it is not clean, but the end is on disk and the marker gone.
+    assert!(!tracer.shutdown_within(Duration::from_millis(200)));
+    assert!(!marker.exists());
+    // Again, and on a clone: nothing more happens, and the answer is the same.
+    assert!(!tracer.shutdown());
+    assert!(!clone.shutdown_within(Duration::from_secs(5)));
+    // After the end nothing is recorded.
+    tracer.track(AppEvent::Undo);
+    drop(clone);
+    // As `std::process::exit` would: no handle is ever dropped.
+    std::mem::forget(tracer);
+
+    server.set_offline(false);
+    let next = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    assert!(next.flush_blocking(WAIT));
+    assert_eq!(ends(&server, &session), vec![SessionStatus::Exited]);
+    assert!(!server.items().iter().any(|(_, item)| is_unclean_report(item)), "no unclean exit");
+    assert_eq!(server.events(), vec![("file.open".to_owned(), false)]);
+    let envelope = server.envelopes().into_iter().find(|envelope| envelope.session_id == session).unwrap();
+    assert_eq!(envelope.app.process, ashlar_trace::ProcessKind::Cli);
+}
+
+#[test]
+fn shutdown_within_waits_no_longer_than_it_is_told_for_a_slow_server() {
+    if reran_without_kill_switches("shutdown_within_waits_no_longer_than_it_is_told_for_a_slow_server") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    server.set_delay(Duration::from_secs(3));
+    let tracer = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    let session = tracer.session_id();
+    let started = Instant::now();
+    assert!(!tracer.shutdown_within(Duration::from_millis(100)));
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(1000), "{took:?}");
+    std::mem::forget(tracer);
+    // Whatever the slow request did not deliver goes with the next process.
+    server.set_delay(Duration::ZERO);
+    let next = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    wait_for("the earlier session's end", || ends(&server, &session) == vec![SessionStatus::Exited]);
+    assert!(next.flush_blocking(WAIT));
+    assert!(!server.items().iter().any(|(_, item)| is_unclean_report(item)), "no unclean exit");
+}
+
+#[test]
+fn a_command_line_process_runs_no_hang_perf_or_sys_signals() {
+    if reran_without_kill_switches("a_command_line_process_runs_no_hang_perf_or_sys_signals") {
+        return;
+    }
+    let dir = TempDir::new();
+    let server = Server::default();
+    let cli = builder(&dir, &server).process(ashlar_trace::ProcessKind::Cli).signals(&Signal::ALL).init();
+    assert!(cli.shutdown());
+    let gui = builder(&dir, &server).signals(&Signal::ALL).init();
+    assert!(gui.shutdown());
+    let starts = session_starts(&server);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0].signals, ["session", "usage", "crash", "logs"]);
+    assert_eq!(starts[1].signals, ["session", "usage", "crash", "hang", "perf", "sys", "logs"]);
+}
+
+#[test]
+fn a_process_that_ends_its_session_and_exits_is_not_an_unclean_exit() {
+    if reran_without_kill_switches("a_process_that_ends_its_session_and_exits_is_not_an_unclean_exit") {
+        return;
+    }
+    let dir = TempDir::new();
+    let mut child = spawn_child("exiter", &dir);
+    let session = read_report(&dir, "exiter.txt", &mut child);
+    assert_eq!(child.wait().unwrap().code(), Some(3));
+    let server = Server::default();
+    let next = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    assert!(next.flush_blocking(WAIT));
+    assert_eq!(ends(&server, &session), vec![SessionStatus::Exited]);
+    assert!(!server.items().iter().any(|(_, item)| is_unclean_report(item)), "no unclean exit");
+    assert!(server.events().contains(&("file.open".to_owned(), false)));
+}
+
+#[test]
+fn a_killed_process_that_records_no_session_and_no_crashes_is_not_an_unclean_exit() {
+    if reran_without_kill_switches("a_killed_process_that_records_no_session_and_no_crashes_is_not_an_unclean_exit") {
+        return;
+    }
+    let dir = TempDir::new();
+    let mut child = spawn_child("quiet", &dir);
+    let session = read_report(&dir, "quiet.txt", &mut child);
+    assert!(!dir.sdk().join("spool").join(&session).join("session.json").exists(), "no marker");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let server = Server::default();
+    let next = builder(&dir, &server).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    assert!(next.flush_blocking(WAIT));
+    // What it recorded is sent, and nothing reports it as a session that ended badly.
+    assert!(server.events().contains(&("file.save".to_owned(), false)), "{:?}", server.events());
+    assert!(server.items().iter().all(|(envelope, item)| envelope.session_id != session || matches!(item.body, ItemBody::Event(_))));
+}
+
+#[test]
+fn a_courier_delivers_what_others_left_and_reports_unclean_exits_but_records_nothing_of_its_own() {
+    if reran_without_kill_switches("a_courier_delivers_what_others_left_and_reports_unclean_exits_but_records_nothing_of_its_own") {
+        return;
+    }
+    let dir = TempDir::new();
+    let offline = Server::offline();
+    // One run was killed; another ended cleanly but could not send.
+    let mut victim = spawn_child("victim", &dir);
+    let report = read_report(&dir, "victim.txt", &mut victim);
+    let killed = report.split_once(' ').unwrap().0.to_owned();
+    victim.kill().unwrap();
+    victim.wait().unwrap();
+    let ended = builder(&dir, &offline).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    let ended_session = ended.session_id();
+    ended.track(AppEvent::FileOpen);
+    assert!(!ended.shutdown_within(Duration::from_millis(50)));
+    drop(ended);
+
+    let server = Server::default();
+    let courier = builder(&dir, &server).courier(true).signals(&[Signal::Session, Signal::Usage, Signal::Crash]).init();
+    assert!(!session_dir(&dir, &courier).join("session.json").exists(), "no marker");
+    assert!(courier.flush_blocking(WAIT));
+    let own = courier.session_id();
+    drop(courier);
+    assert_eq!(ends(&server, &ended_session), vec![SessionStatus::Exited]);
+    assert!(server.events().contains(&("file.open".to_owned(), false)));
+    assert_eq!(ends(&server, &killed), vec![SessionStatus::Abnormal]);
+    assert!(server.items().iter().any(|(envelope, item)| envelope.session_id == killed && is_unclean_report(item)));
+    assert!(server.envelopes().iter().all(|envelope| envelope.session_id != own), "nothing of its own");
+    // And it left nothing behind that the next process could take for a session.
+    let next_server = Server::default();
+    let next = builder(&dir, &next_server).init();
+    assert!(next.flush_blocking(WAIT));
+    assert!(next_server.envelopes().iter().all(|envelope| envelope.session_id == next.session_id()));
+}
+
 // ---- catalog ----
 
 fn session_starts(server: &Server) -> Vec<ashlar_trace::proto::SessionStart> {
@@ -1425,6 +1583,27 @@ fn multiprocess_child() {
             let names: Vec<String> = server.events().into_iter().map(|(name, _)| name).collect();
             drop(tracer);
             report("listener-done.txt", names.join(","));
+        }
+        // A command-line process: ends its session, offline, and exits without dropping anything.
+        "exiter" => {
+            let tracer = builder(&dir, &Server::offline())
+                .process(ashlar_trace::ProcessKind::Cli)
+                .signals(&[Signal::Session, Signal::Usage, Signal::Crash])
+                .init();
+            tracer.track(AppEvent::FileOpen);
+            assert!(!tracer.shutdown_within(Duration::from_millis(50)));
+            report("exiter.txt", tracer.session_id());
+            std::process::exit(3);
+        }
+        // Records no session and no crashes, only usage it cannot send, then waits to be killed.
+        "quiet" => {
+            let tracer = builder(&dir, &Server::offline()).signals(&[Signal::Usage]).init();
+            tracer.track(AppEvent::FileSave);
+            assert!(!tracer.flush_blocking(WAIT));
+            report("quiet.txt", tracer.session_id());
+            loop {
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
         other => panic!("unknown role {other}"),
     }
