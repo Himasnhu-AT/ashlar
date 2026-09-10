@@ -46,7 +46,30 @@ mod imp {
     static FIRED: AtomicBool = AtomicBool::new(false);
     static WATCHING: OnceLock<bool> = OnceLock::new();
 
+    /// The calling thread's errno. A handler that calls write() must put errno back, or the code
+    /// it interrupted may read a value it didn't cause.
+    fn errno_ptr() -> *mut libc::c_int {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        // SAFETY: returns the calling thread's errno location; always valid.
+        unsafe {
+            libc::__error()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+        // SAFETY: returns the calling thread's errno location; always valid.
+        unsafe {
+            libc::__errno_location()
+        }
+    }
+
     extern "C" fn handler(signal: libc::c_int) {
+        // SAFETY: reading and writing this thread's errno is async-signal-safe.
+        let saved = unsafe { *errno_ptr() };
+        handle(signal);
+        // SAFETY: as above.
+        unsafe { *errno_ptr() = saved };
+    }
+
+    fn handle(signal: libc::c_int) {
         if FIRED.swap(true, Ordering::SeqCst) {
             // a second request while the hook runs: stop now
             // SAFETY: signal() and raise() are async-signal-safe; SIG_DFL is a valid disposition.
