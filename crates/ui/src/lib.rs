@@ -24,6 +24,7 @@ pub mod cache;
 pub mod commands;
 pub mod devtools;
 pub mod dialog;
+pub mod docking;
 pub mod edit;
 pub mod fonts;
 pub mod icons;
