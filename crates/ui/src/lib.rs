@@ -28,6 +28,7 @@ pub mod edit;
 pub mod fonts;
 pub mod icons;
 pub mod layout;
+pub mod printing;
 pub mod search;
 pub mod slider;
 pub mod status_bar;
