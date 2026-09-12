@@ -186,7 +186,7 @@ impl State {
         let busy = self.busy();
         ui.push_id(id, |ui| {
             ui.add_enabled_ui(!busy, |ui| {
-                let width = ui.available_width().max(32.0).min(230.0);
+                let width = ui.available_width().clamp(32.0, 230.0);
 
                 let printer_label = ui.label(labels.printer);
                 let current = if self.settings.printer.is_empty() { labels.select_printer.to_string() } else { self.settings.printer.clone() };
