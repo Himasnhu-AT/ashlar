@@ -20,8 +20,9 @@ dialog), `Invalid(msg)` (bad input from the caller), `Os(msg)` (one line, safe t
 | `progress` | `set(window, Progress::None / Indeterminate / Normal(f) / Paused(f) / Error(f))`, `set_badge(Some("3"))`. |
 | `secrets` | `Keychain::new(service)`: `get / set / delete / available`. |
 | `system` | `preferences() -> { appearance, accent, reduced_motion, increased_contrast }`, `open_url` (http, https, mailto only), `open_path`, `reveal`. |
+| `cli_tool` (`cli-tool`) | `CliTool::for_current_app(name)` (the tool at `<exe dir>/../Helpers/<name>`, i.e. `Contents/Helpers/<name>` in a macOS bundle) or `CliTool::new(name, helper)`; `status()` → `Missing / Ours / Broken (the app moved) / OtherCopy / ForeignLink / File / Folder`; `install(replace)` links `/usr/local/bin/<name>` → the helper, asks for admin rights through the macOS password prompt when the folder isn't writable, falls back to `~/.local/bin` with a `PATH` hint when declined, repairs a stale link, and never replaces a file or link that isn't ours unless `replace` (never a folder); `uninstall()` removes only our links; `repair()`. `ASHLAR_CLI_BIN_DIR` / `ASHLAR_CLI_FALLBACK_DIR` redirect both folders and turn the prompt off (tests). `commands::<S: CliToolHost>(menu)`: `app.installCommandLineTool` (param `replace`), `app.uninstallCommandLineTool`, `app.commandLineToolStatus`. |
 
-Default features: `dialogs menu clipboard power open-files single-instance system`. `full` adds
+Default features: `dialogs menu clipboard power open-files single-instance system cli-tool`. `full` adds
 `notify progress secrets`.
 
 ## Support matrix
@@ -45,6 +46,7 @@ Default features: `dialogs menu clipboard power open-files single-instance syste
 | secrets | ◐ Keychain (round trip is an ignored test) | ◐ Credential Manager | ◐ Secret Service | – |
 | system preferences | ✓ | ◐ registry + SPI | ◐ portal settings | ◐ media queries |
 | open_url / reveal | ◐ NSWorkspace | ◐ ShellExecuteW / explorer | ◐ xdg-open / FileManager1 | ◐ `window.open` (url only) |
+| cli_tool | ✓ links and conflicts in temp folders, admin path with a stand-in runner; the real password prompt by hand | – | ◐ links, no prompt (falls back) | – |
 
 Checked on macOS (aarch64): `cargo test -p ashlar-native --features full` (unit tests plus
 `tests/main_thread.rs`, which runs the main-thread APIs on the real main thread) and

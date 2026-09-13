@@ -20,6 +20,7 @@
 //! | [`progress`] | NSDockTile | ITaskbarList3 | – | – |
 //! | [`secrets`] | Keychain | Credential Manager | Secret Service | – |
 //! | [`system`] | AppKit | registry / SPI | portal settings | media queries |
+//! | [`cli_tool`] | link + admin prompt | – | link (no prompt) | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
 //! [`terminate`] (always compiled) runs a hook when the process is asked to stop (SIGINT, SIGTERM,
@@ -33,6 +34,8 @@ pub use error::{NativeError, Result};
 pub mod modal;
 pub mod terminate;
 
+#[cfg(feature = "cli-tool")]
+pub mod cli_tool;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 #[cfg(feature = "dialogs")]
