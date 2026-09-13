@@ -20,7 +20,7 @@
 //!
 //! [`commands`] are the matching command specs (`app.installCommandLineTool`,
 //! `app.uninstallCommandLineTool`, `app.commandLineToolStatus`) for any host that implements
-//! [`CliToolHost`].
+//! [`CliToolHost`]; [`run`] runs the same three for apps with their own command router.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -645,24 +645,45 @@ fn with_message(mut v: Value, message: String) -> Value {
     v
 }
 
+/// Run [`INSTALL`] (param `replace`), [`UNINSTALL`] or [`STATUS`] on `tool`, for apps that route
+/// commands themselves instead of through a [`ashlar_command::Registry`]. The result is the
+/// outcome as JSON with a `message` for a toast; `None` when `id` is none of the three.
+pub fn run(tool: &CliTool, id: &str, params: &Value) -> Option<Result<Value>> {
+    Some(match id {
+        INSTALL => {
+            let replace = params.get("replace").and_then(Value::as_bool).unwrap_or(false);
+            tool.install(replace).map(|out| with_message(to_value(&out), out.message(tool.name())))
+        }
+        UNINSTALL => tool.uninstall().map(|out| {
+            let kept: Vec<Value> = out.kept.iter().map(|(p, why)| json!({"path": p, "reason": why})).collect();
+            json!({"removed": out.removed, "kept": kept, "message": out.message(tool.name())})
+        }),
+        STATUS => {
+            let st = tool.status();
+            Ok(with_message(to_value(&st), st.message(tool.name())))
+        }
+        _ => return None,
+    })
+}
+
+fn run_command<S: CliToolHost>(s: &mut S, id: &str, p: &Value) -> std::result::Result<Value, S::Error> {
+    let t = tool(s)?;
+    match run(t, id, p) {
+        Some(r) => r.map_err(|e| S::Error::from(CommandError::from(e))),
+        None => Err(CommandError::failed(id, "not a command-line tool command").into()),
+    }
+}
+
 fn run_install<S: CliToolHost>(s: &mut S, p: &Value) -> std::result::Result<Value, S::Error> {
-    let t = tool(s)?;
-    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
-    let out = t.install(replace).map_err(|e| S::Error::from(CommandError::from(e)))?;
-    Ok(with_message(to_value(&out), out.message(t.name())))
+    run_command(s, INSTALL, p)
 }
 
-fn run_uninstall<S: CliToolHost>(s: &mut S, _: &Value) -> std::result::Result<Value, S::Error> {
-    let t = tool(s)?;
-    let out = t.uninstall().map_err(|e| S::Error::from(CommandError::from(e)))?;
-    let kept: Vec<Value> = out.kept.iter().map(|(p, why)| json!({"path": p, "reason": why})).collect();
-    Ok(json!({"removed": out.removed, "kept": kept, "message": out.message(t.name())}))
+fn run_uninstall<S: CliToolHost>(s: &mut S, p: &Value) -> std::result::Result<Value, S::Error> {
+    run_command(s, UNINSTALL, p)
 }
 
-fn run_status<S: CliToolHost>(s: &mut S, _: &Value) -> std::result::Result<Value, S::Error> {
-    let t = tool(s)?;
-    let st = t.status();
-    Ok(with_message(to_value(&st), st.message(t.name())))
+fn run_status<S: CliToolHost>(s: &mut S, p: &Value) -> std::result::Result<Value, S::Error> {
+    run_command(s, STATUS, p)
 }
 
 #[cfg(test)]
@@ -995,6 +1016,19 @@ mod tests {
         assert!(err.to_string().contains("nothing was changed"), "{err}");
         let out = reg.execute(&mut app, INSTALL, json!({"replace": true})).unwrap();
         assert_eq!(out["replaced"], "a file");
+    }
+
+    #[test]
+    fn run_routes_the_three_ids_and_nothing_else() {
+        let f = fixture();
+        let t = tool_at(&f, Elevation::Never);
+        assert!(run(&t, "app.quit", &json!({})).is_none());
+        assert_eq!(run(&t, STATUS, &json!({})).unwrap().unwrap()["state"], "missing");
+        let out = run(&t, INSTALL, &json!({})).unwrap().unwrap();
+        assert_eq!(out["link"], json!(f.bin.join("tool")));
+        assert!(out["message"].as_str().unwrap().contains("Installed"));
+        let out = run(&t, UNINSTALL, &json!({})).unwrap().unwrap();
+        assert!(out["message"].as_str().unwrap().starts_with("Removed"), "{out}");
     }
 
     #[test]
