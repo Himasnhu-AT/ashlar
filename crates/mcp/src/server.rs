@@ -155,6 +155,7 @@ pub struct McpServer {
     command_tools: Vec<(String, String)>,
     custom: Vec<CustomTool>,
     resources: Vec<CustomResource>,
+    docs: Vec<crate::docs::Doc>,
     on_execute: Option<ExecuteHook>,
     pending: Vec<Pending>,
     /// The tools last listed (for strict arguments).
@@ -193,6 +194,7 @@ impl McpServer {
             command_tools: Vec::new(),
             custom: Vec::new(),
             resources: Vec::new(),
+            docs: Vec::new(),
             on_execute: None,
             pending: Vec::new(),
             listed: Vec::new(),
@@ -245,6 +247,28 @@ impl McpServer {
         let def = json!({"uri": uri, "name": name, "title": title, "description": description, "mimeType": mime_type,
             "annotations": {"audience": ["assistant"], "priority": 0.8}});
         self.resources.push(CustomResource { def, read: Box::new(read) });
+        self
+    }
+
+    /// Add documents from a directory on disk to be exposed as MCP resources and tools.
+    pub fn docs_dir(mut self, dir: impl AsRef<std::path::Path>) -> Self {
+        let dir = dir.as_ref();
+        if dir.is_dir() {
+            let loaded = crate::docs::load_docs_from_dir(dir);
+            self.docs.extend(loaded);
+        }
+        self
+    }
+
+    /// Add a collection of documents to be exposed as MCP resources and tools.
+    pub fn docs(mut self, docs: impl IntoIterator<Item = crate::docs::Doc>) -> Self {
+        self.docs.extend(docs);
+        self
+    }
+
+    /// Add a single document to be exposed as an MCP resource.
+    pub fn doc(mut self, doc: crate::docs::Doc) -> Self {
+        self.docs.push(doc);
         self
     }
 
@@ -542,6 +566,57 @@ impl McpServer {
             self.command_tools = names;
         }
         list.extend(self.custom.iter().map(|t| t.def.clone()));
+        if !self.docs.is_empty() {
+            list.push(json!({
+                "name": "list_docs",
+                "title": "List documentation and skills",
+                "description": "Discover available documentation files, guides, motion recipes and AI skills. Optional query filters by keyword in title, path or description.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Filter by keyword in title, path or description"
+                        },
+                        "section": {
+                            "type": "string",
+                            "description": "Filter by section (e.g. skills, styles, motion, reference)"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "annotations": {
+                    "title": "List documentation and skills",
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }));
+            list.push(json!({
+                "name": "read_doc",
+                "title": "Read documentation or skill",
+                "description": "Read the markdown content of a documentation file, guide, or AI skill by path or URI.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path or URI of the document (e.g. 'video/skills/launch-film.md' or 'agents.md')"
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                },
+                "annotations": {
+                    "title": "Read documentation or skill",
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }));
+        }
         self.listed.clone_from(&list);
         list
     }
@@ -688,6 +763,55 @@ impl McpServer {
                 }
                 Err(e) => ToolResult::error(e).into(),
             },
+            "list_docs" => {
+                let q = args.get("query").and_then(Value::as_str).map(str::to_ascii_lowercase);
+                let sec = args.get("section").and_then(Value::as_str).map(str::to_ascii_lowercase);
+                let matched: Vec<Value> = self
+                    .docs
+                    .iter()
+                    .filter(|d| {
+                        if let Some(ref s) = sec
+                            && !d.section.to_ascii_lowercase().contains(s)
+                        {
+                            return false;
+                        }
+                        if let Some(ref q) = q {
+                            let hit = d.path.to_ascii_lowercase().contains(q)
+                                || d.title.to_ascii_lowercase().contains(q)
+                                || d.description.to_ascii_lowercase().contains(q)
+                                || d.content.as_ref().is_some_and(|c| c.to_ascii_lowercase().contains(q));
+                            if !hit {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .map(|d| {
+                        json!({
+                            "path": d.path,
+                            "title": d.title,
+                            "description": d.description,
+                            "section": d.section,
+                            "uri": d.uri
+                        })
+                    })
+                    .collect();
+                ToolResult::text(serde_json::to_string_pretty(&matched).unwrap_or_default()).into()
+            }
+            "read_doc" => match args.get("path").and_then(Value::as_str) {
+                Some(path) => {
+                    let norm = path.trim_start_matches("docs://").trim_start_matches("app://docs/").replace('\\', "/");
+                    let doc = self.docs.iter().find(|d| d.path == norm || d.uri == path || d.path.ends_with(&format!("/{norm}")) || d.name == norm);
+                    match doc {
+                        Some(d) => match d.read_content() {
+                            Ok(content) => ToolResult::text(content).into(),
+                            Err(e) => ToolResult::error(format!("reading {}: {e}", d.path)).into(),
+                        },
+                        None => ToolResult::error(format!("no document `{path}`; use list_docs to find documents")).into(),
+                    }
+                }
+                None => ToolResult::error("read_doc needs a string `path`").into(),
+            },
             other => {
                 if let Some(method) = tools::ui_method(other) {
                     match tools::normalize_targets(args) {
@@ -782,6 +906,10 @@ impl McpServer {
             ),
         ];
         list.extend(self.resources.iter().map(|r| r.def.clone()));
+        for d in &self.docs {
+            let priority = if d.section == "skills" { 0.9 } else { 0.7 };
+            list.push(res(&d.uri, &d.name, &d.title, &d.description, "text/markdown", priority));
+        }
         if self.methods().iter().any(|m| m == "ui.snapshot") {
             list.push(res(
                 RES_UI,
@@ -811,17 +939,31 @@ impl McpServer {
                 Reply::Ok(v) => ("text/plain", v.get("tree").and_then(Value::as_str).map_or_else(|| v.to_string(), str::to_string)),
                 Reply::Err { error, .. } => return Err(failed(error)),
             },
-            other => match self.resources.iter_mut().find(|r| r.def["uri"] == other) {
-                Some(r) => {
-                    let mut cx = ToolCx::new(&mut self.backend, &self.app, None, None, false);
-                    let mime = r.def["mimeType"].as_str().unwrap_or("text/plain").to_string();
-                    match (r.read)(&mut cx) {
-                        Ok(text) => return Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]})),
+            other => {
+                if let Some(d) = self.docs.iter().find(|d| {
+                    d.uri == other
+                        || d.path == other
+                        || other.strip_prefix("docs://") == Some(&d.path)
+                        || other.strip_prefix("app://docs/") == Some(&d.path)
+                }) {
+                    let text = match d.read_content() {
+                        Ok(t) => t,
                         Err(e) => return Err(failed(e)),
-                    }
+                    };
+                    return Ok(json!({"contents": [{"uri": d.uri, "mimeType": "text/markdown", "text": text}]}));
                 }
-                None => return Err((RESOURCE_NOT_FOUND, format!("no resource {uri}; see resources/list"))),
-            },
+                match self.resources.iter_mut().find(|r| r.def["uri"] == other) {
+                    Some(r) => {
+                        let mut cx = ToolCx::new(&mut self.backend, &self.app, None, None, false);
+                        let mime = r.def["mimeType"].as_str().unwrap_or("text/plain").to_string();
+                        match (r.read)(&mut cx) {
+                            Ok(text) => return Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]})),
+                            Err(e) => return Err(failed(e)),
+                        }
+                    }
+                    None => return Err((RESOURCE_NOT_FOUND, format!("no resource {uri}; see resources/list"))),
+                }
+            }
         };
         Ok(json!({"contents": [{"uri": uri, "mimeType": mime, "text": text}]}))
     }

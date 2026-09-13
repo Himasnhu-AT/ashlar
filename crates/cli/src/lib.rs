@@ -3,6 +3,7 @@
 //! ```text
 //! <app>-cli commands [--json] [--query Q]     list commands
 //! <app>-cli describe <id>                     one command in full (parameter schema)
+//! <app>-cli docs [path] [--json] [--query Q]  list or read documentation and skills
 //! <app>-cli exec <id> [json|-]                run one command
 //! <app>-cli run <file.jsonl|-> [--keep-going] run {"command","params"} lines
 //! <app>-cli mcp [--isolate] [--per-command]   MCP server on stdio
@@ -100,6 +101,8 @@ pub struct Cli {
     session: SessionFn,
     key_dir: Option<PathBuf>,
     instructions: String,
+    docs_dir: Option<PathBuf>,
+    docs: Vec<ashlar_mcp::Doc>,
     verbs: Vec<Verb>,
 }
 
@@ -121,6 +124,7 @@ impl Target {
 const STANDARD: &[(&str, &str, &str)] = &[
     ("commands", "commands [--json] [--query Q] [--connect PORT]", "list commands"),
     ("describe", "describe <id> [--connect PORT]", "one command in full, with its parameter schema"),
+    ("docs", "docs [path] [--json] [--query Q] [--section S]", "list or read documentation and skills"),
     ("exec", "exec <id> [json|-] [--connect PORT]", "run one command (params as JSON, `-` reads stdin)"),
     ("run", "run <file.jsonl|-> [--keep-going] [--connect PORT]", "run {\"command\",\"params\"} lines, one reply each"),
     ("mcp", "mcp [--connect PORT | --isolate] [--per-command]", "MCP server on stdio"),
@@ -131,7 +135,15 @@ const STANDARD: &[(&str, &str, &str)] = &[
 impl Cli {
     /// `session` makes a fresh headless session (one per invocation).
     pub fn new(name: impl Into<String>, version: impl Into<String>, session: impl FnMut() -> Box<dyn Dispatch> + 'static) -> Self {
-        Self { app: AppInfo::new(name, version), session: Box::new(session), key_dir: None, instructions: String::new(), verbs: Vec::new() }
+        Self {
+            app: AppInfo::new(name, version),
+            session: Box::new(session),
+            key_dir: None,
+            instructions: String::new(),
+            docs_dir: None,
+            docs: Vec::new(),
+            verbs: Vec::new(),
+        }
     }
 
     /// Where the running app writes its control key (its settings folder); enables `--connect`.
@@ -143,6 +155,18 @@ impl Cli {
     /// The MCP server's instructions (what the app is, how to drive it).
     pub fn instructions(mut self, text: impl Into<String>) -> Self {
         self.instructions = text.into();
+        self
+    }
+
+    /// Directory containing markdown documentation and AI skills.
+    pub fn docs_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.docs_dir = Some(dir.into());
+        self
+    }
+
+    /// Explicit collection of documents and AI skills.
+    pub fn docs(mut self, docs: impl IntoIterator<Item = ashlar_mcp::Doc>) -> Self {
+        self.docs.extend(docs);
         self
     }
 
@@ -175,6 +199,7 @@ impl Cli {
         match verb.as_str() {
             "commands" => self.commands(args, io),
             "describe" => self.describe(args, io),
+            "docs" => self.docs_verb(args, io),
             "exec" => self.exec(args, io),
             "run" => self.run_lines(args, io),
             "mcp" => self.mcp(args, io),
@@ -423,12 +448,160 @@ impl Cli {
         if per_command {
             opts = opts.tools(ToolMode::PerCommand);
         }
+        let mut server = McpServer::new(backend, opts);
+        let docs = self.resolve_docs();
+        if !docs.is_empty() {
+            server = server.docs(docs);
+        }
         // stdout carries only the protocol; problems go to stderr.
-        match McpServer::new(backend, opts).serve(&mut *io.input, &mut *io.out) {
+        match server.serve(&mut *io.input, &mut *io.out) {
             Ok(()) => Exit::Ok,
             Err(e) => {
                 let _ = writeln!(io.err, "mcp: {e}");
                 Exit::Failed
+            }
+        }
+    }
+
+    fn resolve_docs(&self) -> Vec<ashlar_mcp::Doc> {
+        if !self.docs.is_empty() {
+            return self.docs.clone();
+        }
+        let env_key = format!("{}_DOCS_DIR", self.app.name.to_ascii_uppercase().replace('-', "_"));
+        if let Ok(val) = std::env::var(&env_key) {
+            let p = PathBuf::from(val);
+            if p.is_dir() {
+                return ashlar_mcp::docs::load_docs_from_dir(&p);
+            }
+        }
+        if let Ok(val) = std::env::var("DOCS_DIR") {
+            let p = PathBuf::from(val);
+            if p.is_dir() {
+                return ashlar_mcp::docs::load_docs_from_dir(&p);
+            }
+        }
+        if let Some(dir) = &self.docs_dir
+            && dir.is_dir()
+        {
+            return ashlar_mcp::docs::load_docs_from_dir(dir);
+        }
+        let cur = std::path::Path::new("docs");
+        if cur.is_dir() {
+            let loaded = ashlar_mcp::docs::load_docs_from_dir(cur);
+            if !loaded.is_empty() {
+                return loaded;
+            }
+        }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(parent) = exe.parent()
+        {
+            for rel in ["docs", "../docs", "../../docs"] {
+                let p = parent.join(rel);
+                if p.is_dir() {
+                    let loaded = ashlar_mcp::docs::load_docs_from_dir(&p);
+                    if !loaded.is_empty() {
+                        return loaded;
+                    }
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn docs_verb(&mut self, mut args: Args, io: &mut Io<'_>) -> Exit {
+        let usage = Self::usage_of("docs");
+        let json = args.flag("--json");
+        let query = match args.value("--query") {
+            Ok(q) => q,
+            Err(e) => return io.usage(e, usage),
+        };
+        let section = match args.value("--section") {
+            Ok(s) => s,
+            Err(e) => return io.usage(e, usage),
+        };
+        let path = args.positional();
+        if let Err(e) = args.finish() {
+            return io.usage(e, usage);
+        }
+
+        let docs = self.resolve_docs();
+        if let Some(target) = path {
+            let target_norm = target.trim_start_matches("docs://").trim_start_matches("app://docs/").replace('\\', "/");
+            let found = docs
+                .iter()
+                .find(|d| d.path == target_norm || d.uri == target || d.path.ends_with(&format!("/{target_norm}")) || d.name == target_norm);
+            match found {
+                Some(d) => match d.read_content() {
+                    Ok(content) => {
+                        if json {
+                            io.reply(&Reply::ok(json!({
+                                "path": d.path,
+                                "title": d.title,
+                                "description": d.description,
+                                "section": d.section,
+                                "uri": d.uri,
+                                "content": content
+                            })))
+                        } else {
+                            let _ = write!(io.out, "{content}");
+                            if !content.ends_with('\n') {
+                                let _ = writeln!(io.out);
+                            }
+                            Exit::Ok
+                        }
+                    }
+                    Err(e) => io.reply(&Reply::err(format!("reading {}: {e}", d.path))),
+                },
+                None => io.reply(&Reply::err(format!("no document `{target}` (see `{}-cli docs` for available documents)", self.app.name))),
+            }
+        } else {
+            let q = query.map(|s| s.to_ascii_lowercase());
+            let sec = section.map(|s| s.to_ascii_lowercase());
+            let filtered: Vec<&ashlar_mcp::Doc> = docs
+                .iter()
+                .filter(|d| {
+                    if let Some(ref s) = sec
+                        && !d.section.to_ascii_lowercase().contains(s)
+                    {
+                        return false;
+                    }
+                    if let Some(ref q) = q {
+                        let hit = d.path.to_ascii_lowercase().contains(q)
+                            || d.title.to_ascii_lowercase().contains(q)
+                            || d.description.to_ascii_lowercase().contains(q)
+                            || d.content.as_ref().is_some_and(|c| c.to_ascii_lowercase().contains(q));
+                        if !hit {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect();
+
+            if json {
+                let list: Vec<Value> = filtered
+                    .iter()
+                    .map(|d| {
+                        json!({
+                            "path": d.path,
+                            "title": d.title,
+                            "description": d.description,
+                            "section": d.section,
+                            "uri": d.uri,
+                        })
+                    })
+                    .collect();
+                io.reply(&Reply::ok(json!({"docs": list})))
+            } else {
+                if filtered.is_empty() {
+                    let _ = writeln!(io.out, "no documentation found");
+                    return Exit::Ok;
+                }
+                let width = filtered.iter().map(|d| d.path.chars().count()).max().unwrap_or(0);
+                for d in &filtered {
+                    let _ = writeln!(io.out, "{:<width$}  {}", d.path, d.title);
+                }
+                Exit::Ok
             }
         }
     }
