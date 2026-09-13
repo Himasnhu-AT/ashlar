@@ -1013,6 +1013,7 @@ fn cancelling_one_area_leaves_other_gestures_alone() {
         left: L,
         right: L,
         text: String,
+        value: f32,
         changes: usize,
     }
     let pair = || Layout { root: Some(split(SplitAxis::Horizontal, SplitSize::FixedFirst(150.0), tabs(&[1], 0), tabs(&[2], 0))), floating: vec![] };
@@ -1026,7 +1027,7 @@ fn cancelling_one_area_leaves_other_gestures_alone() {
                     s.left.apply(a).unwrap();
                     s.changes += 1;
                 }
-                let text = &mut s.text;
+                let (text, value) = (&mut s.text, &mut s.value);
                 let out = DockArea::new(Id::new("right")).show(
                     &mut cols[1],
                     &s.right,
@@ -1035,7 +1036,7 @@ fn cancelling_one_area_leaves_other_gestures_alone() {
                     |_| Permissions::default(),
                     |ui, p| {
                         if *p == 1 {
-                            ui.add(egui::Slider::new(&mut 0.0f32, 0.0..=1.0).text("slider"));
+                            ui.add(egui::Slider::new(value, 0.0..=100.0).text("slider"));
                             ui.add(egui::TextEdit::singleline(text));
                         }
                     },
@@ -1046,7 +1047,7 @@ fn cancelling_one_area_leaves_other_gestures_alone() {
                 }
             });
         },
-        Two { left: pair(), right: pair(), text: String::new(), changes: 0 },
+        Two { left: pair(), right: pair(), text: String::new(), value: 0.0, changes: 0 },
     );
     h.step();
     let right_split = Id::new("right").with(("split", Vec::<bool>::new()));
@@ -1064,6 +1065,27 @@ fn cancelling_one_area_leaves_other_gestures_alone() {
     h.step();
     assert!(h.state().changes > before);
     h.drop_at(c + vec2(30.0, 0.0));
+    h.step();
+    h.step();
+
+    // A drag on a widget inside a panel body is never stopped, not even by its own area.
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect().center();
+    h.hover_at(slider);
+    h.step();
+    h.drag_at(slider);
+    h.step();
+    h.hover_at(slider + vec2(10.0, 0.0));
+    h.step();
+    let dragged = h.ctx.dragged_id();
+    assert!(dragged.is_some());
+    cancel_drag::<u32>(&h.ctx, Id::new("right"));
+    cancel_drag::<u32>(&h.ctx, Id::new("left"));
+    assert_eq!(h.ctx.dragged_id(), dragged);
+    let before = h.state().value;
+    h.hover_at(slider + vec2(40.0, 0.0));
+    h.step();
+    assert!(h.state().value > before, "{before} {}", h.state().value);
+    h.drop_at(slider + vec2(40.0, 0.0));
     h.step();
 }
 
