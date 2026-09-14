@@ -210,3 +210,15 @@ fn a_docs_dir_skips_symbolic_links() {
     let paths: Vec<&str> = docs.iter().map(|d| d.path.as_str()).collect();
     assert_eq!(paths, ["page.md"]);
 }
+
+#[test]
+fn for_agents_drops_images_and_links_to_pages_not_served() {
+    let shipped = |p: &str| ["guide/index.md", "guide/a.md", "top.md"].contains(&p);
+    let text = "# Index\n\n![a sheet](../images/sheet.png)\n\n*caption*\n\
+        | [a.md](a.md) | served |\n\
+        | [b.md](b.md) | not served |\n\
+        See [top](../top.md#part), [b](b.md), [site](https://example.com) and ![x](x.png) inline.\n\
+        [up](../../outside.md)";
+    let got = ashlar_mcp::docs::for_agents("guide/index.md", text, &shipped);
+    assert_eq!(got, "# Index\n\n\n*caption*\n| [a.md](a.md) | served |\nSee [top](../top.md#part), b, [site](https://example.com) and  inline.\nup");
+}

@@ -112,6 +112,79 @@ fn derive_section(rel_path: &str) -> String {
     }
 }
 
+/// A page as agents get it: images removed (they are not served), and every relative link to a
+/// page `shipped` does not know replaced by its text. A table row whose first link is such a
+/// page is dropped (an index row for a page that is not there). `path` is the page's own path,
+/// against which its links resolve.
+pub fn for_agents(path: &str, text: &str, shipped: &dyn Fn(&str) -> bool) -> String {
+    let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (body, end) = line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n"));
+        let (kept, dead_first) = rewrite_links(body, dir, shipped);
+        let only_images = kept.trim().is_empty() && !body.trim().is_empty();
+        if only_images || (dead_first && body.trim_start().starts_with('|')) {
+            continue;
+        }
+        out.push_str(&kept);
+        out.push_str(end);
+    }
+    out
+}
+
+/// One line with images removed and dead links unlinked; whether its first link was dead.
+fn rewrite_links(line: &str, dir: &str, shipped: &dyn Fn(&str) -> bool) -> (String, bool) {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    let mut first: Option<bool> = None;
+    while let Some(open) = rest.find('[') {
+        let image = rest[..open].ends_with('!');
+        let parsed = rest[open + 1..].find("](").and_then(|close| {
+            let after = open + 1 + close + 2;
+            rest[after..].find(')').map(|end| (close, after, after + end))
+        });
+        let Some((close, after, end)) = parsed else { break };
+        let label = &rest[open + 1..open + 1 + close];
+        let target = &rest[after..end];
+        if image {
+            out.push_str(&rest[..open - 1]);
+        } else {
+            out.push_str(&rest[..open]);
+            let dead = is_relative_page(target) && !resolve(dir, target).is_some_and(|t| shipped(&t));
+            first.get_or_insert(dead);
+            if dead {
+                out.push_str(label);
+            } else {
+                out.push_str(&rest[open..=end]);
+            }
+        }
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    (out, first.unwrap_or(false))
+}
+
+/// A link to a page of the same set: relative, not a URL or an anchor.
+fn is_relative_page(target: &str) -> bool {
+    !(target.is_empty() || target.starts_with('#') || target.starts_with('/') || target.contains("://") || target.starts_with("mailto:"))
+}
+
+/// `target` (relative to `dir`, fragment dropped) as a path from the root; `None` above it.
+fn resolve(dir: &str, target: &str) -> Option<String> {
+    let target = target.split(['#', '?']).next().unwrap_or(target);
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            p => parts.push(p),
+        }
+    }
+    Some(parts.join("/"))
+}
+
 /// Find one document by path or `docs://` URI. An exact path wins; otherwise a file name, a stem
 /// or a trailing part of the path must match exactly one document, and several matches are an
 /// error that lists them.
