@@ -29,6 +29,6 @@ pub mod tools;
 
 pub use backend::{AppPort, Backend, Subprocess};
 pub use calls::{PendingCall, ToolCx, ToolOutcome};
-pub use docs::Doc;
+pub use docs::Library;
 pub use server::{LATEST_PROTOCOL_VERSION, MAX_MESSAGE, McpServer, PROTOCOL_VERSION, SUPPORTED_VERSIONS, ServerOptions};
 pub use tools::{Access, ToolMode, ToolResult};

@@ -1,0 +1,12 @@
+[package]
+name = "ashlar-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Documentation library for agents: folders are categories, markdown files are documents, embedded at build time"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -20,6 +20,7 @@ ashlar-fs = { path = "crates/fs", version = "0.1.0" }
 # default features off: each crate names the native features it uses
 ashlar-native = { path = "crates/native", version = "0.1.0", default-features = false }
 ashlar-control = { path = "crates/control", version = "0.1.0" }
+ashlar-docs = { path = "crates/docs", version = "0.1.0" }
 ashlar-mcp = { path = "crates/mcp", version = "0.1.0" }
 ashlar-cli = { path = "crates/cli", version = "0.1.0" }
 ashlar-debug = { path = "crates/debug", version = "0.1.0" }

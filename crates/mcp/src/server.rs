@@ -36,6 +36,47 @@ const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 /// Longest accepted message line.
 pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
+/// Resource URIs of documentation pages: `docs://<path>`.
+const DOCS_SCHEME: &str = "docs://";
+const DOCS_HINT: &str = "Documentation for agents: start with `docs_categories` (the categories), then `list_docs` and `read_doc`.";
+
+/// The documentation tools.
+fn docs_tools() -> Vec<Value> {
+    let read_only =
+        |title: &str| json!({"title": title, "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false});
+    vec![
+        json!({
+            "name": "docs_categories",
+            "title": "Documentation categories",
+            "description": "The documentation's categories as a tree: path, title, description, how many documents each holds, subcategories. Start here, then list_docs on a category.",
+            "inputSchema": {"type": "object", "properties": {
+                "category": {"type": "string", "description": "Only the tree under this category (e.g. 'reference'); the whole tree when left out"}
+            }, "additionalProperties": false},
+            "annotations": read_only("Documentation categories"),
+        }),
+        json!({
+            "name": "list_docs",
+            "title": "List documents",
+            "description": "Documents with path, title, description (when to read it), category and source (built-in or yours). Filter by category (and its subcategories unless recursive is false) and by a keyword found in the path, title, description, tags or text.",
+            "inputSchema": {"type": "object", "properties": {
+                "category": {"type": "string", "description": "A category path from docs_categories (e.g. 'skills' or 'reference/motion')"},
+                "query": {"type": "string", "description": "A keyword, case-insensitive"},
+                "recursive": {"type": "boolean", "description": "Include subcategories (default true)"}
+            }, "additionalProperties": false},
+            "annotations": read_only("List documents"),
+        }),
+        json!({
+            "name": "read_doc",
+            "title": "Read a document",
+            "description": "One document's markdown, verbatim, by its exact path from list_docs (a category's `_category.md` also reads). An unknown path names the closest documents.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": {"type": "string", "description": "The document's path, e.g. 'skills/review.md'"}
+            }, "required": ["path"], "additionalProperties": false},
+            "annotations": read_only("Read a document"),
+        }),
+    ]
+}
+
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -155,7 +196,7 @@ pub struct McpServer {
     command_tools: Vec<(String, String)>,
     custom: Vec<CustomTool>,
     resources: Vec<CustomResource>,
-    docs: Vec<crate::docs::Doc>,
+    docs: crate::docs::Library,
     on_execute: Option<ExecuteHook>,
     pending: Vec<Pending>,
     /// The tools last listed (for strict arguments).
@@ -194,7 +235,7 @@ impl McpServer {
             command_tools: Vec::new(),
             custom: Vec::new(),
             resources: Vec::new(),
-            docs: Vec::new(),
+            docs: crate::docs::Library::new(),
             on_execute: None,
             pending: Vec::new(),
             listed: Vec::new(),
@@ -250,23 +291,10 @@ impl McpServer {
         self
     }
 
-    /// Add the markdown files under `dir` as documents (read now; symbolic links skipped). For a
-    /// directory the caller chose explicitly: a shipped app embeds its pages with [`Self::docs`].
-    pub fn docs_dir(mut self, dir: impl AsRef<std::path::Path>) -> Self {
-        self.docs.extend(crate::docs::load_docs_from_dir(dir.as_ref()));
-        self
-    }
-
-    /// Add documents, exposed as `docs://` resources and the `list_docs` / `read_doc` tools. The
-    /// first one is the entry point: the instructions name it and it is listed with top priority.
-    pub fn docs(mut self, docs: impl IntoIterator<Item = crate::docs::Doc>) -> Self {
-        self.docs.extend(docs);
-        self
-    }
-
-    /// Add a single document to be exposed as an MCP resource.
-    pub fn doc(mut self, doc: crate::docs::Doc) -> Self {
-        self.docs.push(doc);
+    /// The documentation library agents read: `docs_categories`, `list_docs` and `read_doc`, a
+    /// `docs://<path>` resource per document, and its root overview in the instructions.
+    pub fn docs(mut self, library: crate::docs::Library) -> Self {
+        self.docs = library;
         self
     }
 
@@ -492,11 +520,12 @@ impl McpServer {
 
     fn instructions(&self) -> String {
         let base = if self.opts.instructions.is_empty() { DEFAULT_INSTRUCTIONS } else { self.opts.instructions.as_str() };
-        let docs = match self.docs.first() {
-            Some(first) => format!(" Documentation and skills for agents: `list_docs`, then `read_doc` (start with `{}`).", first.path),
-            None => String::new(),
+        let docs = match (self.docs.is_empty(), self.docs.overview()) {
+            (true, _) => " ".to_string(),
+            (false, Some(overview)) => format!("\n\n{overview}\n\n{DOCS_HINT}\n\n"),
+            (false, None) => format!(" {DOCS_HINT} "),
         };
-        format!("{base}{docs} Backend: {}.", self.backend.describe())
+        format!("{base}{docs}Backend: {}.", self.backend.describe())
     }
 
     fn notification(&mut self, method: &str) {
@@ -569,55 +598,7 @@ impl McpServer {
         }
         list.extend(self.custom.iter().map(|t| t.def.clone()));
         if !self.docs.is_empty() {
-            list.push(json!({
-                "name": "list_docs",
-                "title": "List documentation and skills",
-                "description": "List the documentation and skills this app ships for agents: path, title, description, section. Optional filters by keyword (path, title, description or text) and by section.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Keyword in the path, title, description or text"
-                        },
-                        "section": {
-                            "type": "string",
-                            "description": "Section (the top folder, or skills, styles, reference)"
-                        }
-                    },
-                    "additionalProperties": false
-                },
-                "annotations": {
-                    "title": "List documentation and skills",
-                    "readOnlyHint": true,
-                    "destructiveHint": false,
-                    "idempotentHint": true,
-                    "openWorldHint": false
-                }
-            }));
-            list.push(json!({
-                "name": "read_doc",
-                "title": "Read documentation or skill",
-                "description": "Read one document's markdown by path or docs:// URI (from list_docs).",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "The document's path (e.g. 'skills/review.md') or URI; a unique file name also works"
-                        }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                },
-                "annotations": {
-                    "title": "Read documentation or skill",
-                    "readOnlyHint": true,
-                    "destructiveHint": false,
-                    "idempotentHint": true,
-                    "openWorldHint": false
-                }
-            }));
+            list.extend(docs_tools());
         }
         self.listed.clone_from(&list);
         list
@@ -765,31 +746,29 @@ impl McpServer {
                 }
                 Err(e) => ToolResult::error(e).into(),
             },
+            "docs_categories" => {
+                let category = args.get("category").and_then(Value::as_str).unwrap_or("");
+                match self.docs.tree(category) {
+                    Some(node) => ToolResult::text(serde_json::to_string_pretty(&crate::docs::node_json(&node)).unwrap_or_default()).into(),
+                    None => ToolResult::error(format!("no category `{category}`; call docs_categories with no arguments for the whole tree")).into(),
+                }
+            }
             "list_docs" => {
-                let (q, sec) = (args.get("query").and_then(Value::as_str), args.get("section").and_then(Value::as_str));
-                let matched: Vec<Value> = self
-                    .docs
-                    .iter()
-                    .filter(|d| d.matches(q, sec))
-                    .map(|d| {
-                        json!({
-                            "path": d.path,
-                            "title": d.title,
-                            "description": d.description,
-                            "section": d.section,
-                            "uri": d.uri
-                        })
-                    })
-                    .collect();
-                ToolResult::text(serde_json::to_string_pretty(&matched).unwrap_or_default()).into()
+                let category = args.get("category").and_then(Value::as_str);
+                let query = args.get("query").and_then(Value::as_str);
+                let recursive = args.get("recursive").and_then(Value::as_bool).unwrap_or(true);
+                match category {
+                    Some(c) if self.docs.category(c).is_none() => ToolResult::error(format!("no category `{c}`; see docs_categories")).into(),
+                    _ => {
+                        let docs: Vec<Value> = self.docs.list(category, query, recursive).into_iter().map(crate::docs::doc_json).collect();
+                        ToolResult::text(serde_json::to_string_pretty(&docs).unwrap_or_default()).into()
+                    }
+                }
             }
             "read_doc" => match args.get("path").and_then(Value::as_str) {
-                Some(path) => match crate::docs::find(&self.docs, path) {
-                    Ok(d) => match d.read_content() {
-                        Ok(content) => ToolResult::text(content).into(),
-                        Err(e) => ToolResult::error(format!("reading {}: {e}", d.path)).into(),
-                    },
-                    Err(e) => ToolResult::error(format!("{e}; use list_docs to find documents")).into(),
+                Some(path) => match self.docs.read(path) {
+                    Ok(text) => ToolResult::text(text).into(),
+                    Err(e) => ToolResult::error(e).into(),
                 },
                 None => ToolResult::error("read_doc needs a string `path`").into(),
             },
@@ -887,15 +866,9 @@ impl McpServer {
             ),
         ];
         list.extend(self.resources.iter().map(|r| r.def.clone()));
-        for (i, d) in self.docs.iter().enumerate() {
-            let priority = if i == 0 {
-                1.0
-            } else if d.section == "skills" {
-                0.9
-            } else {
-                0.7
-            };
-            list.push(res(&d.uri, &d.name, &d.title, &d.description, "text/markdown", priority));
+        for d in self.docs.docs() {
+            let name = d.path.rsplit_once('/').map_or(d.path.as_str(), |(_, n)| n);
+            list.push(res(&format!("{DOCS_SCHEME}{}", d.path), name, &d.title, &d.description, "text/markdown", 0.7));
         }
         if self.methods().iter().any(|m| m == "ui.snapshot") {
             list.push(res(
@@ -927,12 +900,11 @@ impl McpServer {
                 Reply::Err { error, .. } => return Err(failed(error)),
             },
             other => {
-                if let Some(d) = self.docs.iter().find(|d| d.uri == other || d.path == other) {
-                    let text = match d.read_content() {
-                        Ok(t) => t,
-                        Err(e) => return Err(failed(e)),
+                if let Some(path) = other.strip_prefix(DOCS_SCHEME) {
+                    return match self.docs.read(path) {
+                        Ok(text) => Ok(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]})),
+                        Err(e) => Err((RESOURCE_NOT_FOUND, e)),
                     };
-                    return Ok(json!({"contents": [{"uri": d.uri, "mimeType": "text/markdown", "text": text}]}));
                 }
                 match self.resources.iter_mut().find(|r| r.def["uri"] == other) {
                     Some(r) => {

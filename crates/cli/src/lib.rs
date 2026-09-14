@@ -4,7 +4,7 @@
 //! ```text
 //! <tool> commands [--json] [--query Q]          list commands
 //! <tool> describe <id>                          one command in full (parameter schema)
-//! <tool> docs [path] [--json] [--query Q]       list or read documentation and skills
+//! <tool> docs [category|path.md] [--query Q]   the documentation: categories, one category, one file
 //! <tool> exec <id> [json|-]                     run one command
 //! <tool> run <file.jsonl|-> [--keep-going]    run {"command","params"} lines
 //! <tool> mcp [--isolate] [--per-command]        MCP server on stdio
@@ -102,8 +102,8 @@ pub struct Cli {
     session: SessionFn,
     key_dir: Option<PathBuf>,
     instructions: String,
-    docs_dir: Option<PathBuf>,
-    docs: Vec<ashlar_mcp::Doc>,
+    docs: ashlar_mcp::Library,
+    user_docs: Option<PathBuf>,
     verbs: Vec<Verb>,
 }
 
@@ -125,7 +125,7 @@ impl Target {
 const STANDARD: &[(&str, &str, &str)] = &[
     ("commands", "commands [--json] [--query Q] [--connect PORT]", "list commands"),
     ("describe", "describe <id> [--connect PORT]", "one command in full, with its parameter schema"),
-    ("docs", "docs [path] [--json] [--query Q] [--section S]", "list or read documentation and skills"),
+    ("docs", "docs [category|path.md] [--query Q] [--json] [--where]", "the documentation: categories, a category, or a file verbatim"),
     ("exec", "exec <id> [json|-] [--connect PORT]", "run one command (params as JSON, `-` reads stdin)"),
     ("run", "run <file.jsonl|-> [--keep-going] [--connect PORT]", "run {\"command\",\"params\"} lines, one reply each"),
     ("mcp", "mcp [--connect PORT | --isolate] [--per-command]", "MCP server on stdio"),
@@ -141,8 +141,8 @@ impl Cli {
             session: Box::new(session),
             key_dir: None,
             instructions: String::new(),
-            docs_dir: None,
-            docs: Vec::new(),
+            docs: ashlar_mcp::Library::new(),
+            user_docs: None,
             verbs: Vec::new(),
         }
     }
@@ -159,18 +159,17 @@ impl Cli {
         self
     }
 
-    /// Serve the markdown files under `dir` (read when a verb needs them; symbolic links skipped),
-    /// when no [`Self::docs`] are given. Only the directory named here is read: a shipped app
-    /// embeds its pages instead.
-    pub fn docs_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.docs_dir = Some(dir.into());
+    /// The documentation library (`docs`, and the MCP server's tools and resources), usually
+    /// the app's built-in pages.
+    pub fn docs(mut self, library: ashlar_mcp::Library) -> Self {
+        self.docs = library;
         self
     }
 
-    /// The documents and skills for agents (`docs`, and the MCP server's resources and tools);
-    /// the first is the entry point.
-    pub fn docs(mut self, docs: impl IntoIterator<Item = ashlar_mcp::Doc>) -> Self {
-        self.docs.extend(docs);
+    /// The user's own documentation folder, read on top of [`Self::docs`] whenever they are
+    /// used (same path: the user's page wins). `docs --where` prints it; it is never created.
+    pub fn user_docs(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.user_docs = Some(dir.into());
         self
     }
 
@@ -452,7 +451,7 @@ impl Cli {
         if per_command {
             opts = opts.tools(ToolMode::PerCommand);
         }
-        let mut server = McpServer::new(backend, opts).docs(self.resolve_docs());
+        let mut server = McpServer::new(backend, opts).docs(self.library());
         // stdout carries only the protocol; problems go to stderr.
         match server.serve(&mut *io.input, &mut *io.out) {
             Ok(()) => Exit::Ok,
@@ -463,84 +462,113 @@ impl Cli {
         }
     }
 
-    fn resolve_docs(&self) -> Vec<ashlar_mcp::Doc> {
-        match &self.docs_dir {
-            Some(dir) if self.docs.is_empty() => ashlar_mcp::docs::load_docs_from_dir(dir),
-            _ => self.docs.clone(),
+    /// The built-in pages with the user's folder on top.
+    fn library(&self) -> ashlar_mcp::Library {
+        match &self.user_docs {
+            Some(dir) => self.docs.clone().overlay_dir(dir),
+            None => self.docs.clone(),
         }
     }
 
     fn docs_verb(&mut self, mut args: Args, io: &mut Io<'_>) -> Exit {
+        use ashlar_mcp::docs::{category_json, doc_json, node_json};
         let usage = Self::usage_of("docs");
         let json = args.flag("--json");
+        let place = args.flag("--where");
         let query = match args.value("--query") {
             Ok(q) => q,
             Err(e) => return io.usage(e, usage),
         };
-        let section = match args.value("--section") {
-            Ok(s) => s,
-            Err(e) => return io.usage(e, usage),
-        };
-        let path = args.positional();
+        let target = args.positional();
         if let Err(e) = args.finish() {
             return io.usage(e, usage);
         }
-
-        let docs = self.resolve_docs();
-        if let Some(target) = path {
-            match ashlar_mcp::docs::find(&docs, &target) {
-                Ok(d) => match d.read_content() {
-                    Ok(content) => {
-                        if json {
-                            io.reply(&Reply::ok(json!({
-                                "path": d.path,
-                                "title": d.title,
-                                "description": d.description,
-                                "section": d.section,
-                                "uri": d.uri,
-                                "content": content
-                            })))
-                        } else {
-                            let _ = write!(io.out, "{content}");
-                            if !content.ends_with('\n') {
-                                let _ = writeln!(io.out);
-                            }
-                            Exit::Ok
-                        }
+        let name = self.app.name.clone();
+        if place {
+            return match &self.user_docs {
+                Some(dir) if json => io.reply(&Reply::ok(json!({"path": dir.display().to_string(), "exists": dir.is_dir()}))),
+                Some(dir) => {
+                    let _ = writeln!(io.out, "{}", dir.display());
+                    if !dir.is_dir() {
+                        let _ = writeln!(io.err, "(not created yet: make it and add .md files, in folders for categories, to add your own pages)");
                     }
-                    Err(e) => io.reply(&Reply::err(format!("reading {}: {e}", d.path))),
-                },
-                Err(e) => io.reply(&Reply::err(format!("{e} (see `{} docs`)", self.app.name))),
-            }
-        } else {
-            let filtered: Vec<&ashlar_mcp::Doc> = docs.iter().filter(|d| d.matches(query.as_deref(), section.as_deref())).collect();
-
-            if json {
-                let list: Vec<Value> = filtered
-                    .iter()
-                    .map(|d| {
-                        json!({
-                            "path": d.path,
-                            "title": d.title,
-                            "description": d.description,
-                            "section": d.section,
-                            "uri": d.uri,
-                        })
-                    })
-                    .collect();
-                io.reply(&Reply::ok(json!({"docs": list})))
-            } else {
-                if filtered.is_empty() {
-                    let _ = writeln!(io.out, "no documentation found");
-                    return Exit::Ok;
+                    Exit::Ok
                 }
-                let width = filtered.iter().map(|d| d.path.chars().count()).max().unwrap_or(0);
-                for d in &filtered {
-                    let _ = writeln!(io.out, "{:<width$}  {}", d.path, d.title);
-                }
-                Exit::Ok
-            }
+                None => io.reply(&Reply::err(format!("{name} has no folder for your own documentation"))),
+            };
         }
+        let lib = self.library();
+        let target = target.map(|t| t.trim().trim_matches('/').to_string());
+        // a file, verbatim
+        if let Some(t) = target.as_deref().filter(|t| t.ends_with(".md") || t.starts_with("docs://")) {
+            return match lib.read(t) {
+                Ok(text) if json => {
+                    let doc =
+                        lib.docs().iter().find(|d| d.path == t.trim_start_matches("docs://")).map(doc_json).unwrap_or_else(|| json!({"path": t}));
+                    let mut v = doc;
+                    if let Some(o) = v.as_object_mut() {
+                        o.insert("text".into(), json!(text));
+                    }
+                    io.reply(&Reply::ok(v))
+                }
+                Ok(text) => {
+                    let _ = write!(io.out, "{text}");
+                    Exit::Ok
+                }
+                Err(e) => io.reply(&Reply::err(format!("{e} (see `{name} docs`)"))),
+            };
+        }
+        let category = target.unwrap_or_default();
+        let Some(cat) = lib.category(&category) else {
+            let close = lib.close_matches(&category);
+            let hint = if close.is_empty() { String::new() } else { format!("; did you mean {}?", close.join(", ")) };
+            return io.reply(&Reply::err(format!("no category `{category}`{hint} (see `{name} docs`)")));
+        };
+        if let Some(q) = query.as_deref() {
+            let hits = lib.list(Some(&cat.path), Some(q), true);
+            if json {
+                return io.reply(&Reply::ok(json!({"docs": hits.into_iter().map(doc_json).collect::<Vec<_>>()})));
+            }
+            if hits.is_empty() {
+                let _ = writeln!(io.out, "nothing matches `{q}`");
+            }
+            write_docs(io.out, &hits);
+            return Exit::Ok;
+        }
+        if cat.path.is_empty() {
+            let Some(tree) = lib.tree("") else { return Exit::Ok };
+            if json {
+                return io.reply(&Reply::ok(node_json(&tree)));
+            }
+            let _ = writeln!(io.out, "{}: {} documents", tree.title, tree.total);
+            if !tree.description.is_empty() {
+                let _ = writeln!(io.out, "{}", tree.description);
+            }
+            let _ = writeln!(io.out);
+            write_tree(io.out, &tree.children, 1);
+            write_docs(io.out, &lib.list(Some(""), None, false));
+            let _ = writeln!(io.out, "\n`{name} docs <category>` shows one, `{name} docs <path.md>` prints a file, `--query Q` searches.");
+            return Exit::Ok;
+        }
+        if json {
+            return io.reply(&Reply::ok(category_json(&lib, &cat)));
+        }
+        let _ = writeln!(io.out, "{} ({}/)", cat.title, cat.path);
+        if !cat.overview.is_empty() {
+            let _ = writeln!(io.out, "\n{}", cat.overview);
+        }
+        if let Some(node) = lib.tree(&cat.path)
+            && !node.children.is_empty()
+        {
+            let _ = writeln!(io.out, "\nSubcategories:");
+            write_tree(io.out, &node.children, 1);
+        }
+        let docs = lib.list(Some(&cat.path), None, false);
+        if !docs.is_empty() {
+            let _ = writeln!(io.out, "\nDocuments:");
+            write_docs(io.out, &docs);
+        }
+        Exit::Ok
     }
 
     fn serve(&mut self, args: Args, io: &mut Io<'_>) -> Exit {
@@ -565,5 +593,25 @@ impl Cli {
         }
         let _ = writeln!(io.out, "{} {}", self.app.name, self.app.version);
         Exit::Ok
+    }
+}
+
+/// Categories as an indented list: path, title, documents (in it and below).
+fn write_tree(out: &mut dyn Write, nodes: &[ashlar_mcp::docs::Node], depth: usize) {
+    for n in nodes {
+        let path = format!("{}{}/", "  ".repeat(depth), n.path);
+        let _ = writeln!(out, "{path:<36} {} ({})", n.title, n.total);
+        write_tree(out, &n.children, depth + 1);
+    }
+}
+
+/// Documents: path and title, with the description under it; the user's own marked.
+fn write_docs(out: &mut dyn Write, docs: &[&ashlar_mcp::docs::Doc]) {
+    for d in docs {
+        let mine = if d.source == ashlar_mcp::docs::Source::User { "  [yours]" } else { "" };
+        let _ = writeln!(out, "  {}  {}{mine}", d.path, d.title);
+        if !d.description.is_empty() {
+            let _ = writeln!(out, "      {}", d.description);
+        }
     }
 }

@@ -253,87 +253,84 @@ fn connect_drives_the_running_app() {
     assert_eq!(run_in(&mut bare, &["exec", "count.add", "--connect", "7"], "").exit, Exit::Failed);
 }
 
-#[test]
-fn docs_verb_lists_and_reads_documents() {
-    let doc1 = ashlar_mcp::Doc::new("guide.md", "User Guide", "How to use the counter.", "# Guide\n\nCounter guide text.");
-    let doc2 = ashlar_mcp::Doc::new("skills/add.md", "Add Skill", "How to add things.", "# Add Skill\n\nInstructions on adding.");
-    let mut c = cli().docs(vec![doc1, doc2]);
+const ROOT: &str = "---\ntitle: Counter docs\ndescription: How to drive the counter\n---\nStart with the skills.\n";
+const ADD: &str = "---\ntitle: Add skill\ndescription: Read when adding\n---\n# Add\n\nInstructions on adding.\n";
+const GUIDE: &str = "---\ntitle: User guide\ndescription: Read first\n---\n# Guide\n";
 
-    // Human listing
+fn library() -> ashlar_mcp::Library {
+    ashlar_mcp::Library::from_files([("_category.md", ROOT), ("guide.md", GUIDE), ("skills/add.md", ADD), ("skills/more/deep.md", "# Deep\n")])
+}
+
+#[test]
+fn docs_shows_the_tree_a_category_and_a_file_verbatim() {
+    let mut c = cli().docs(library());
     let o = run_in(&mut c, &["docs"], "");
     assert_eq!(o.exit, Exit::Ok);
-    assert!(o.out.contains("guide.md"));
-    assert!(o.out.contains("User Guide"));
-    assert!(o.out.contains("skills/add.md"));
-    assert!(o.out.contains("Add Skill"));
+    assert!(o.out.starts_with("Counter docs: 3 documents\nHow to drive the counter\n"), "{}", o.out);
+    assert!(o.out.contains("  skills/") && o.out.contains("Skills (2)") && o.out.contains("    skills/more/"), "{}", o.out);
+    assert!(o.out.contains("guide.md  User guide"), "{}", o.out);
 
-    // JSON listing
-    let r = run_in(&mut c, &["docs", "--json"], "").reply();
-    assert_eq!(r["ok"], true);
-    let list = r["result"]["docs"].as_array().unwrap();
-    assert_eq!(list.len(), 2);
-    assert_eq!(list[0]["path"], "guide.md");
+    let tree = run_in(&mut c, &["docs", "--json"], "").reply();
+    assert_eq!(tree["result"]["total"], 3);
+    assert_eq!(tree["result"]["subcategories"][0]["path"], "skills");
+    assert_eq!(tree["result"]["subcategories"][0]["subcategories"][0]["docs"], 1);
 
-    // Filter by query
-    let r_q = run_in(&mut c, &["docs", "--json", "--query", "instructions"], "").reply();
-    let q_list = r_q["result"]["docs"].as_array().unwrap();
-    assert_eq!(q_list.len(), 1);
-    assert_eq!(q_list[0]["path"], "skills/add.md");
+    let cat = run_in(&mut c, &["docs", "skills"], "");
+    assert!(cat.out.starts_with("Skills (skills/)\n"), "{}", cat.out);
+    assert!(cat.out.contains("Subcategories:") && cat.out.contains("skills/add.md  Add skill"), "{}", cat.out);
+    let cat = run_in(&mut c, &["docs", "skills", "--json"], "").reply();
+    assert_eq!(cat["result"]["docs"][0]["path"], "skills/add.md");
+    assert_eq!(cat["result"]["docs"][0]["source"], "built-in");
 
-    // Filter by section
-    let r_sec = run_in(&mut c, &["docs", "--json", "--section", "skills"], "").reply();
-    let sec_list = r_sec["result"]["docs"].as_array().unwrap();
-    assert_eq!(sec_list.len(), 1);
-    assert_eq!(sec_list[0]["path"], "skills/add.md");
+    let file = run_in(&mut c, &["docs", "skills/add.md"], "");
+    assert_eq!((file.exit, file.out.as_str()), (Exit::Ok, ADD));
+    let file = run_in(&mut c, &["docs", "skills/add.md", "--json"], "").reply();
+    assert_eq!(file["result"]["text"], ADD);
 
-    // Read single document
-    let o_read = run_in(&mut c, &["docs", "guide.md"], "");
-    assert_eq!(o_read.exit, Exit::Ok);
-    assert_eq!(o_read.out, "# Guide\n\nCounter guide text.\n");
+    let q = run_in(&mut c, &["docs", "--query", "INSTRUCTIONS", "--json"], "").reply();
+    assert_eq!(q["result"]["docs"].as_array().unwrap().len(), 1);
 
-    // Read single document as JSON
-    let r_read = run_in(&mut c, &["docs", "guide.md", "--json"], "").reply();
-    assert_eq!(r_read["ok"], true);
-    assert_eq!(r_read["result"]["content"], "# Guide\n\nCounter guide text.");
-    assert_eq!(r_read["result"]["uri"], "docs://guide.md");
+    let miss = run_in(&mut c, &["docs", "add.md"], "");
+    assert_eq!(miss.exit, Exit::Failed);
+    assert!(miss.reply()["error"].as_str().unwrap().contains("`skills/add.md`"));
+    assert_eq!(run_in(&mut c, &["docs", "nope"], "").exit, Exit::Failed);
+    // no folder of the user's own
+    assert_eq!(run_in(&mut c, &["docs", "--where"], "").exit, Exit::Failed);
 
-    // Read nonexistent document
-    let o_missing = run_in(&mut c, &["docs", "missing.md"], "");
-    assert_eq!(o_missing.exit, Exit::Failed);
-    assert_eq!(o_missing.reply()["ok"], false);
-
-    // MCP server includes docs resources and tools
+    // the MCP server serves the same library
     let mcp_in = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "resources/list"}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read_doc", "arguments": {"path": "guide.md"}}}),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "read_doc", "arguments": {"path": "skills/add.md"}}}),
+        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "docs_categories", "arguments": {}}}),
     ]
     .map(|v| v.to_string())
     .join("\n")
         + "\n";
-    let o_mcp = run_in(&mut c, &["mcp"], &mcp_in);
-    assert_eq!(o_mcp.exit, Exit::Ok);
-    let l = o_mcp.lines();
-    assert_eq!(l.len(), 2);
-    let res = l[0]["result"]["resources"].as_array().unwrap();
-    assert!(res.iter().any(|r| r["uri"] == "docs://guide.md"));
-    assert_eq!(l[1]["result"]["content"][0]["text"], "# Guide\n\nCounter guide text.");
+    let l = run_in(&mut c, &["mcp"], &mcp_in).lines();
+    assert!(l[0]["result"]["instructions"].as_str().unwrap().contains("Start with the skills."));
+    assert!(l[1]["result"]["resources"].as_array().unwrap().iter().any(|r| r["uri"] == "docs://skills/add.md"));
+    assert_eq!(l[2]["result"]["content"][0]["text"], ADD);
+    assert!(l[3]["result"]["content"][0]["text"].as_str().unwrap().contains("\"total\": 3"));
 }
 
 #[test]
-fn docs_dir_loads_files_from_disk() {
+fn the_users_folder_is_read_on_top_and_where_names_it() {
     let tmp = tempfile::tempdir().unwrap();
-    let skills_dir = tmp.path().join("skills");
-    std::fs::create_dir_all(&skills_dir).unwrap();
-    std::fs::write(tmp.path().join("readme.md"), "# Welcome\n\nIntroductory document.").unwrap();
-    std::fs::write(skills_dir.join("cut.md"), "# Cut Skill\n\nInstructions for cutting.").unwrap();
+    let mine = tmp.path().join("agent-docs");
+    let mut c = cli().docs(library()).user_docs(&mine);
+    let o = run_in(&mut c, &["docs", "--where"], "");
+    assert_eq!((o.exit, o.out.trim()), (Exit::Ok, mine.display().to_string().as_str()));
+    assert_eq!(run_in(&mut c, &["docs", "--where", "--json"], "").reply()["result"]["exists"], false);
 
-    let mut c = cli().docs_dir(tmp.path());
-    let r = run_in(&mut c, &["docs", "--json"], "").reply();
-    assert_eq!(r["ok"], true);
-    let docs = r["result"]["docs"].as_array().unwrap();
-    assert_eq!(docs.len(), 2);
-
-    let o = run_in(&mut c, &["docs", "skills/cut.md"], "");
-    assert_eq!(o.exit, Exit::Ok);
-    assert_eq!(o.out, "# Cut Skill\n\nInstructions for cutting.\n");
+    std::fs::create_dir_all(mine.join("skills")).unwrap();
+    std::fs::write(mine.join("skills/add.md"), "---\ntitle: My add\ndescription: Mine\n---\nmine\n").unwrap();
+    std::fs::write(mine.join("notes.md"), "---\ntitle: Notes\ndescription: Mine\n---\n").unwrap();
+    let file = run_in(&mut c, &["docs", "skills/add.md"], "");
+    assert_eq!(file.out, "---\ntitle: My add\ndescription: Mine\n---\nmine\n");
+    let cat = run_in(&mut c, &["docs", "skills"], "");
+    assert!(cat.out.contains("skills/add.md  My add  [yours]"), "{}", cat.out);
+    let all = run_in(&mut c, &["docs", "--query", "mine", "--json"], "").reply();
+    let sources: Vec<&str> = all["result"]["docs"].as_array().unwrap().iter().map(|d| d["source"].as_str().unwrap()).collect();
+    assert_eq!(sources, ["yours", "yours"]);
 }

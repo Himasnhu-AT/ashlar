@@ -1,14 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Testing documentation and skills as MCP resources and tools.
+//! The documentation tools and resources over a library.
 
 use ashlar_command::{CommandError, CommandInfo, Dispatch};
-use ashlar_mcp::{Backend, Doc, McpServer, ServerOptions};
+use ashlar_mcp::{Backend, Library, McpServer, ServerOptions};
 use serde_json::{Value, json};
 
-#[derive(Default)]
-struct DummySession;
+struct Empty;
 
-impl Dispatch for DummySession {
+impl Dispatch for Empty {
     fn commands(&self) -> Vec<CommandInfo> {
         vec![]
     }
@@ -17,208 +16,86 @@ impl Dispatch for DummySession {
     }
 }
 
-fn server_with_docs() -> McpServer {
-    let opts = ServerOptions::new("tester", "0.1.0").instructions("Test server.");
-    let doc1 = Doc::new("guide.md", "User Guide", "The counter user guide.", "# Guide\n\nWelcome to counter.");
-    let doc2 = Doc::new(
-        "skills/launch-film.md",
-        "Launch Film Skill",
-        "Step by step guide for launch films.",
-        "# Launch Film\n\nHow to create a launch film.",
-    );
-    McpServer::new(Backend::Headless(Box::new(DummySession)), opts).docs(vec![doc1, doc2])
+const ROOT: &str = "---\ntitle: Tester docs\ndescription: All of it\n---\nThe library overview.\n";
+const CUT: &str = "---\ntitle: Cut\ndescription: Read when cutting\ntags: [edit]\n---\n# Cut\n\nSplit the clip.\n";
+const EASES: &str = "---\ntitle: Eases\ndescription: Curves\n---\n# Eases\n";
+
+fn server(lib: Library) -> McpServer {
+    McpServer::new(Backend::Headless(Box::new(Empty)), ServerOptions::new("tester", "0.1.0").instructions("Test server.")).docs(lib)
 }
 
-fn rpc(server: &mut McpServer, req: Value) -> Value {
-    let resp = server.handle_line(&req.to_string()).expect("a response line");
-    serde_json::from_str(&resp).unwrap()
+fn library() -> Library {
+    Library::from_files([("_category.md", ROOT), ("skills/cut.md", CUT), ("reference/motion/eases.md", EASES)])
 }
 
-#[test]
-fn docs_exposed_as_mcp_resources() {
-    let mut s = server_with_docs();
-    // Initialize
-    let init = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18"}
-        }),
-    );
-    assert!(init["result"]["serverInfo"].is_object());
+fn rpc(s: &mut McpServer, id: u64, method: &str, params: Value) -> Value {
+    let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string();
+    serde_json::from_str(&s.handle_line(&line).expect("a reply")).unwrap()
+}
 
-    // resources/list
-    let res = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"}));
-    let list = res["result"]["resources"].as_array().unwrap();
-    let uris: Vec<&str> = list.iter().filter_map(|r| r["uri"].as_str()).collect();
-    assert!(uris.contains(&"docs://guide.md"));
-    assert!(uris.contains(&"docs://skills/launch-film.md"));
+fn call(s: &mut McpServer, name: &str, args: Value) -> Value {
+    rpc(s, 9, "tools/call", json!({"name": name, "arguments": args}))["result"].clone()
+}
 
-    // Check annotations on skills doc (higher priority 0.9)
-    let skill_res = list.iter().find(|r| r["uri"] == "docs://skills/launch-film.md").unwrap();
-    assert_eq!(skill_res["annotations"]["priority"], 0.9);
-
-    // resources/read with full URI
-    let read1 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "resources/read",
-            "params": {"uri": "docs://guide.md"}
-        }),
-    );
-    assert_eq!(read1["result"]["contents"][0]["text"], "# Guide\n\nWelcome to counter.");
-
-    // resources/read with relative path
-    let read2 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "resources/read",
-            "params": {"uri": "skills/launch-film.md"}
-        }),
-    );
-    assert_eq!(read2["result"]["contents"][0]["text"], "# Launch Film\n\nHow to create a launch film.");
+fn text(r: &Value) -> &str {
+    r["content"][0]["text"].as_str().unwrap()
 }
 
 #[test]
-fn docs_exposed_as_mcp_tools() {
-    let mut s = server_with_docs();
-    rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18"}
-        }),
-    );
-
-    // tools/list includes list_docs and read_doc
-    let t_list = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
-    let tools = t_list["result"]["tools"].as_array().unwrap();
-    let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-    assert!(names.contains(&"list_docs"));
-    assert!(names.contains(&"read_doc"));
-
-    // tools/call list_docs without filter
-    let c1 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "list_docs", "arguments": {}}
-        }),
-    );
-    let matched: Value = serde_json::from_str(c1["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(matched.as_array().unwrap().len(), 2);
-
-    // tools/call list_docs with section filter
-    let c2 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {"name": "list_docs", "arguments": {"section": "skills"}}
-        }),
-    );
-    let matched_skills: Value = serde_json::from_str(c2["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(matched_skills.as_array().unwrap().len(), 1);
-    assert_eq!(matched_skills[0]["path"], "skills/launch-film.md");
-
-    // tools/call read_doc
-    let c3 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "tools/call",
-            "params": {"name": "read_doc", "arguments": {"path": "skills/launch-film.md"}}
-        }),
-    );
-    assert_eq!(c3["result"]["content"][0]["text"], "# Launch Film\n\nHow to create a launch film.");
-
-    // tools/call read_doc missing
-    let c4 = rpc(
-        &mut s,
-        json!({
-            "jsonrpc": "2.0",
-            "id": 6,
-            "method": "tools/call",
-            "params": {"name": "read_doc", "arguments": {"path": "nope.md"}}
-        }),
-    );
-    assert_eq!(c4["result"]["isError"], true);
+fn instructions_carry_the_overview_and_the_tools_are_listed() {
+    let mut s = server(library());
+    let init = rpc(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    let instructions = init["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.starts_with("Test server.\n\nThe library overview.\n\n"), "{instructions}");
+    assert!(instructions.contains("`docs_categories`") && instructions.ends_with("Backend: headless session (no window)."), "{instructions}");
+    let tools = rpc(&mut s, 2, "tools/list", json!({}));
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    for t in ["docs_categories", "list_docs", "read_doc"] {
+        assert!(names.contains(&t), "{names:?}");
+    }
+    // no library: no tools, and the instructions are as before
+    let mut bare = server(Library::new());
+    let init = rpc(&mut bare, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert_eq!(init["result"]["instructions"], "Test server. Backend: headless session (no window).");
+    let tools = rpc(&mut bare, 2, "tools/list", json!({}));
+    assert!(!tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "list_docs"));
 }
 
 #[test]
-fn markdown_reads_title_and_description_from_the_text() {
-    let d = Doc::markdown("skills/cut.md", "# Cut a scene\n\nSplit the clip at the playhead.\n\nMore.");
+fn categories_listing_and_reading() {
+    let mut s = server(library());
+    let tree: Value = serde_json::from_str(text(&call(&mut s, "docs_categories", json!({})))).unwrap();
+    assert_eq!((tree["title"].as_str(), tree["total"].as_u64()), (Some("Tester docs"), Some(2)));
+    let sub: Value = serde_json::from_str(text(&call(&mut s, "docs_categories", json!({"category": "reference"})))).unwrap();
+    assert_eq!(sub["subcategories"][0]["path"], "reference/motion");
+    assert_eq!(call(&mut s, "docs_categories", json!({"category": "nope"}))["isError"], true);
+
+    let all: Value = serde_json::from_str(text(&call(&mut s, "list_docs", json!({})))).unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    let flat: Value = serde_json::from_str(text(&call(&mut s, "list_docs", json!({"category": "reference", "recursive": false})))).unwrap();
+    assert_eq!(flat.as_array().unwrap().len(), 0);
+    let edit: Value = serde_json::from_str(text(&call(&mut s, "list_docs", json!({"query": "edit"})))).unwrap();
     assert_eq!(
-        (d.title.as_str(), d.description.as_str(), d.section.as_str(), d.uri.as_str()),
-        ("Cut a scene", "Split the clip at the playhead.", "skills", "docs://skills/cut.md")
+        (edit[0]["path"].as_str(), edit[0]["source"].as_str(), edit[0]["category"].as_str()),
+        (Some("skills/cut.md"), Some("built-in"), Some("skills"))
     );
-    let fm = Doc::markdown("intro.md", "---\ntitle: Start here\ndescription: What is served\n---\n# Other\n");
-    assert_eq!((fm.title.as_str(), fm.description.as_str(), fm.section.as_str()), ("Start here", "What is served", "general"));
+    assert_eq!(call(&mut s, "list_docs", json!({"category": "nope"}))["isError"], true);
+
+    assert_eq!(text(&call(&mut s, "read_doc", json!({"path": "skills/cut.md"}))), CUT);
+    let miss = call(&mut s, "read_doc", json!({"path": "cut.md"}));
+    assert_eq!(miss["isError"], true);
+    assert!(text(&miss).contains("`skills/cut.md`"), "{miss}");
 }
 
 #[test]
-fn find_takes_an_exact_path_or_a_unique_name_and_lists_ambiguous_ones() {
-    let docs = vec![
-        Doc::markdown("a/skills/review.md", "# A"),
-        Doc::markdown("b/skills/review.md", "# B"),
-        Doc::markdown("b/skills/sound.md", "# S"),
-        Doc::markdown("review.md", "# Top"),
-    ];
-    let find = |t: &str| ashlar_mcp::docs::find(&docs, t).map(|d| d.path.clone());
-    assert_eq!(find("review.md").unwrap(), "review.md");
-    assert_eq!(find("docs://a/skills/review.md").unwrap(), "a/skills/review.md");
-    assert_eq!(find("sound").unwrap(), "b/skills/sound.md");
-    assert_eq!(find("skills/sound.md").unwrap(), "b/skills/sound.md");
-    let e = find("skills/review.md").unwrap_err();
-    assert!(e.contains("a/skills/review.md") && e.contains("b/skills/review.md"), "{e}");
-    assert!(find("nope").is_err());
-}
-
-#[test]
-fn the_first_document_is_the_entry_point() {
-    let mut s = server_with_docs();
-    let init = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}));
-    let text = init["result"]["instructions"].as_str().unwrap();
-    assert!(text.contains("`list_docs`") && text.contains("`guide.md`"), "{text}");
-    let res = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"}));
-    let guide = res["result"]["resources"].as_array().unwrap().iter().find(|r| r["uri"] == "docs://guide.md").cloned().unwrap();
-    assert_eq!(guide["annotations"]["priority"], 1.0);
-}
-
-#[cfg(unix)]
-#[test]
-fn a_docs_dir_skips_symbolic_links() {
-    let outside = tempfile::tempdir().unwrap();
-    std::fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("page.md"), "# Page").unwrap();
-    std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
-    std::os::unix::fs::symlink(outside.path().join("secret.md"), dir.path().join("secret.md")).unwrap();
-    let docs = ashlar_mcp::docs::load_docs_from_dir(dir.path());
-    let paths: Vec<&str> = docs.iter().map(|d| d.path.as_str()).collect();
-    assert_eq!(paths, ["page.md"]);
-}
-
-#[test]
-fn for_agents_drops_images_and_links_to_pages_not_served() {
-    let shipped = |p: &str| ["guide/index.md", "guide/a.md", "top.md"].contains(&p);
-    let text = "# Index\n\n![a sheet](../images/sheet.png)\n\n*caption*\n\
-        | [a.md](a.md) | served |\n\
-        | [b.md](b.md) | not served |\n\
-        See [top](../top.md#part), [b](b.md), [site](https://example.com) and ![x](x.png) inline.\n\
-        [up](../../outside.md)";
-    let got = ashlar_mcp::docs::for_agents("guide/index.md", text, &shipped);
-    assert_eq!(got, "# Index\n\n\n*caption*\n| [a.md](a.md) | served |\nSee [top](../top.md#part), b, [site](https://example.com) and  inline.\nup");
+fn every_document_is_a_resource_read_verbatim() {
+    let mut s = server(library());
+    let list = rpc(&mut s, 1, "resources/list", json!({}));
+    let uris: Vec<&str> = list["result"]["resources"].as_array().unwrap().iter().filter_map(|r| r["uri"].as_str()).collect();
+    assert!(uris.contains(&"docs://skills/cut.md") && uris.contains(&"docs://reference/motion/eases.md"), "{uris:?}");
+    let read = rpc(&mut s, 2, "resources/read", json!({"uri": "docs://reference/motion/eases.md"}));
+    assert_eq!(read["result"]["contents"][0]["text"], EASES);
+    assert_eq!(read["result"]["contents"][0]["mimeType"], "text/markdown");
+    let missing = rpc(&mut s, 3, "resources/read", json!({"uri": "docs://nope.md"}));
+    assert!(missing["error"].is_object(), "{missing}");
 }

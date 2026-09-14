@@ -16,6 +16,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-fs` | Files and settings: app dirs, durable atomic writes, keyed settings, recent files | yes | yes |
 | 0 | `ashlar-jobs` | Background jobs: progress, cancel, panic isolation, apply-on-UI-thread | yes | yes |
 | 0 | `ashlar-trace-proto` | Telemetry wire format: envelopes, items, name rules, limits | yes | yes |
+| 0 | `ashlar-docs` | Documentation library for agents: folders are categories, markdown files are documents, embedded at build time, a run-time folder on top | yes | yes |
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
