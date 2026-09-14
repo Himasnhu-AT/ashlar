@@ -250,17 +250,15 @@ impl McpServer {
         self
     }
 
-    /// Add documents from a directory on disk to be exposed as MCP resources and tools.
+    /// Add the markdown files under `dir` as documents (read now; symbolic links skipped). For a
+    /// directory the caller chose explicitly: a shipped app embeds its pages with [`Self::docs`].
     pub fn docs_dir(mut self, dir: impl AsRef<std::path::Path>) -> Self {
-        let dir = dir.as_ref();
-        if dir.is_dir() {
-            let loaded = crate::docs::load_docs_from_dir(dir);
-            self.docs.extend(loaded);
-        }
+        self.docs.extend(crate::docs::load_docs_from_dir(dir.as_ref()));
         self
     }
 
-    /// Add a collection of documents to be exposed as MCP resources and tools.
+    /// Add documents, exposed as `docs://` resources and the `list_docs` / `read_doc` tools. The
+    /// first one is the entry point: the instructions name it and it is listed with top priority.
     pub fn docs(mut self, docs: impl IntoIterator<Item = crate::docs::Doc>) -> Self {
         self.docs.extend(docs);
         self
@@ -494,7 +492,11 @@ impl McpServer {
 
     fn instructions(&self) -> String {
         let base = if self.opts.instructions.is_empty() { DEFAULT_INSTRUCTIONS } else { self.opts.instructions.as_str() };
-        format!("{base} Backend: {}.", self.backend.describe())
+        let docs = match self.docs.first() {
+            Some(first) => format!(" Documentation and skills for agents: `list_docs`, then `read_doc` (start with `{}`).", first.path),
+            None => String::new(),
+        };
+        format!("{base}{docs} Backend: {}.", self.backend.describe())
     }
 
     fn notification(&mut self, method: &str) {
@@ -570,17 +572,17 @@ impl McpServer {
             list.push(json!({
                 "name": "list_docs",
                 "title": "List documentation and skills",
-                "description": "Discover available documentation files, guides, motion recipes and AI skills. Optional query filters by keyword in title, path or description.",
+                "description": "List the documentation and skills this app ships for agents: path, title, description, section. Optional filters by keyword (path, title, description or text) and by section.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "Filter by keyword in title, path or description"
+                            "description": "Keyword in the path, title, description or text"
                         },
                         "section": {
                             "type": "string",
-                            "description": "Filter by section (e.g. skills, styles, motion, reference)"
+                            "description": "Section (the top folder, or skills, styles, reference)"
                         }
                     },
                     "additionalProperties": false
@@ -596,13 +598,13 @@ impl McpServer {
             list.push(json!({
                 "name": "read_doc",
                 "title": "Read documentation or skill",
-                "description": "Read the markdown content of a documentation file, guide, or AI skill by path or URI.",
+                "description": "Read one document's markdown by path or docs:// URI (from list_docs).",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Path or URI of the document (e.g. 'video/skills/launch-film.md' or 'agents.md')"
+                            "description": "The document's path (e.g. 'skills/review.md') or URI; a unique file name also works"
                         }
                     },
                     "required": ["path"],
@@ -764,28 +766,11 @@ impl McpServer {
                 Err(e) => ToolResult::error(e).into(),
             },
             "list_docs" => {
-                let q = args.get("query").and_then(Value::as_str).map(str::to_ascii_lowercase);
-                let sec = args.get("section").and_then(Value::as_str).map(str::to_ascii_lowercase);
+                let (q, sec) = (args.get("query").and_then(Value::as_str), args.get("section").and_then(Value::as_str));
                 let matched: Vec<Value> = self
                     .docs
                     .iter()
-                    .filter(|d| {
-                        if let Some(ref s) = sec
-                            && !d.section.to_ascii_lowercase().contains(s)
-                        {
-                            return false;
-                        }
-                        if let Some(ref q) = q {
-                            let hit = d.path.to_ascii_lowercase().contains(q)
-                                || d.title.to_ascii_lowercase().contains(q)
-                                || d.description.to_ascii_lowercase().contains(q)
-                                || d.content.as_ref().is_some_and(|c| c.to_ascii_lowercase().contains(q));
-                            if !hit {
-                                return false;
-                            }
-                        }
-                        true
-                    })
+                    .filter(|d| d.matches(q, sec))
                     .map(|d| {
                         json!({
                             "path": d.path,
@@ -799,17 +784,13 @@ impl McpServer {
                 ToolResult::text(serde_json::to_string_pretty(&matched).unwrap_or_default()).into()
             }
             "read_doc" => match args.get("path").and_then(Value::as_str) {
-                Some(path) => {
-                    let norm = path.trim_start_matches("docs://").trim_start_matches("app://docs/").replace('\\', "/");
-                    let doc = self.docs.iter().find(|d| d.path == norm || d.uri == path || d.path.ends_with(&format!("/{norm}")) || d.name == norm);
-                    match doc {
-                        Some(d) => match d.read_content() {
-                            Ok(content) => ToolResult::text(content).into(),
-                            Err(e) => ToolResult::error(format!("reading {}: {e}", d.path)).into(),
-                        },
-                        None => ToolResult::error(format!("no document `{path}`; use list_docs to find documents")).into(),
-                    }
-                }
+                Some(path) => match crate::docs::find(&self.docs, path) {
+                    Ok(d) => match d.read_content() {
+                        Ok(content) => ToolResult::text(content).into(),
+                        Err(e) => ToolResult::error(format!("reading {}: {e}", d.path)).into(),
+                    },
+                    Err(e) => ToolResult::error(format!("{e}; use list_docs to find documents")).into(),
+                },
                 None => ToolResult::error("read_doc needs a string `path`").into(),
             },
             other => {
@@ -906,8 +887,14 @@ impl McpServer {
             ),
         ];
         list.extend(self.resources.iter().map(|r| r.def.clone()));
-        for d in &self.docs {
-            let priority = if d.section == "skills" { 0.9 } else { 0.7 };
+        for (i, d) in self.docs.iter().enumerate() {
+            let priority = if i == 0 {
+                1.0
+            } else if d.section == "skills" {
+                0.9
+            } else {
+                0.7
+            };
             list.push(res(&d.uri, &d.name, &d.title, &d.description, "text/markdown", priority));
         }
         if self.methods().iter().any(|m| m == "ui.snapshot") {
@@ -940,12 +927,7 @@ impl McpServer {
                 Reply::Err { error, .. } => return Err(failed(error)),
             },
             other => {
-                if let Some(d) = self.docs.iter().find(|d| {
-                    d.uri == other
-                        || d.path == other
-                        || other.strip_prefix("docs://") == Some(&d.path)
-                        || other.strip_prefix("app://docs/") == Some(&d.path)
-                }) {
+                if let Some(d) = self.docs.iter().find(|d| d.uri == other || d.path == other) {
                     let text = match d.read_content() {
                         Ok(t) => t,
                         Err(e) => return Err(failed(e)),

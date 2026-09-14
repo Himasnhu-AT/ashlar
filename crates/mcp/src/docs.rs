@@ -1,4 +1,8 @@
-//! Documentation and AI skills discovery and loading for MCP resources and tools.
+//! Documentation and AI skills for agents, served as MCP resources (`docs://<path>`), the
+//! `list_docs` / `read_doc` tools and the CLI's `docs` verb.
+//!
+//! Apps embed their pages in the binary ([`Doc::markdown`] over `include_str!`), so a shipped
+//! build needs no files beside it. [`load_docs_from_dir`] is for an explicit directory only.
 
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -42,6 +46,31 @@ impl Doc {
         Self { uri, path, name, title: title.into(), description: description.into(), section, content: Some(content.into()), source_path: None }
     }
 
+    /// A document from embedded markdown, its title and description read from the text
+    /// (frontmatter `title:` / `description:`, else the first heading and paragraph).
+    pub fn markdown(path: impl Into<String>, text: impl Into<String>) -> Self {
+        let path = path.into();
+        let text = text.into();
+        let name = Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or(&path).to_string();
+        let (title, description) = extract_metadata(&text, &name);
+        Self { title, description, ..Self::new(path, "", "", text) }
+    }
+
+    /// Whether the document passes a `list_docs` / `docs` filter: `section` is a case-insensitive
+    /// substring of its section, `query` of its path, title, description or embedded text.
+    pub fn matches(&self, query: Option<&str>, section: Option<&str>) -> bool {
+        let has = |hay: &str, needle: &str| hay.to_ascii_lowercase().contains(&needle.to_ascii_lowercase());
+        if let Some(s) = section
+            && !has(&self.section, s)
+        {
+            return false;
+        }
+        match query {
+            Some(q) => has(&self.path, q) || has(&self.title, q) || has(&self.description, q) || self.content.as_deref().is_some_and(|c| has(c, q)),
+            None => true,
+        }
+    }
+
     /// Read metadata from a markdown file on disk.
     pub fn from_file(base_dir: &Path, file_path: &Path) -> Result<Self, String> {
         let rel = match file_path.strip_prefix(base_dir) {
@@ -70,25 +99,38 @@ impl Doc {
     }
 }
 
-/// Derive section from path components.
+/// Derive section from path components: `skills`, `styles` or `reference` anywhere in the path,
+/// else the top folder, else `general`.
 fn derive_section(rel_path: &str) -> String {
     let parts: Vec<&str> = rel_path.split('/').filter(|p| !p.is_empty()).collect();
-    if parts.contains(&"skills") {
-        return "skills".to_string();
+    if let Some(known) = ["skills", "styles", "reference"].into_iter().find(|k| parts.contains(k)) {
+        return known.to_string();
     }
-    if parts.contains(&"styles") {
-        return "styles".to_string();
+    match parts.as_slice() {
+        [dir, _, ..] => (*dir).to_string(),
+        _ => "general".to_string(),
     }
-    if parts.contains(&"reference") {
-        return "reference".to_string();
+}
+
+/// Find one document by path or `docs://` URI. An exact path wins; otherwise a file name, a stem
+/// or a trailing part of the path must match exactly one document, and several matches are an
+/// error that lists them.
+pub fn find<'a>(docs: &'a [Doc], target: &str) -> Result<&'a Doc, String> {
+    let norm = target.trim().trim_start_matches("docs://").replace('\\', "/");
+    let norm = norm.trim_start_matches("./").trim_start_matches('/');
+    if let Some(d) = docs.iter().find(|d| d.path == norm || d.uri == target) {
+        return Ok(d);
     }
-    if parts.contains(&"motion") {
-        return "motion".to_string();
+    let suffix = format!("/{norm}");
+    let hits: Vec<&Doc> = docs.iter().filter(|d| d.name == norm || d.path.ends_with(&suffix)).collect();
+    match hits.as_slice() {
+        [one] => Ok(one),
+        [] => Err(format!("no document `{target}`")),
+        many => {
+            let paths: Vec<&str> = many.iter().map(|d| d.path.as_str()).collect();
+            Err(format!("`{target}` matches several documents: {}; give the full path", paths.join(", ")))
+        }
     }
-    if parts.contains(&"adr") {
-        return "adr".to_string();
-    }
-    if parts.len() > 1 { parts.first().map(|s| s.to_string()).unwrap_or_else(|| "general".to_string()) } else { "general".to_string() }
 }
 
 /// Convert a kebab-case or snake_case identifier to a readable title.
@@ -205,7 +247,7 @@ pub fn read_limited_text(path: &Path, max_bytes: usize) -> Result<String, String
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Load all markdown documents recursively from a directory.
+/// Load all markdown documents under `dir` (symbolic links are skipped), sorted by path.
 pub fn load_docs_from_dir(dir: &Path) -> Vec<Doc> {
     let mut docs = Vec::new();
     if dir.is_dir() {
@@ -229,9 +271,11 @@ fn walk_dir(base: &Path, current: &Path, depth: usize, out: &mut Vec<Doc>) {
         if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" {
             continue;
         }
-        if path.is_dir() {
+        // never follow a link out of the directory
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
             walk_dir(base, &path, depth.saturating_add(1), out);
-        } else if path.is_file() {
+        } else if kind.is_file() {
             let is_md =
                 path.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"));
             if is_md && let Ok(doc) = Doc::from_file(base, &path) {

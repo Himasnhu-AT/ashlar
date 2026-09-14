@@ -156,3 +156,57 @@ fn docs_exposed_as_mcp_tools() {
     );
     assert_eq!(c4["result"]["isError"], true);
 }
+
+#[test]
+fn markdown_reads_title_and_description_from_the_text() {
+    let d = Doc::markdown("skills/cut.md", "# Cut a scene\n\nSplit the clip at the playhead.\n\nMore.");
+    assert_eq!(
+        (d.title.as_str(), d.description.as_str(), d.section.as_str(), d.uri.as_str()),
+        ("Cut a scene", "Split the clip at the playhead.", "skills", "docs://skills/cut.md")
+    );
+    let fm = Doc::markdown("intro.md", "---\ntitle: Start here\ndescription: What is served\n---\n# Other\n");
+    assert_eq!((fm.title.as_str(), fm.description.as_str(), fm.section.as_str()), ("Start here", "What is served", "general"));
+}
+
+#[test]
+fn find_takes_an_exact_path_or_a_unique_name_and_lists_ambiguous_ones() {
+    let docs = vec![
+        Doc::markdown("a/skills/review.md", "# A"),
+        Doc::markdown("b/skills/review.md", "# B"),
+        Doc::markdown("b/skills/sound.md", "# S"),
+        Doc::markdown("review.md", "# Top"),
+    ];
+    let find = |t: &str| ashlar_mcp::docs::find(&docs, t).map(|d| d.path.clone());
+    assert_eq!(find("review.md").unwrap(), "review.md");
+    assert_eq!(find("docs://a/skills/review.md").unwrap(), "a/skills/review.md");
+    assert_eq!(find("sound").unwrap(), "b/skills/sound.md");
+    assert_eq!(find("skills/sound.md").unwrap(), "b/skills/sound.md");
+    let e = find("skills/review.md").unwrap_err();
+    assert!(e.contains("a/skills/review.md") && e.contains("b/skills/review.md"), "{e}");
+    assert!(find("nope").is_err());
+}
+
+#[test]
+fn the_first_document_is_the_entry_point() {
+    let mut s = server_with_docs();
+    let init = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}));
+    let text = init["result"]["instructions"].as_str().unwrap();
+    assert!(text.contains("`list_docs`") && text.contains("`guide.md`"), "{text}");
+    let res = rpc(&mut s, json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"}));
+    let guide = res["result"]["resources"].as_array().unwrap().iter().find(|r| r["uri"] == "docs://guide.md").cloned().unwrap();
+    assert_eq!(guide["annotations"]["priority"], 1.0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_docs_dir_skips_symbolic_links() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.md"), "# Secret").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("page.md"), "# Page").unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("linked")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret.md"), dir.path().join("secret.md")).unwrap();
+    let docs = ashlar_mcp::docs::load_docs_from_dir(dir.path());
+    let paths: Vec<&str> = docs.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(paths, ["page.md"]);
+}

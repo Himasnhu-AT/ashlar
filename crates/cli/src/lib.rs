@@ -158,13 +158,16 @@ impl Cli {
         self
     }
 
-    /// Directory containing markdown documentation and AI skills.
+    /// Serve the markdown files under `dir` (read when a verb needs them; symbolic links skipped),
+    /// when no [`Self::docs`] are given. Only the directory named here is read: a shipped app
+    /// embeds its pages instead.
     pub fn docs_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.docs_dir = Some(dir.into());
         self
     }
 
-    /// Explicit collection of documents and AI skills.
+    /// The documents and skills for agents (`docs`, and the MCP server's resources and tools);
+    /// the first is the entry point.
     pub fn docs(mut self, docs: impl IntoIterator<Item = ashlar_mcp::Doc>) -> Self {
         self.docs.extend(docs);
         self
@@ -448,11 +451,7 @@ impl Cli {
         if per_command {
             opts = opts.tools(ToolMode::PerCommand);
         }
-        let mut server = McpServer::new(backend, opts);
-        let docs = self.resolve_docs();
-        if !docs.is_empty() {
-            server = server.docs(docs);
-        }
+        let mut server = McpServer::new(backend, opts).docs(self.resolve_docs());
         // stdout carries only the protocol; problems go to stderr.
         match server.serve(&mut *io.input, &mut *io.out) {
             Ok(()) => Exit::Ok,
@@ -464,48 +463,10 @@ impl Cli {
     }
 
     fn resolve_docs(&self) -> Vec<ashlar_mcp::Doc> {
-        if !self.docs.is_empty() {
-            return self.docs.clone();
+        match &self.docs_dir {
+            Some(dir) if self.docs.is_empty() => ashlar_mcp::docs::load_docs_from_dir(dir),
+            _ => self.docs.clone(),
         }
-        let env_key = format!("{}_DOCS_DIR", self.app.name.to_ascii_uppercase().replace('-', "_"));
-        if let Ok(val) = std::env::var(&env_key) {
-            let p = PathBuf::from(val);
-            if p.is_dir() {
-                return ashlar_mcp::docs::load_docs_from_dir(&p);
-            }
-        }
-        if let Ok(val) = std::env::var("DOCS_DIR") {
-            let p = PathBuf::from(val);
-            if p.is_dir() {
-                return ashlar_mcp::docs::load_docs_from_dir(&p);
-            }
-        }
-        if let Some(dir) = &self.docs_dir
-            && dir.is_dir()
-        {
-            return ashlar_mcp::docs::load_docs_from_dir(dir);
-        }
-        let cur = std::path::Path::new("docs");
-        if cur.is_dir() {
-            let loaded = ashlar_mcp::docs::load_docs_from_dir(cur);
-            if !loaded.is_empty() {
-                return loaded;
-            }
-        }
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(parent) = exe.parent()
-        {
-            for rel in ["docs", "../docs", "../../docs"] {
-                let p = parent.join(rel);
-                if p.is_dir() {
-                    let loaded = ashlar_mcp::docs::load_docs_from_dir(&p);
-                    if !loaded.is_empty() {
-                        return loaded;
-                    }
-                }
-            }
-        }
-        Vec::new()
     }
 
     fn docs_verb(&mut self, mut args: Args, io: &mut Io<'_>) -> Exit {
@@ -526,12 +487,8 @@ impl Cli {
 
         let docs = self.resolve_docs();
         if let Some(target) = path {
-            let target_norm = target.trim_start_matches("docs://").trim_start_matches("app://docs/").replace('\\', "/");
-            let found = docs
-                .iter()
-                .find(|d| d.path == target_norm || d.uri == target || d.path.ends_with(&format!("/{target_norm}")) || d.name == target_norm);
-            match found {
-                Some(d) => match d.read_content() {
+            match ashlar_mcp::docs::find(&docs, &target) {
+                Ok(d) => match d.read_content() {
                     Ok(content) => {
                         if json {
                             io.reply(&Reply::ok(json!({
@@ -552,31 +509,10 @@ impl Cli {
                     }
                     Err(e) => io.reply(&Reply::err(format!("reading {}: {e}", d.path))),
                 },
-                None => io.reply(&Reply::err(format!("no document `{target}` (see `{}-cli docs` for available documents)", self.app.name))),
+                Err(e) => io.reply(&Reply::err(format!("{e} (see `{}-cli docs`)", self.app.name))),
             }
         } else {
-            let q = query.map(|s| s.to_ascii_lowercase());
-            let sec = section.map(|s| s.to_ascii_lowercase());
-            let filtered: Vec<&ashlar_mcp::Doc> = docs
-                .iter()
-                .filter(|d| {
-                    if let Some(ref s) = sec
-                        && !d.section.to_ascii_lowercase().contains(s)
-                    {
-                        return false;
-                    }
-                    if let Some(ref q) = q {
-                        let hit = d.path.to_ascii_lowercase().contains(q)
-                            || d.title.to_ascii_lowercase().contains(q)
-                            || d.description.to_ascii_lowercase().contains(q)
-                            || d.content.as_ref().is_some_and(|c| c.to_ascii_lowercase().contains(q));
-                        if !hit {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect();
+            let filtered: Vec<&ashlar_mcp::Doc> = docs.iter().filter(|d| d.matches(query.as_deref(), section.as_deref())).collect();
 
             if json {
                 let list: Vec<Value> = filtered
