@@ -197,6 +197,8 @@ pub struct McpServer {
     custom: Vec<CustomTool>,
     resources: Vec<CustomResource>,
     docs: crate::docs::Library,
+    /// The documentation category served as prompts ([`McpServer::prompts`]).
+    prompt_category: Option<String>,
     on_execute: Option<ExecuteHook>,
     pending: Vec<Pending>,
     /// The tools last listed (for strict arguments).
@@ -236,6 +238,7 @@ impl McpServer {
             custom: Vec::new(),
             resources: Vec::new(),
             docs: crate::docs::Library::new(),
+            prompt_category: None,
             on_execute: None,
             pending: Vec::new(),
             listed: Vec::new(),
@@ -296,6 +299,21 @@ impl McpServer {
     pub fn docs(mut self, library: crate::docs::Library) -> Self {
         self.docs = library;
         self
+    }
+
+    /// Serve the documents of one documentation category (and its subcategories) as MCP prompts:
+    /// `prompts/list` names one per page (its path inside the category, without `.md`) with its
+    /// title and description, and `prompts/get` returns the page as a user message, with the
+    /// optional `brief` argument appended. Typically the category of step-by-step guides.
+    pub fn prompts(mut self, category: impl Into<String>) -> Self {
+        let c: String = category.into();
+        self.prompt_category = Some(c.trim_matches('/').to_string());
+        self
+    }
+
+    /// The prompt category, when it holds at least one document.
+    fn prompt_category(&self) -> Option<&str> {
+        self.prompt_category.as_deref().filter(|c| !self.docs.list(Some(c), None, true).is_empty())
     }
 
     /// Let the app take over `execute` (and per-command tools) for some commands, e.g. a long
@@ -515,7 +533,11 @@ impl McpServer {
     }
 
     fn capabilities(&self) -> Value {
-        json!({"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}})
+        let mut c = json!({"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}});
+        if self.prompt_category().is_some() {
+            c["prompts"] = json!({"listChanged": false});
+        }
+        c
     }
 
     fn instructions(&self) -> String {
@@ -544,8 +566,21 @@ impl McpServer {
             "resources/list" => Ok(json!({"resources": self.list_resources()})),
             "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
             "resources/read" => self.read_resource(params),
+            "prompts/list" => match self.prompt_category() {
+                Some(c) => Ok(json!({"prompts": crate::docs::prompts(&self.docs, c)})),
+                None => Err((METHOD_NOT_FOUND, "method not found: prompts/list (this server has no prompts)".to_string())),
+            },
+            "prompts/get" => self.get_prompt(params),
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
+    }
+
+    fn get_prompt(&self, params: &Value) -> RpcResult {
+        let Some(category) = self.prompt_category() else {
+            return Err((METHOD_NOT_FOUND, "method not found: prompts/get (this server has no prompts)".to_string()));
+        };
+        let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "prompts/get needs a string `name`".to_string()))?;
+        crate::docs::prompt(&self.docs, category, name, params.get("arguments")).map_err(|e| (INVALID_PARAMS, e))
     }
 
     fn initialize(&mut self, params: &Value) -> Value {
@@ -694,7 +729,10 @@ impl McpServer {
                 return o;
             }
         }
-        ToolResult::from_reply(self.call("engine.execute", json!({"command": command, "params": params}))).into()
+        let reply = self.call("engine.execute", json!({"command": command, "params": params}));
+        // a running app or a worker answers for itself: say what was probably meant here
+        let reply = ashlar_control::explain_reply(reply, || self.commands().unwrap_or_default());
+        ToolResult::from_reply(reply).into()
     }
 
     fn call_tool(&mut self, params: &Value) -> Result<CallOutcome, (i64, String)> {
@@ -718,9 +756,12 @@ impl McpServer {
             "describe_command" => match (s("command"), self.commands()) {
                 (None, _) => ToolResult::error("describe_command needs a string `command`").into(),
                 (_, Err(e)) => ToolResult::error(e).into(),
-                (Some(id), Ok(list)) => match list.into_iter().find(|c| c.id == id) {
+                (Some(id), Ok(list)) => match list.iter().find(|c| c.id == id) {
                     Some(c) => ToolResult::json(&serde_json::to_value(c).unwrap_or_default()).into(),
-                    None => ToolResult::error(format!("no command `{id}`; see list_commands")).into(),
+                    None => {
+                        let hint = ashlar_command::did_you_mean_command(&id, &list).map(|h| format!("; {h}")).unwrap_or_default();
+                        ToolResult::error(format!("no command `{id}`{hint}; see list_commands")).into()
+                    }
                 },
             },
             "execute" => match s("command") {

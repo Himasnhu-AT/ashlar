@@ -99,3 +99,75 @@ fn every_document_is_a_resource_read_verbatim() {
     let missing = rpc(&mut s, 3, "resources/read", json!({"uri": "docs://nope.md"}));
     assert!(missing["error"].is_object(), "{missing}");
 }
+
+fn with_prompts() -> McpServer {
+    let lib = Library::from_files([
+        ("_category.md", ROOT),
+        ("skills/_category.md", "---\ntitle: Guides\ndescription: Whole jobs\n---\nPick one.\n"),
+        ("skills/cut.md", CUT),
+        ("skills/deep/trim.md", "---\ntitle: Trim\ndescription: Read when trimming\n---\nTrim it. See [cut](../cut.md).\n"),
+        ("reference/motion/eases.md", EASES),
+    ]);
+    server(lib).prompts("skills")
+}
+
+#[test]
+fn a_category_is_served_as_prompts() {
+    let mut s = with_prompts();
+    let init = rpc(&mut s, 1, "initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert_eq!(init["result"]["capabilities"]["prompts"], json!({"listChanged": false}));
+    let list = rpc(&mut s, 2, "prompts/list", json!({}));
+    let prompts = list["result"]["prompts"].as_array().unwrap();
+    assert_eq!(prompts.len(), 2, "{list}");
+    assert_eq!(
+        (prompts[0]["name"].as_str(), prompts[0]["title"].as_str(), prompts[0]["description"].as_str()),
+        (Some("cut"), Some("Cut"), Some("Read when cutting"))
+    );
+    assert_eq!(prompts[1]["name"], "deep/trim");
+    assert_eq!(prompts[0]["arguments"], json!([{"name": "brief", "description": prompts[0]["arguments"][0]["description"], "required": false}]));
+
+    let got = rpc(&mut s, 3, "prompts/get", json!({"name": "cut", "arguments": {"brief": "Cut the interview to 60 s"}}));
+    let r = &got["result"];
+    assert_eq!(r["description"], "Read when cutting");
+    assert_eq!((r["messages"][0]["role"].as_str(), r["messages"][0]["content"]["type"].as_str()), (Some("user"), Some("text")));
+    let text = r["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("(`skills/cut.md`)") && text.contains("# Cut\n\nSplit the clip."), "{text}");
+    assert!(!text.contains("title: Cut"), "the frontmatter is left out: {text}");
+    assert!(text.ends_with("## The brief\n\nCut the interview to 60 s\n"), "{text}");
+
+    let nested = rpc(&mut s, 4, "prompts/get", json!({"name": "deep/trim"}));
+    let text = nested["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("relative to `skills/deep/`") && text.contains("No brief was given"), "{text}");
+}
+
+#[test]
+fn prompt_errors_say_what_would_work() {
+    let mut s = with_prompts();
+    let miss = rpc(&mut s, 1, "prompts/get", json!({"name": "cutt"}));
+    assert_eq!(miss["error"]["code"], -32602);
+    assert!(miss["error"]["message"].as_str().unwrap().contains("did you mean `cut`"), "{miss}");
+    let far = rpc(&mut s, 2, "prompts/get", json!({"name": "zzzzzz"}));
+    assert!(far["error"]["message"].as_str().unwrap().contains("cut, deep/trim"), "{far}");
+    let arg = rpc(&mut s, 3, "prompts/get", json!({"name": "cut", "arguments": {"topic": "x"}}));
+    assert!(arg["error"]["message"].as_str().unwrap().contains("unknown argument `topic`"), "{arg}");
+    let typed = rpc(&mut s, 4, "prompts/get", json!({"name": "cut", "arguments": {"brief": 3}}));
+    assert_eq!(typed["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 5, "prompts/get", json!({}))["error"]["code"], -32602);
+    // no prompts registered, or an empty category: no capability and no methods
+    let mut bare = server(library());
+    assert!(rpc(&mut bare, 6, "initialize", json!({"protocolVersion": "2025-06-18"}))["result"]["capabilities"].get("prompts").is_none());
+    assert_eq!(rpc(&mut bare, 7, "prompts/list", json!({}))["error"]["code"], -32601);
+    let mut empty = server(library()).prompts("nothing-here");
+    assert_eq!(rpc(&mut empty, 8, "prompts/get", json!({"name": "cut"}))["error"]["code"], -32601);
+}
+
+#[test]
+fn newer_revisions_get_cache_hints_on_prompts() {
+    let mut s = with_prompts();
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}});
+    let list = rpc(&mut s, 1, "prompts/list", json!({"_meta": meta}));
+    assert_eq!(list["result"]["resultType"], "complete");
+    assert!(list["result"].get("ttlMs").is_some(), "{list}");
+    let got = rpc(&mut s, 2, "prompts/get", json!({"_meta": meta, "name": "cut"}));
+    assert_eq!(got["result"]["resultType"], "complete");
+}

@@ -150,6 +150,7 @@ pub mod menu;
 mod params;
 mod registry;
 pub mod shortcut;
+pub mod suggest;
 
 pub use fuzzy::{FuzzyMatch, fuzzy_match, fuzzy_rank};
 pub use journal::{CommandRun, Journal, JournalEntry, RunObserver};
@@ -157,6 +158,7 @@ pub use keymap::Keymap;
 pub use legacy::accepted_params;
 pub use params::{Kind, Param, params_schema, validate_params};
 pub use registry::{Bound, MAX_DEPTH, Registry, Validation};
+pub use suggest::{closest, did_you_mean_command, params_summary};
 
 impl CommandError {
     /// The command the error is about.

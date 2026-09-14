@@ -361,7 +361,10 @@ fn unknown_keys_are_refused_before_running() {
     let mut s = session();
     let syncs = s.syncs;
     let e = run(&mut s, "file.newProject", json!({"name": "A", "nmae": "B"})).unwrap_err();
-    assert_eq!(e, CommandError::bad_params("file.newProject", r#"unknown parameter(s) `nmae`; accepted: name (doc: {"name":str})"#));
+    assert_eq!(
+        e,
+        CommandError::bad_params("file.newProject", r#"unknown parameter(s) `nmae` (did you mean `name`?); accepted: name (doc: {"name":str})"#)
+    );
     assert_eq!(s.syncs, syncs, "a refused call does not run `after`");
     // a key every command accepts
     assert!(run(&mut s, "file.newProject", json!({"name": "A", "sequence": 3})).is_ok());

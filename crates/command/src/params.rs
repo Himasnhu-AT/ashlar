@@ -183,9 +183,16 @@ pub(crate) fn json_type(v: &Value) -> &'static str {
     }
 }
 
-/// `unknown parameter(s) `a`, `b`; accepted: x, y`.
+/// `unknown parameter(s) `a` (did you mean `x`?), `b`; accepted: x, y`.
 pub(crate) fn unknown_keys_error(unknown: &[&str], accepted: &[&str]) -> String {
-    let mut names: Vec<String> = unknown.iter().take(MAX_UNKNOWN_SHOWN).map(|k| shown(k)).collect();
+    let mut names: Vec<String> = unknown
+        .iter()
+        .take(MAX_UNKNOWN_SHOWN)
+        .map(|k| match crate::suggest::closest(k, accepted.iter().copied(), 1).first() {
+            Some(meant) => format!("{} (did you mean `{meant}`?)", shown(k)),
+            None => shown(k),
+        })
+        .collect();
     if unknown.len() > MAX_UNKNOWN_SHOWN {
         names.push(format!("and {} more", unknown.len() - MAX_UNKNOWN_SHOWN));
     }
