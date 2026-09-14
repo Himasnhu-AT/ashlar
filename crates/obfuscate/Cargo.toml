@@ -1,0 +1,11 @@
+[package]
+name = "ashlar-obfuscate"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Compile-time string obfuscation: keep build-time values out of a strings dump of the binary"
+
+[lints]
+workspace = true
+
+[dependencies]

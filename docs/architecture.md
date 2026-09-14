@@ -18,6 +18,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-trace-proto` | Telemetry wire format: envelopes, items, name rules, limits | yes | yes |
 | 0 | `ashlar-docs` | Documentation library for agents: folders are categories, markdown files are documents, embedded at build time, a run-time folder on top | yes | yes |
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
+| 0 | `ashlar-obfuscate` | Compile-time string obfuscation: build-time values kept out of a strings dump of the binary | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |

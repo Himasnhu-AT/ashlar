@@ -9,7 +9,7 @@
 //! still recover the value. It only raises the bar on a `strings` dump of the file at rest.
 //!
 //! ```
-//! let addr = ashlar::obfuscated!("https://example.invalid/v1");
+//! let addr = ashlar_obfuscate::obfuscated!("https://example.invalid/v1");
 //! assert_eq!(addr, "https://example.invalid/v1");
 //! ```
 
@@ -61,8 +61,8 @@ macro_rules! obfuscated {
     ($s:expr, $key:expr) => {{
         const __OBF_KEY: u64 = $key;
         const __OBF_N: usize = $s.len();
-        const __OBF_ENC: [u8; __OBF_N] = $crate::obfuscate::encode::<__OBF_N>($s.as_bytes(), __OBF_KEY);
-        $crate::obfuscate::decode(&__OBF_ENC, __OBF_KEY)
+        const __OBF_ENC: [u8; __OBF_N] = $crate::encode::<__OBF_N>($s.as_bytes(), __OBF_KEY);
+        $crate::decode(&__OBF_ENC, __OBF_KEY)
     }};
 }
 

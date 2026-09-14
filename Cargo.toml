@@ -16,6 +16,7 @@ ashlar-store = { path = "crates/store", version = "0.1.0" }
 ashlar-command = { path = "crates/command", version = "0.1.0" }
 ashlar-jobs = { path = "crates/jobs", version = "0.1.0" }
 ashlar-log = { path = "crates/log", version = "0.1.0" }
+ashlar-obfuscate = { path = "crates/obfuscate", version = "0.1.0" }
 ashlar-fs = { path = "crates/fs", version = "0.1.0" }
 # default features off: each crate names the native features it uses
 ashlar-native = { path = "crates/native", version = "0.1.0", default-features = false }

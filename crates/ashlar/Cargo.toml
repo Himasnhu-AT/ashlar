@@ -26,6 +26,7 @@ ashlar-mcp = { workspace = true }
 ashlar-cli = { workspace = true }
 ashlar-ui = { workspace = true }
 ashlar-app = { workspace = true }
+ashlar-obfuscate = { workspace = true }
 egui = { workspace = true }
 serde_json = { workspace = true }
 
