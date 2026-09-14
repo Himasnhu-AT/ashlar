@@ -19,6 +19,8 @@ pub use ashlar_ui as ui;
 pub use egui;
 pub use serde_json;
 
+pub mod obfuscate;
+
 /// What most apps need, in one `use ashlar::prelude::*;`.
 pub mod prelude {
     pub use ashlar_app::{App, Cx, Document, Driver, Effect, Headless, Session, cli_main};
