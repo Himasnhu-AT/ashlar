@@ -20,7 +20,7 @@ pub enum Backend {
     /// A running app reached on first use (and again after it restarts), so the MCP server can
     /// start before the app: until then each call says how to start it.
     App(AppPort),
-    /// A child process speaking the control protocol on stdin/stdout (`<app>-cli serve`): a crash
+    /// A child process speaking the control protocol on stdin/stdout (`<tool> serve`): a crash
     /// in a command kills the child, not the MCP server; the next call starts a fresh one.
     Subprocess(Subprocess),
 }

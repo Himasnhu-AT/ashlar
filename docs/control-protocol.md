@@ -5,7 +5,7 @@ Every ashlar app can be driven by an agent in three ways, all speaking **one met
 | Surface | Transport | Crate |
 |---|---|---|
 | Control port | JSON lines over TCP `127.0.0.1:<port>`, keyed | `ashlar-control` (`Server`, `Client`) |
-| Child process | JSON lines over stdin/stdout, no key (private pipe) | `ashlar-control::serve_stream`, `<app>-cli serve` |
+| Child process | JSON lines over stdin/stdout, no key (private pipe) | `ashlar-control::serve_stream`, `<tool> serve` |
 | MCP | JSON-RPC 2.0 over stdio; tools map onto the methods below | `ashlar-mcp` |
 | CLI | one-shot verbs, one-line replies | `ashlar-cli` |
 
@@ -221,6 +221,6 @@ real input schema.
 
 ## CLI reply contract
 
-`<app>-cli exec <id> [json]`, `describe`, `commands --json`, `run`, `version --json` print one line:
+`<tool> exec <id> [json]`, `describe`, `commands --json`, `run`, `version --json` print one line:
 `{"ok":true,"result":…}` or `{"ok":false,"error":"…"}` (plus `detail`). Exit codes: 0 ok, 1 the
 command failed, 2 usage error.

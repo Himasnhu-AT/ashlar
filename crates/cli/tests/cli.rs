@@ -156,13 +156,13 @@ fn run_lines_stops_at_the_first_failure_unless_keep_going() {
 fn unknown_verbs_help_and_no_arguments() {
     let o = run(&[]);
     assert_eq!(o.exit, Exit::Usage);
-    assert!(o.err.contains("counter-cli exec <id>"), "{}", o.err);
+    assert!(o.err.contains("counter exec <id>"), "{}", o.err);
     let o = run(&["frobnicate"]);
     assert_eq!(o.exit, Exit::Usage);
     assert!(o.err.contains("unknown command `frobnicate`"));
     let o = run(&["help"]);
     assert_eq!(o.exit, Exit::Ok);
-    assert!(o.out.contains("counter-cli mcp"));
+    assert!(o.out.contains("counter mcp"));
 }
 
 #[test]

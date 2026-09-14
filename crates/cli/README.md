@@ -1,15 +1,15 @@
 # ashlar-cli
 
-The standard verbs of an app's `-cli` binary, so every app is scriptable the same way:
+The standard verbs of an app's command-line tool (`<tool>`, the name given to `Cli::new`), so every app is scriptable the same way:
 
 ```text
-<app>-cli commands [--json] [--query Q]     list commands
-<app>-cli describe <id>                     one command in full (parameter schema)
-<app>-cli exec <id> [json|-]                run one command
-<app>-cli run <file.jsonl|-> [--keep-going] run {"command","params"} lines
-<app>-cli mcp [--isolate] [--per-command]   MCP server on stdio
-<app>-cli serve                             control protocol on stdio (worker for `mcp --isolate`)
-<app>-cli version [--json]
+<tool> commands [--json] [--query Q]     list commands
+<tool> describe <id>                     one command in full (parameter schema)
+<tool> exec <id> [json|-]                run one command
+<tool> run <file.jsonl|-> [--keep-going] run {"command","params"} lines
+<tool> mcp [--isolate] [--per-command]   MCP server on stdio
+<tool> serve                             control protocol on stdio (worker for `mcp --isolate`)
+<tool> version [--json]
 ```
 
 `--connect PORT` (on `commands`, `describe`, `exec`, `run`, `mcp`) drives the running app through

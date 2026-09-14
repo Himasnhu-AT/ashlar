@@ -1,14 +1,15 @@
-//! The standard verbs of an app's `-cli` binary, over its command registry:
+//! The standard verbs of an app's command-line tool, over its command registry (`<tool>` is the
+//! name given to [`Cli::new`], the command as it is installed):
 //!
 //! ```text
-//! <app>-cli commands [--json] [--query Q]     list commands
-//! <app>-cli describe <id>                     one command in full (parameter schema)
-//! <app>-cli docs [path] [--json] [--query Q]  list or read documentation and skills
-//! <app>-cli exec <id> [json|-]                run one command
-//! <app>-cli run <file.jsonl|-> [--keep-going] run {"command","params"} lines
-//! <app>-cli mcp [--isolate] [--per-command]   MCP server on stdio
-//! <app>-cli serve                             control protocol on stdio (a worker for `mcp --isolate`)
-//! <app>-cli version [--json]
+//! <tool> commands [--json] [--query Q]          list commands
+//! <tool> describe <id>                          one command in full (parameter schema)
+//! <tool> docs [path] [--json] [--query Q]       list or read documentation and skills
+//! <tool> exec <id> [json|-]                     run one command
+//! <tool> run <file.jsonl|-> [--keep-going]    run {"command","params"} lines
+//! <tool> mcp [--isolate] [--per-command]        MCP server on stdio
+//! <tool> serve                                  control protocol on stdio (a worker for `mcp --isolate`)
+//! <tool> version [--json]
 //! ```
 //!
 //! `commands`, `describe`, `exec`, `run` and `mcp` take `--connect PORT` to drive the running app
@@ -225,11 +226,11 @@ impl Cli {
         let _ = writeln!(out, "{name} {}\n\nusage:", self.app.version);
         for (verb, usage, about) in STANDARD {
             if !self.verbs.iter().any(|v| v.name == *verb) {
-                let _ = writeln!(out, "  {name}-cli {usage:<52} {about}");
+                let _ = writeln!(out, "  {name} {usage:<52} {about}");
             }
         }
         for v in &self.verbs {
-            let _ = writeln!(out, "  {name}-cli {:<52} {}", v.usage, v.about);
+            let _ = writeln!(out, "  {name} {:<52} {}", v.usage, v.about);
         }
         let _ = writeln!(out, "\nReplies are one JSON line {{\"ok\":…}}; exit codes 0 ok, 1 failed, 2 usage.");
     }
@@ -314,7 +315,7 @@ impl Cli {
                 let list: Vec<CommandInfo> = serde_json::from_value(v).unwrap_or_default();
                 match list.into_iter().find(|c| c.id == id) {
                     Some(c) => Reply::ok(serde_json::to_value(c).unwrap_or_default()),
-                    None => Reply::err(format!("no command `{id}` (see `{}-cli commands`)", self.app.name)),
+                    None => Reply::err(format!("no command `{id}` (see `{} commands`)", self.app.name)),
                 }
             }
             e => e,
@@ -509,7 +510,7 @@ impl Cli {
                     }
                     Err(e) => io.reply(&Reply::err(format!("reading {}: {e}", d.path))),
                 },
-                Err(e) => io.reply(&Reply::err(format!("{e} (see `{}-cli docs`)", self.app.name))),
+                Err(e) => io.reply(&Reply::err(format!("{e} (see `{} docs`)", self.app.name))),
             }
         } else {
             let filtered: Vec<&ashlar_mcp::Doc> = docs.iter().filter(|d| d.matches(query.as_deref(), section.as_deref())).collect();

@@ -8,7 +8,7 @@ act on those refs, wait for the result and check it. Three clients use the same 
 |---|---|
 | You, in a terminal | `ashlar-debug` (crate `ashlar-debug`) |
 | A test or CI job | `ashlar-debug batch file.ui`, or `ashlar_debug::run` from a Rust test |
-| An agent | the `ui_*` tools of `ashlar-mcp` (`<app>-cli mcp --connect PORT`) |
+| An agent | the `ui_*` tools of `ashlar-mcp` (`<tool> mcp --connect PORT`) |
 
 The methods (`ui.snapshot`, `ui.click`, `ui.fill`, `ui.wait`, …) are specified in
 [control-protocol.md](control-protocol.md).
