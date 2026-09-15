@@ -1,0 +1,21 @@
+[package]
+name = "ashlar-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Connect coding agents to an app: its MCP server in each agent's config, skills and rules made from a docs category, install and uninstall"
+
+[lints]
+workspace = true
+
+[dependencies]
+ashlar-docs = { workspace = true }
+ashlar-fs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# edits the TOML config of agents that use one, keeping the user's formatting and comments
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
+[dev-dependencies]
+tempfile = "3"
