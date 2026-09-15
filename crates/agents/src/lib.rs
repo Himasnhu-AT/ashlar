@@ -260,7 +260,19 @@ impl Plan {
     pub fn describe(&self, with_preview: bool) -> String {
         const PREVIEW_LINES: usize = 12;
         let mut out = format!("{}:\n", self.agent.title());
+        // without previews, skills are one line per folder and action
+        let mut grouped: Vec<(Action, PathBuf, Vec<String>)> = Vec::new();
         for c in self.changes.iter().filter(|c| c.action != Action::Unchanged) {
+            if !with_preview
+                && let Some(name) = c.what.strip_prefix("skill `").and_then(|n| n.strip_suffix('`'))
+                && let Some(dir) = c.path.parent().and_then(Path::parent)
+            {
+                match grouped.iter_mut().find(|(a, d, _)| *a == c.action && d == dir) {
+                    Some((_, _, names)) => names.push(name.to_string()),
+                    None => grouped.push((c.action, dir.to_path_buf(), vec![name.to_string()])),
+                }
+                continue;
+            }
             out.push_str(&format!("  {:<9} {}  ({})\n", c.action.as_str(), c.path.display(), c.what));
             if with_preview && matches!(c.action, Action::Create | Action::Update) {
                 let lines: Vec<&str> = c.preview.lines().collect();
@@ -271,6 +283,15 @@ impl Plan {
                     out.push_str(&format!("      | … {} more lines\n", lines.len() - PREVIEW_LINES));
                 }
             }
+        }
+        for (action, dir, names) in grouped {
+            let list = if names.len() > 4 {
+                format!("{}, … {} more", names.get(..3).unwrap_or_default().join(", "), names.len() - 3)
+            } else {
+                names.join(", ")
+            };
+            let n = names.len();
+            out.push_str(&format!("  {:<9} {}/  ({n} skill{}: {list})\n", action.as_str(), dir.display(), if n == 1 { "" } else { "s" }));
         }
         let same = self.changes.iter().filter(|c| c.action == Action::Unchanged).count();
         if same > 0 {

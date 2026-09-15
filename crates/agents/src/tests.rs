@@ -296,4 +296,7 @@ fn two_runs_in_one_second_keep_both_backups_and_skills_folders_go() {
     s2.server.command = "/y/app".into();
     let text = install(Agent::Claude, &Scope::User, &s2, &host).unwrap().describe(false);
     assert!(text.contains("update") && text.contains("(2 files already up to date)") && !text.contains("unchanged"), "{text}");
+    let fresh = tempfile::tempdir().unwrap();
+    let text = install(Agent::Claude, &Scope::User, &s, &Host::at(fresh.path(), Os::Mac)).unwrap().describe(false);
+    assert!(text.contains("skills/  (2 skills: app, app-review)"), "{text}");
 }
