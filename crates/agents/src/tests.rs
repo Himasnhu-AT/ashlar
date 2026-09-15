@@ -8,6 +8,7 @@ fn setup(cmd: &str) -> Setup {
         title: "App".into(),
         server: Server { command: cmd.into(), args: vec!["mcp".into()] },
         skills: vec![Skill::new("app", "Use App for editing.", "Start here."), Skill::new("app-review", "Check a cut.", "Review it.")],
+        window: Window::Keep,
     }
 }
 
@@ -299,4 +300,83 @@ fn two_runs_in_one_second_keep_both_backups_and_skills_folders_go() {
     let fresh = tempfile::tempdir().unwrap();
     let text = install(Agent::Claude, &Scope::User, &s, &Host::at(fresh.path(), Os::Mac)).unwrap().describe(false);
     assert!(text.contains("skills/  (2 skills: app, app-review)"), "{text}");
+}
+
+#[test]
+fn the_window_entry_is_written_where_agents_speak_http_and_removed_with_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let host = Host::at(home, Os::Mac);
+    write(&home.join(".codex/config.toml"), OTHER_TOML);
+    let mut s = setup("/x/app");
+    s.window = Window::Set { url: "http://127.0.0.1:39870/mcp".into(), token: "tok".into() };
+    for agent in Agent::ALL {
+        let plan = install(agent, &Scope::User, &s, &host).unwrap();
+        if agent == Agent::Windsurf {
+            assert!(plan.notes.iter().any(|n| n.contains("by hand")), "{:?}", plan.notes);
+        }
+        plan.apply("app").unwrap();
+        assert_eq!(state(agent, &Scope::User, &s, &host).unwrap(), State::Current, "{agent}");
+    }
+    let claude = read(&home.join(".claude.json"));
+    assert_eq!(
+        jsonc::get(&claude, &["mcpServers", "app-window"]).unwrap(),
+        Some(json!({"type": "http", "url": "http://127.0.0.1:39870/mcp", "headers": {"Authorization": "Bearer tok"}}))
+    );
+    assert!(jsonc::get(&claude, &["mcpServers", "app"]).unwrap().is_some(), "the headless server stays too");
+    assert_eq!(
+        jsonc::get(&read(&home.join(".gemini/settings.json")), &["mcpServers", "app-window", "httpUrl"]).unwrap(),
+        Some(json!("http://127.0.0.1:39870/mcp"))
+    );
+    let codex = read(&home.join(".codex/config.toml"));
+    assert!(
+        codex.contains("[mcp_servers.app-window]\nurl = \"http://127.0.0.1:39870/mcp\"\nhttp_headers = { Authorization = \"Bearer tok\" }\n"),
+        "{codex}"
+    );
+    assert!(codex.contains("[mcp_servers.app]\ncommand = \"/x/app\"\nargs = [\"mcp\"]\n"), "{codex}");
+    // a new token rewrites the entry; Keep leaves it; Remove takes it out
+    s.window = Window::Set { url: "http://127.0.0.1:39871/mcp".into(), token: "tok2".into() };
+    assert_eq!(state(Agent::Cursor, &Scope::User, &s, &host).unwrap(), State::Outdated);
+    install(Agent::Cursor, &Scope::User, &s, &host).unwrap().apply("app").unwrap();
+    assert!(read(&home.join(".cursor/mcp.json")).contains("Bearer tok2"));
+    s.window = Window::Keep;
+    assert!(install(Agent::Cursor, &Scope::User, &s, &host).unwrap().is_noop());
+    s.window = Window::Remove;
+    install(Agent::Codex, &Scope::User, &s, &host).unwrap().apply("app").unwrap();
+    assert!(!read(&home.join(".codex/config.toml")).contains("app-window"));
+    for agent in Agent::ALL {
+        uninstall(agent, &Scope::User, "app", &host).unwrap().apply("app").unwrap();
+    }
+    assert!(!read(&home.join(".cursor/mcp.json")).contains("app"));
+    assert_eq!(read(&home.join(".codex/config.toml")), OTHER_TOML);
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_code_is_told_through_its_own_command_when_it_is_installed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path();
+    let host = Host::at(home, Os::Mac);
+    let log = home.join("calls.txt");
+    let fake = home.join("bin/claude");
+    write(&fake, &format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()));
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plan = install(Agent::Claude, &Scope::User, &setup("/x/app"), &host).unwrap();
+    assert!(plan.describe(true).contains("claude mcp add-json app"), "{}", plan.describe(true));
+    let applied = plan.apply("app").unwrap();
+    let calls = read(&log);
+    assert!(calls.contains("mcp remove app -s user\nmcp add-json app {"), "{calls}");
+    assert!(calls.contains("\"command\":\"/x/app\""), "{calls}");
+    // the command made the change, so the file was not written by us
+    assert!(!home.join(".claude.json").exists());
+    assert!(applied.iter().any(|a| a.what == "MCP server `app`"));
+    // a failing command falls back to the file
+    write(&fake, "#!/bin/sh\necho nope >&2\nexit 3\n");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let applied = install(Agent::Claude, &Scope::User, &setup("/x/app"), &host).unwrap().apply("app").unwrap();
+    assert!(applied.iter().any(|a| a.what.contains("written directly") && a.what.contains("nope")), "{applied:?}");
+    assert!(read(&home.join(".claude.json")).contains("/x/app"));
+    let outcomes = run(Op::Uninstall("app"), &[Agent::Claude], &Scope::User, &host, true, "app");
+    assert!(report(&outcomes, true, false).contains("Restart Claude Code to pick this up."));
 }

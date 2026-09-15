@@ -113,6 +113,24 @@ pub struct Setup {
     pub server: Server,
     /// Skills, the entry skill first ([`skills::from_category`] makes the rest).
     pub skills: Vec<Skill>,
+    /// The open app's MCP endpoint (`<id>-window`, streamable HTTP), for agents that speak it.
+    pub window: Window,
+}
+
+/// What an install does with the `<id>-window` entry (the open app's HTTP endpoint).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Window {
+    /// Leave it as it is (a tool that doesn't know the endpoint, such as the command line).
+    Keep,
+    /// Write it: the app serves MCP at `url` and wants `token` as the bearer token.
+    Set { url: String, token: String },
+    /// Take it out (the app doesn't serve one).
+    Remove,
+}
+
+/// The name of the open app's entry: `<id>-window`.
+pub fn window_name(id: &str) -> String {
+    format!("{id}-window")
 }
 
 impl Setup {
@@ -163,6 +181,10 @@ pub struct Change {
     /// The file is the user's (a config file): back it up before changing it.
     #[serde(skip)]
     shared: bool,
+    /// Make the change by running these (the agent's own `mcp add` command) instead of writing
+    /// the file; the file is written when they fail.
+    #[serde(skip)]
+    via: Vec<(PathBuf, Vec<String>)>,
 }
 
 /// What an install or uninstall would do for one agent; nothing is written until [`Plan::apply`].
@@ -226,6 +248,16 @@ impl Plan {
                 std::fs::copy(&c.path, &b).map_err(io(&b))?;
                 backup = Some(b);
             }
+            let mut what = c.what.clone();
+            if !c.via.is_empty() {
+                match run_all(&c.via) {
+                    Ok(()) => {
+                        done.push(Applied { path: c.path.clone(), action: c.action, what, backup });
+                        continue;
+                    }
+                    Err(e) => what = format!("{what}; written directly, the agent's command failed: {e}"),
+                }
+            }
             match &c.new {
                 Some(text) => {
                     if let Some(dir) = c.path.parent() {
@@ -249,7 +281,7 @@ impl Plan {
                     }
                 }
             }
-            done.push(Applied { path: c.path.clone(), action: c.action, what: c.what.clone(), backup });
+            done.push(Applied { path: c.path.clone(), action: c.action, what, backup });
         }
         Ok(done)
     }
@@ -447,6 +479,41 @@ fn skills_dir(agent: Agent, scope: &Scope, host: &Host) -> PathBuf {
 }
 
 /// The server entry as `agent` writes it (`type` only for the agents that ask for it).
+/// Run each program with its arguments; the first failure, with what it printed.
+fn run_all(cmds: &[(PathBuf, Vec<String>)]) -> Result<(), String> {
+    for (program, args) in cmds {
+        let out = std::process::Command::new(program).args(args).stdin(std::process::Stdio::null()).output().map_err(|e| e.to_string())?;
+        // removing an entry that isn't there is fine
+        let removing = args.get(1).is_some_and(|a| a == "remove");
+        if !out.status.success() && !removing {
+            let text = String::from_utf8_lossy(&out.stderr).trim().chars().take(300).collect::<String>();
+            return Err(if text.is_empty() { format!("exit status {}", out.status) } else { text });
+        }
+    }
+    Ok(())
+}
+
+/// The window entry as `agent` writes it, as JSON; `None` for an agent without HTTP servers.
+fn http_entry(agent: Agent, url: &str, token: &str) -> Option<Value> {
+    let headers = json!({"Authorization": format!("Bearer {token}")});
+    match agent {
+        Agent::Claude | Agent::VsCode => Some(json!({"type": "http", "url": url, "headers": headers})),
+        Agent::Cursor | Agent::Codex => Some(json!({"url": url, "headers": headers})),
+        Agent::Gemini => Some(json!({"httpUrl": url, "headers": headers})),
+        Agent::Windsurf => None,
+    }
+}
+
+/// An entry is ours when it runs a program named after the app, or points at the app's loopback
+/// endpoint.
+fn entry_is_ours(v: &Value, id: &str) -> bool {
+    if let Some(cmd) = v.get("command").and_then(Value::as_str) {
+        return is_ours(cmd, id);
+    }
+    let url = v.get("url").or_else(|| v.get("httpUrl")).and_then(Value::as_str).unwrap_or("");
+    url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:") || url.is_empty()
+}
+
 fn entry(server: &Server, with_type: bool) -> Value {
     let mut v = json!({"command": server.command, "args": server.args});
     if with_type && let Some(m) = v.as_object_mut() {
@@ -471,81 +538,130 @@ fn change(path: PathBuf, old: Option<&str>, new: Option<String>, what: String, p
         (Some(o), Some(n)) if o == n => Action::Unchanged,
         (Some(_), Some(_)) => Action::Update,
     };
-    Change { path, action, what, preview, new, shared }
+    Change { path, action, what, preview, new, shared, via: Vec::new() }
 }
 
-/// The MCP server entry: set (`Some`) or removed (`None`).
-fn server_change(path: PathBuf, format: ConfigFormat, id: &str, server: Option<&Server>, notes: &mut Vec<String>) -> Result<Change, Error> {
+/// One server entry named `name`: set to `want` (the agent's JSON shape; TOML is made from it)
+/// or removed (`None`).
+fn server_change(path: PathBuf, format: ConfigFormat, id: &str, name: &str, want: Option<&Value>, notes: &mut Vec<String>) -> Result<Change, Error> {
     let old = read(&path)?;
+    server_change_on(path, old, format, id, name, want, notes)
+}
+
+/// [`server_change`] on `old`, the file as an earlier change leaves it.
+fn server_change_on(
+    path: PathBuf,
+    old: Option<String>,
+    format: ConfigFormat,
+    id: &str,
+    name: &str,
+    want: Option<&Value>,
+    notes: &mut Vec<String>,
+) -> Result<Change, Error> {
     let text = old.as_deref().unwrap_or("");
     let bad = |what: String| Error::Unreadable { path: path.clone(), what };
-    let what = format!("MCP server `{id}`");
+    let what = format!("MCP server `{name}`");
+    let not_ours = |v: &Value, notes: &mut Vec<String>| {
+        let shown = v.get("command").or_else(|| v.get("url")).and_then(Value::as_str).unwrap_or("something else").to_string();
+        notes.push(format!("left the `{name}` entry in {}: it points at `{shown}`, not this app", path.display()));
+    };
     let (new, preview) = match format {
-        ConfigFormat::Json { key, with_type } => match server {
-            Some(s) => {
-                let e = entry(s, with_type);
-                let new = jsonc::set(text, &[key, id], &e).map_err(|e| bad(e.to_string()))?;
-                (Some(new), format!("\"{key}\": {{ \"{id}\": {} }}", serde_json::to_string(&e).unwrap_or_default()))
+        ConfigFormat::Json { key, .. } => match want {
+            Some(e) => {
+                let new = jsonc::set(text, &[key, name], e).map_err(|e| bad(e.to_string()))?;
+                (Some(new), format!("\"{key}\": {{ \"{name}\": {} }}", serde_json::to_string(e).unwrap_or_default()))
             }
             None => {
-                let existing = jsonc::get(text, &[key, id]).map_err(|e| bad(e.to_string()))?;
-                if let Some(cmd) = existing.as_ref().and_then(|v| v.get("command")).and_then(Value::as_str)
-                    && !is_ours(cmd, id)
-                {
-                    notes.push(format!("left the `{id}` entry in {}: it runs `{cmd}`, not this app's tool", path.display()));
+                let existing = jsonc::get(text, &[key, name]).map_err(|e| bad(e.to_string()))?;
+                if let Some(v) = existing.filter(|v| !entry_is_ours(v, id)) {
+                    not_ours(&v, notes);
                     return Ok(change(path.clone(), old.as_deref(), old.clone(), what, String::new(), true));
                 }
-                let new = jsonc::remove(text, &[key, id]).map_err(|e| bad(e.to_string()))?;
+                let new = jsonc::remove(text, &[key, name]).map_err(|e| bad(e.to_string()))?;
                 (new.or_else(|| old.clone()), String::new())
             }
         },
         ConfigFormat::Toml => {
             let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| bad(format!("not valid TOML ({})", e.message())))?;
             let preview;
-            match server {
-                Some(s) => {
+            match want {
+                Some(e) => {
                     let servers = doc.entry("mcp_servers").or_insert_with(|| {
                         let mut t = toml_edit::Table::new();
                         t.set_implicit(true);
                         toml_edit::Item::Table(t)
                     });
                     let Some(servers) = servers.as_table_mut() else { return Err(bad("`mcp_servers` is not a table".into())) };
-                    let mut args = toml_edit::Array::new();
-                    for a in &s.args {
-                        args.push(a.as_str());
-                    }
                     // update in place so comments and other keys in our table survive
-                    let t = servers.entry(id).or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
-                    let Some(t) = t.as_table_mut() else { return Err(bad(format!("`mcp_servers.{id}` is not a table"))) };
-                    if t.get("command").and_then(|v| v.as_str()) != Some(s.command.as_str()) {
-                        t["command"] = toml_edit::value(s.command.as_str());
+                    let t = servers.entry(name).or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()));
+                    let Some(t) = t.as_table_mut() else { return Err(bad(format!("`mcp_servers.{name}` is not a table"))) };
+                    // in the order people read them, not the map's
+                    const ORDER: [&str; 6] = ["type", "command", "args", "url", "httpUrl", "headers"];
+                    let mut keys: Vec<(&String, &Value)> = e.as_object().into_iter().flatten().collect();
+                    keys.sort_by_key(|(k, _)| ORDER.iter().position(|o| o == k).unwrap_or(ORDER.len()));
+                    for (k, v) in keys {
+                        // Codex names the headers `http_headers`
+                        let k = if k == "headers" { "http_headers" } else { k.as_str() };
+                        let Some(tv) = toml_value(v) else { continue };
+                        if t.get(k).and_then(|i| i.as_value()).map(|x| x.to_string().trim().to_string()) != Some(tv.to_string().trim().to_string()) {
+                            t[k] = toml_edit::Item::Value(tv);
+                        }
                     }
-                    let same_args = t
-                        .get("args")
-                        .and_then(|v| v.as_array())
-                        .is_some_and(|a| a.iter().map(|x| x.as_str()).eq(s.args.iter().map(|x| Some(x.as_str()))));
-                    if !same_args {
-                        t["args"] = toml_edit::value(args);
-                    }
-                    preview = format!("[mcp_servers.{id}]\n{}", t);
+                    preview = format!("[mcp_servers.{name}]\n{}", t);
                 }
                 None => {
                     preview = String::new();
-                    let cmd =
-                        doc.get("mcp_servers").and_then(|s| s.get(id)).and_then(|t| t.get("command")).and_then(|c| c.as_str()).map(str::to_string);
-                    if let Some(cmd) = cmd.filter(|c| !is_ours(c, id)) {
-                        notes.push(format!("left `[mcp_servers.{id}]` in {}: it runs `{cmd}`, not this app's tool", path.display()));
+                    let existing = doc.get("mcp_servers").and_then(|s| s.get(name)).and_then(|t| t.as_table_like()).map(|t| {
+                        let get = |k: &str| t.get(k).and_then(|i| i.as_str()).map(|x| json!(x));
+                        json!({"command": get("command"), "url": get("url")})
+                    });
+                    let existing = existing.map(|v| {
+                        Value::Object(
+                            v.as_object().into_iter().flatten().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k.clone(), x.clone())).collect(),
+                        )
+                    });
+                    if let Some(v) = existing.filter(|v| !entry_is_ours(v, id)) {
+                        not_ours(&v, notes);
                     } else if let Some(servers) = doc.get_mut("mcp_servers").and_then(|s| s.as_table_mut()) {
-                        servers.remove(id);
+                        servers.remove(name);
                     }
                 }
             }
             let rendered = doc.to_string();
-            let new = if old.is_none() && server.is_none() { None } else { Some(rendered) };
+            let new = if old.is_none() && want.is_none() { None } else { Some(rendered) };
             (new, preview)
         }
     };
     Ok(change(path, old.as_deref(), new, what, preview, true))
+}
+
+/// A JSON value as a TOML value (objects become inline tables); `None` for null.
+fn toml_value(v: &Value) -> Option<toml_edit::Value> {
+    Some(match v {
+        Value::String(s) => s.as_str().into(),
+        Value::Bool(b) => (*b).into(),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => i.into(),
+            None => n.as_f64().unwrap_or(0.0).into(),
+        },
+        Value::Array(a) => {
+            let mut arr = toml_edit::Array::new();
+            for x in a.iter().filter_map(toml_value) {
+                arr.push(x);
+            }
+            arr.into()
+        }
+        Value::Object(m) => {
+            let mut t = toml_edit::InlineTable::new();
+            for (k, x) in m {
+                if let Some(x) = toml_value(x) {
+                    t.insert(k, x);
+                }
+            }
+            t.into()
+        }
+        Value::Null => return None,
+    })
 }
 
 /// A server entry is ours when it runs a program named after the app.
@@ -601,8 +717,59 @@ pub fn uninstall(agent: Agent, scope: &Scope, id: &str, host: &Host) -> Result<P
 fn plan(agent: Agent, scope: &Scope, setup: Option<&Setup>, id: &str, host: &Host) -> Result<Plan, Error> {
     let mut notes = Vec::new();
     let mut changes = Vec::new();
+    let window = window_name(id);
     for (path, format) in mcp_files(agent, scope, host) {
-        changes.push(server_change(path, format, id, setup.map(|s| &s.server), &mut notes)?);
+        let with_type = matches!(format, ConfigFormat::Json { with_type: true, .. });
+        let stdio = setup.map(|s| entry(&s.server, with_type));
+        changes.push(server_change(path.clone(), format, id, id, stdio.as_ref(), &mut notes)?);
+        let http = match setup.map(|s| &s.window) {
+            Some(Window::Keep) => continue,
+            Some(Window::Set { url, token }) => match http_entry(agent, url, token) {
+                Some(v) => Some(v),
+                None => {
+                    notes.push(format!(
+                        "{} has no entry for an HTTP server here: connect it to the open app by hand (Settings ▸ AI shows the URL and header)",
+                        agent.title()
+                    ));
+                    continue;
+                }
+            },
+            Some(Window::Remove) | None => None,
+        };
+        // on top of the first entry's change: one change per file
+        let Some(c1) = changes.pop() else { continue };
+        let base = match c1.action {
+            Action::Unchanged => read(&path)?,
+            _ => c1.new.clone(),
+        };
+        let c2 = server_change_on(path.clone(), base, format, id, &window, http.as_ref(), &mut notes)?;
+        let original = read(&path)?;
+        let mut merged = change(path, original.as_deref(), c2.new.clone(), c1.what.clone(), c1.preview.clone(), true);
+        let moved: Vec<&Change> = [&c1, &c2].into_iter().filter(|c| c.action != Action::Unchanged).collect();
+        if !moved.is_empty() {
+            merged.what = moved.iter().map(|c| c.what.as_str()).collect::<Vec<_>>().join(", ");
+            merged.preview = moved.iter().map(|c| c.preview.as_str()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\n");
+        }
+        changes.push(merged);
+    }
+    // Claude Code keeps its own state file: when its command is here, it makes the change
+    if agent == Agent::Claude
+        && *scope == Scope::User
+        && let Some(claude) = host.which("claude")
+    {
+        for c in changes.iter_mut().filter(|c| c.action != Action::Unchanged && c.what.starts_with("MCP server `")) {
+            let names: Vec<String> =
+                c.what.split(", ").filter_map(|w| w.strip_prefix("MCP server `").and_then(|n| n.strip_suffix('`'))).map(str::to_string).collect();
+            let mut via = Vec::new();
+            for name in &names {
+                via.push((claude.clone(), vec!["mcp".to_string(), "remove".into(), name.clone(), "-s".into(), "user".into()]));
+                if let Some(v) = c.new.as_deref().and_then(|t| jsonc::get(t, &["mcpServers", name]).ok().flatten()) {
+                    via.push((claude.clone(), vec!["mcp".to_string(), "add-json".into(), name.clone(), v.to_string(), "-s".into(), "user".into()]));
+                }
+            }
+            c.via = via;
+            c.preview = format!("{}\n(through `claude mcp add-json {} … -s user`)", c.preview, names.join(" / "));
+        }
     }
     let dir = skills_dir(agent, scope, host);
     // the shared folder keeps our skills while another agent that reads it still has our server
@@ -744,6 +911,12 @@ pub fn report(outcomes: &[Outcome], write: bool, preview: bool) -> String {
                     if let Some(b) = &a.backup {
                         out.push_str(&format!("  backup    {}\n", b.display()));
                     }
+                }
+                for a in o.applied.iter().filter(|a| a.what.contains("written directly")) {
+                    out.push_str(&format!("  note: {}\n", a.what));
+                }
+                if write && !o.applied.is_empty() {
+                    out.push_str(&format!("  Restart {} to pick this up.\n", o.agent.title()));
                 }
             }
             (None, _) => {}
