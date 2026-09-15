@@ -375,3 +375,33 @@ fn describe_names_the_closest_command() {
     let e = o.reply()["error"].as_str().unwrap().to_string();
     assert!(e.starts_with("unknown command `count.adx`; did you mean `count.add`"), "{e}");
 }
+
+#[test]
+fn docs_save_append_delete_write_only_the_users_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = tmp.path().join("agent-docs");
+    let mut c = cli().docs(library()).user_docs(&mine);
+    let page = "---\ntitle: Preferences\ndescription: Formats and exports\n---\n1080x1920, 30 fps.\n";
+    let o = run_in(&mut c, &["docs", "save", "memory/preferences.md"], page);
+    assert_eq!(o.exit, Exit::Ok, "{}", o.err);
+    assert!(o.out.starts_with("created memory/preferences.md"), "{}", o.out);
+    let src = tmp.path().join("note.txt");
+    std::fs::write(&src, "Likes hard cuts.").unwrap();
+    let o = run_in(&mut c, &["docs", "append", "memory/preferences.md", "--file", src.to_str().unwrap(), "--json"], "");
+    assert_eq!(o.reply()["result"]["created"], false);
+    let read = run_in(&mut c, &["docs", "memory/preferences.md"], "");
+    assert!(read.out.ends_with("1080x1920, 30 fps.\n\nLikes hard cuts.\n") && read.out.contains("updated: "), "{}", read.out);
+    // refusals are plain text
+    let o = run_in(&mut c, &["docs", "save", "skills/add.md"], page);
+    assert_eq!(o.exit, Exit::Failed);
+    assert!(o.err.contains("built-in"), "{}", o.err);
+    assert_eq!(run_in(&mut c, &["docs", "save", "skills/add.md", "--replace-builtin"], page).exit, Exit::Ok);
+    assert!(run_in(&mut c, &["docs", "save", "../x.md"], page).err.contains("not allowed"));
+    assert_eq!(run_in(&mut c, &["docs", "save"], page).exit, Exit::Usage);
+    let o = run_in(&mut c, &["docs", "delete", "memory/preferences.md"], "");
+    assert!(o.out.starts_with("deleted memory/preferences.md"), "{}", o.out);
+    assert!(!mine.join("memory/preferences.md").exists());
+    // a CLI without a user folder cannot write
+    let o = run_in(&mut cli().docs(library()), &["docs", "save", "memory/x.md"], page);
+    assert!(o.exit == Exit::Failed && o.err.contains("no folder"), "{}", o.err);
+}

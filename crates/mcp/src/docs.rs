@@ -1,7 +1,7 @@
 //! Documentation for agents ([`ashlar_docs`]) as MCP: the `docs_categories`, `list_docs` and
 //! `read_doc` tools and `docs://<path>` resources, and the JSON both they and the CLI print.
 
-pub use ashlar_docs::{CATEGORY_FILE, Category, Doc, Frontmatter, Library, Node, Source};
+pub use ashlar_docs::{CATEGORY_FILE, Category, Doc, Frontmatter, Library, Node, Source, write};
 use serde_json::{Value, json};
 
 /// A category tree: path, title, description, document counts, subcategories.

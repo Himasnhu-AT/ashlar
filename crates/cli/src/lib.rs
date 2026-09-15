@@ -149,7 +149,11 @@ impl Target {
 const STANDARD: &[(&str, &str, &str)] = &[
     ("commands", "commands [--json] [--query Q] [--connect PORT]", "list commands"),
     ("describe", "describe <id> [--connect PORT]", "one command in full, with its parameter schema"),
-    ("docs", "docs [category|path.md] [--query Q] [--json] [--where]", "the documentation: categories, a category, or a file verbatim"),
+    (
+        "docs",
+        "docs [category|path.md] [--query Q] [--json] [--where] | docs save|append <path.md> [--file F] [--replace-builtin] | docs delete <path.md>",
+        "the documentation: categories, a category, or a file verbatim; save, append to or delete a page of your own",
+    ),
     ("exec", "exec <id> [json|-] [--connect PORT]", "run one command (params as JSON, `-` reads stdin)"),
     ("run", "run <file.jsonl|-> [--keep-going] [--connect PORT]", "run {\"command\",\"params\"} lines, one reply each"),
     ("mcp", "mcp [--connect PORT | --isolate] [--per-command]", "MCP server on stdio"),
@@ -490,6 +494,9 @@ impl Cli {
             opts = opts.tools(ToolMode::PerCommand);
         }
         let mut server = McpServer::new(backend, opts).docs(self.library());
+        if let Some(dir) = &self.user_docs {
+            server = server.user_docs(dir.clone());
+        }
         if let Some(c) = &self.prompts {
             server = server.prompts(c.clone());
         }
@@ -520,9 +527,22 @@ impl Cli {
             Ok(q) => q,
             Err(e) => return io.usage(e, usage),
         };
+        let file = match args.value("--file") {
+            Ok(f) => f,
+            Err(e) => return io.usage(e, usage),
+        };
+        let replace = args.flag("--replace-builtin");
         let target = args.positional();
+        let write = target.as_deref().filter(|t| matches!(*t, "save" | "append" | "delete")).map(str::to_string);
+        let page = if write.is_some() { args.positional() } else { None };
         if let Err(e) = args.finish() {
             return io.usage(e, usage);
+        }
+        if let Some(verb) = write {
+            return self.docs_write(&verb, page, file, replace, json, io);
+        }
+        if file.is_some() || replace {
+            return io.usage("--file and --replace-builtin go with `docs save` / `docs append`", usage);
         }
         let name = self.app.name.clone();
         if place {
@@ -610,6 +630,49 @@ impl Cli {
             write_docs(io.out, &docs);
         }
         Exit::Ok
+    }
+
+    /// `docs save|append|delete <path>`: write the user's own pages (text from `--file` or stdin).
+    fn docs_write(&mut self, verb: &str, page: Option<String>, file: Option<String>, replace: bool, json: bool, io: &mut Io<'_>) -> Exit {
+        let usage = Self::usage_of("docs");
+        let name = self.app.name.clone();
+        let Some(dir) = self.user_docs.clone() else { return io.fail(json, &name, format!("{name} has no folder for your own documentation")) };
+        let Some(page) = page else { return io.usage(format!("docs {verb} needs a page path, e.g. memory/style.md"), usage) };
+        let text = if verb == "delete" {
+            String::new()
+        } else {
+            let read = match &file {
+                Some(f) if f != "-" => std::fs::read_to_string(f).map_err(|e| format!("could not read {f}: {e}")),
+                _ => {
+                    let mut s = String::new();
+                    io.input.read_to_string(&mut s).map(|_| s).map_err(|e| format!("could not read stdin: {e}"))
+                }
+            };
+            match read {
+                Ok(t) => t,
+                Err(e) => return io.usage(e, usage),
+            }
+        };
+        let built_in = self.docs.built_in_only();
+        let result = match verb {
+            "save" => ashlar_mcp::docs::write::save(&dir, &built_in, &page, &text, replace),
+            "append" => ashlar_mcp::docs::write::append(&dir, &page, &text),
+            _ => ashlar_mcp::docs::write::delete(&dir, &built_in, &page),
+        };
+        match result {
+            Ok(w) if json => io.reply(&Reply::ok(json!({"path": w.path, "file": w.file.display().to_string(), "created": w.created,
+                "bytes": w.bytes, "replacesBuiltIn": w.replaces_built_in}))),
+            Ok(w) => {
+                let done = match verb {
+                    "delete" => "deleted",
+                    _ if w.created => "created",
+                    _ => "saved",
+                };
+                let _ = writeln!(io.out, "{done} {} ({})", w.path, w.file.display());
+                Exit::Ok
+            }
+            Err(e) => io.fail(json, &name, e),
+        }
     }
 
     fn serve(&mut self, args: Args, io: &mut Io<'_>) -> Exit {

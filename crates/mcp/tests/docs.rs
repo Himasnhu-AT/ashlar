@@ -171,3 +171,59 @@ fn newer_revisions_get_cache_hints_on_prompts() {
     let got = rpc(&mut s, 2, "prompts/get", json!({"_meta": meta, "name": "cut"}));
     assert_eq!(got["result"]["resultType"], "complete");
 }
+
+#[test]
+fn the_users_pages_are_written_only_inside_their_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("agent-docs");
+    let lib = Library::from_files([
+        ("_category.md", ROOT),
+        ("skills/cut.md", CUT),
+        ("memory/_category.md", "---\ntitle: Memory\ndescription: The person's notes\n---\nRead these first.\n"),
+    ]);
+    let mut s = server(lib).user_docs(&dir);
+    let tools = rpc(&mut s, 1, "tools/list", json!({}));
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    for t in ["save_doc", "append_doc", "delete_doc"] {
+        assert!(names.contains(&t), "{names:?}");
+    }
+    // the memory category shows while it is empty
+    let tree: Value = serde_json::from_str(text(&call(&mut s, "docs_categories", json!({})))).unwrap();
+    assert!(tree["subcategories"].as_array().unwrap().iter().any(|c| c["path"] == "memory" && c["total"] == 0), "{tree}");
+    assert_eq!(text(&call(&mut s, "list_docs", json!({"category": "memory"}))).trim(), "[]");
+
+    let style = "---\ntitle: Editing style\ndescription: Read before cutting\ntags: [memory]\n---\nHard cuts.\n";
+    let saved = call(&mut s, "save_doc", json!({"path": "memory/style.md", "content": style}));
+    assert_ne!(saved["isError"], true, "{saved}");
+    let r: Value = serde_json::from_str(text(&saved)).unwrap();
+    assert_eq!((r["path"].as_str(), r["done"].as_str()), (Some("memory/style.md"), Some("created")));
+    // listed, searchable and read at once
+    let listed: Value = serde_json::from_str(text(&call(&mut s, "list_docs", json!({"category": "memory"})))).unwrap();
+    assert_eq!((listed[0]["path"].as_str(), listed[0]["source"].as_str()), (Some("memory/style.md"), Some("yours")));
+    assert!(text(&call(&mut s, "read_doc", json!({"path": "memory/style.md"}))).contains("updated: "));
+    call(&mut s, "append_doc", json!({"path": "memory/style.md", "text": "No wipes."}));
+    assert!(text(&call(&mut s, "read_doc", json!({"path": "memory/style.md"}))).ends_with("Hard cuts.\n\nNo wipes.\n"));
+
+    for (args, why) in [
+        (json!({"path": "../escape.md", "content": style}), "not allowed"),
+        (json!({"path": "/tmp/x.md", "content": style}), "relative"),
+        (json!({"path": "memory/x.txt", "content": style}), ".md"),
+        (json!({"path": "memory/x.md", "content": "no frontmatter"}), "title"),
+        (json!({"path": "skills/cut.md", "content": style}), "built-in"),
+    ] {
+        let r = call(&mut s, "save_doc", args.clone());
+        assert!(r["isError"] == true && text(&r).contains(why), "{args}: {r}");
+    }
+    assert!(!tmp.path().join("escape.md").exists());
+    let replaced = call(&mut s, "save_doc", json!({"path": "skills/cut.md", "content": style, "replace_builtin": true}));
+    assert_ne!(replaced["isError"], true, "{replaced}");
+    assert!(text(&call(&mut s, "read_doc", json!({"path": "skills/cut.md"}))).contains("Hard cuts."));
+    call(&mut s, "delete_doc", json!({"path": "skills/cut.md"}));
+    assert_eq!(text(&call(&mut s, "read_doc", json!({"path": "skills/cut.md"}))), CUT);
+    assert_eq!(call(&mut s, "delete_doc", json!({"path": "skills/cut.md"}))["isError"], true);
+
+    // without a folder there are no write tools
+    let mut bare = server(library());
+    let tools = rpc(&mut bare, 1, "tools/list", json!({}));
+    assert!(!tools["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "save_doc"));
+}

@@ -40,6 +40,42 @@ pub const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 const DOCS_SCHEME: &str = "docs://";
 const DOCS_HINT: &str = "Documentation for agents: start with `docs_categories` (the categories), then `list_docs` and `read_doc`.";
 
+/// The tools that write the user's own pages (when the server has a user folder).
+fn write_tools() -> Vec<Value> {
+    let path = json!({"type": "string", "description": "The page's path in the documentation, e.g. 'memory/style.md' or 'memory/edits/launch-film.md' (a relative .md path)"});
+    let hints = |title: &str, destructive: bool| json!({"title": title, "readOnlyHint": false, "destructiveHint": destructive, "idempotentHint": !destructive, "openWorldHint": false});
+    vec![
+        json!({
+            "name": "save_doc",
+            "title": "Save a page of your own",
+            "description": "Write a markdown page into the user's own documentation folder (created or replaced; listed and read like any page from then on). It needs `title` and `description` frontmatter; `updated` is set for you. Notes about the person (their style, preferences, past edits) go under `memory/`. A built-in page's path is refused unless replace_builtin is true.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": path.clone(),
+                "content": {"type": "string", "description": "The whole page: frontmatter (title, description, tags) then markdown"},
+                "replace_builtin": {"type": "boolean", "description": "Put this page in place of the built-in page of the same path (default false)"}
+            }, "required": ["path", "content"], "additionalProperties": false},
+            "annotations": hints("Save a page of your own", false),
+        }),
+        json!({
+            "name": "append_doc",
+            "title": "Add to a page of your own",
+            "description": "Add markdown to the end of one of the user's own pages (save it first). Prefer rewriting a page with save_doc when a note replaces an older one.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": path.clone(),
+                "text": {"type": "string", "description": "Markdown to add at the end"}
+            }, "required": ["path", "text"], "additionalProperties": false},
+            "annotations": hints("Add to a page of your own", false),
+        }),
+        json!({
+            "name": "delete_doc",
+            "title": "Delete a page of your own",
+            "description": "Delete one of the user's own pages (built-in pages cannot be deleted; a built-in page it replaced shows again).",
+            "inputSchema": {"type": "object", "properties": {"path": path}, "required": ["path"], "additionalProperties": false},
+            "annotations": hints("Delete a page of your own", true),
+        }),
+    ]
+}
+
 /// The documentation tools.
 fn docs_tools() -> Vec<Value> {
     let read_only =
@@ -197,6 +233,10 @@ pub struct McpServer {
     custom: Vec<CustomTool>,
     resources: Vec<CustomResource>,
     docs: crate::docs::Library,
+    /// The pages built into the program, and the user's folder read on top of them
+    /// ([`McpServer::user_docs`]); `docs` is the two together.
+    built_in_docs: crate::docs::Library,
+    user_dir: Option<std::path::PathBuf>,
     /// The documentation category served as prompts ([`McpServer::prompts`]).
     prompt_category: Option<String>,
     on_execute: Option<ExecuteHook>,
@@ -238,6 +278,8 @@ impl McpServer {
             custom: Vec::new(),
             resources: Vec::new(),
             docs: crate::docs::Library::new(),
+            built_in_docs: crate::docs::Library::new(),
+            user_dir: None,
             prompt_category: None,
             on_execute: None,
             pending: Vec::new(),
@@ -297,8 +339,27 @@ impl McpServer {
     /// The documentation library agents read: `docs_categories`, `list_docs` and `read_doc`, a
     /// `docs://<path>` resource per document, and its root overview in the instructions.
     pub fn docs(mut self, library: crate::docs::Library) -> Self {
+        self.built_in_docs = library.built_in_only();
         self.docs = library;
+        self.refresh_docs();
         self
+    }
+
+    /// The user's own documentation folder: read on top of the built-in pages (again before each
+    /// documentation call, so pages written meanwhile show), and written by the `save_doc`,
+    /// `append_doc` and `delete_doc` tools, which only touch markdown files inside it (see
+    /// [`ashlar_docs::write`]). It is created on the first write.
+    pub fn user_docs(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.user_dir = Some(dir.into());
+        self.refresh_docs();
+        self
+    }
+
+    /// Read the user's folder again on top of the built-in pages.
+    fn refresh_docs(&mut self) {
+        if let Some(dir) = &self.user_dir {
+            self.docs = self.built_in_docs.clone().overlay_dir(dir);
+        }
     }
 
     /// Serve the documents of one documentation category (and its subcategories) as MCP prompts:
@@ -558,6 +619,9 @@ impl McpServer {
     }
 
     fn request(&mut self, method: &str, params: &Value) -> RpcResult {
+        if method.starts_with("prompts/") {
+            self.refresh_docs();
+        }
         match method {
             "initialize" => Ok(self.initialize(params)),
             "server/discover" => Ok(self.discover()),
@@ -575,7 +639,8 @@ impl McpServer {
         }
     }
 
-    fn get_prompt(&self, params: &Value) -> RpcResult {
+    fn get_prompt(&mut self, params: &Value) -> RpcResult {
+        self.refresh_docs();
         let Some(category) = self.prompt_category() else {
             return Err((METHOD_NOT_FOUND, "method not found: prompts/get (this server has no prompts)".to_string()));
         };
@@ -632,8 +697,11 @@ impl McpServer {
             self.command_tools = names;
         }
         list.extend(self.custom.iter().map(|t| t.def.clone()));
-        if !self.docs.is_empty() {
+        if !self.docs.is_empty() || self.user_dir.is_some() {
             list.extend(docs_tools());
+        }
+        if self.user_dir.is_some() {
+            list.extend(write_tools());
         }
         self.listed.clone_from(&list);
         list
@@ -743,6 +811,9 @@ impl McpServer {
             Some(_) => return Err((INVALID_PARAMS, "`arguments` must be an object".to_string())),
         };
         self.check_arguments(name, &args)?;
+        if matches!(name, "docs_categories" | "list_docs" | "read_doc") {
+            self.refresh_docs();
+        }
         let token = progress_token(params).cloned();
         let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
         let outcome: ToolOutcome = match name {
@@ -806,6 +877,7 @@ impl McpServer {
                     }
                 }
             }
+            "save_doc" | "append_doc" | "delete_doc" => self.write_doc(name, &args).into(),
             "read_doc" => match args.get("path").and_then(Value::as_str) {
                 Some(path) => match self.docs.read(path) {
                     Ok(text) => ToolResult::text(text).into(),
@@ -834,6 +906,44 @@ impl McpServer {
             ToolOutcome::Done(r) => CallOutcome::Now(r.to_value()),
             ToolOutcome::Pending(call) => CallOutcome::Later(call),
         })
+    }
+
+    /// `save_doc`, `append_doc`, `delete_doc` in the user's folder.
+    fn write_doc(&mut self, name: &str, args: &Value) -> ToolResult {
+        let Some(dir) = self.user_dir.clone() else {
+            return ToolResult::error(format!("{name}: this server has no folder for the user's own pages"));
+        };
+        let s = |k: &str| args.get(k).and_then(Value::as_str);
+        let Some(path) = s("path") else { return ToolResult::error(format!("{name} needs a string `path`")) };
+        let result = match name {
+            "save_doc" => match s("content") {
+                Some(c) => {
+                    let replace = args.get("replace_builtin").and_then(Value::as_bool).unwrap_or(false);
+                    ashlar_docs::write::save(&dir, &self.built_in_docs, path, c, replace)
+                }
+                None => Err("save_doc needs a string `content`".into()),
+            },
+            "append_doc" => match s("text") {
+                Some(t) => ashlar_docs::write::append(&dir, path, t),
+                None => Err("append_doc needs a string `text`".into()),
+            },
+            _ => ashlar_docs::write::delete(&dir, &self.built_in_docs, path),
+        };
+        self.refresh_docs();
+        match result {
+            Ok(w) => {
+                let done = match name {
+                    "delete_doc" => "deleted",
+                    _ if w.created => "created",
+                    _ => "saved",
+                };
+                ToolResult::json(&json!({
+                    "path": w.path, "file": w.file.display().to_string(), "done": done, "bytes": w.bytes,
+                    "replacesBuiltIn": w.replaces_built_in,
+                }))
+            }
+            Err(e) => ToolResult::error(e),
+        }
     }
 
     /// `batch` one step at a time, for a client that asked for progress: a
@@ -891,6 +1001,7 @@ impl McpServer {
     /// What the app offers to read: its identity, its command table, and its UI (when the
     /// backend draws one).
     fn list_resources(&mut self) -> Vec<Value> {
+        self.refresh_docs();
         let res = |uri: &str, name: &str, title: &str, description: &str, mime: &str, priority: f64| {
             json!({"uri": uri, "name": name, "title": title, "description": description, "mimeType": mime,
                 "annotations": {"audience": ["assistant"], "priority": priority}})
@@ -942,6 +1053,7 @@ impl McpServer {
             },
             other => {
                 if let Some(path) = other.strip_prefix(DOCS_SCHEME) {
+                    self.refresh_docs();
                     return match self.docs.read(path) {
                         Ok(text) => Ok(json!({"contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]})),
                         Err(e) => Err((RESOURCE_NOT_FOUND, e)),

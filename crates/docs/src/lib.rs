@@ -12,6 +12,8 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+pub mod write;
+
 /// The file in a folder that describes its category.
 pub const CATEGORY_FILE: &str = "_category.md";
 /// Folders deeper than this are not read.
@@ -153,6 +155,14 @@ impl Library {
             }
         }
         self
+    }
+
+    /// Only the pages and categories built into the program (what a user folder overlays).
+    pub fn built_in_only(&self) -> Self {
+        Self {
+            docs: self.docs.iter().filter(|d| d.source == Source::BuiltIn).cloned().collect(),
+            categories: self.categories.iter().filter(|c| c.source == Source::BuiltIn).cloned().collect(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
