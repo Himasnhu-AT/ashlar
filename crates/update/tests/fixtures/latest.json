@@ -1,0 +1,1 @@
+{"app":"my-app","version":"1.4.0","published_at":1792540800000,"url":"https://downloads.example.com/my-app-1.4.0-macos-universal.dmg","sha256":"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08","size":123456789,"notes":"## What's new\n\n- Faster export\n- Fixed a crash when closing a project\n","mirror":"https://mirror.example.com/my-app-1.4.0.dmg"}
