@@ -206,6 +206,10 @@ fn print_lists_files_and_our_part_without_writing() {
     let plan = install(Agent::Codex, &Scope::User, &setup("/x/app"), &host).unwrap();
     let text = plan.describe(true);
     assert!(text.contains("create    ") && text.contains("config.toml") && text.contains("| [mcp_servers.app]"), "{text}");
+    // a long file is cut in the preview
+    let long = Setup { skills: vec![Skill::new("app", "d", &"line\n".repeat(40))], ..setup("/x/app") };
+    let text = install(Agent::Claude, &Scope::User, &long, &host).unwrap().describe(true);
+    assert!(text.contains("more lines") && text.matches("| line").count() < 12, "{text}");
     assert!(snapshot(dir.path()).is_empty(), "nothing written");
 }
 
@@ -256,4 +260,40 @@ fn select_run_and_report() {
     assert!(report(&run(Op::Install(&s), &[Agent::Gemini], &Scope::User, &host, true, "app"), true, false).contains("Gemini CLI: up to date"));
     let gone = run(Op::Uninstall("app"), &[Agent::Gemini], &Scope::User, &host, true, "app");
     assert_eq!(gone[0].applied.iter().filter(|a| a.action == Action::Remove).count(), 2);
+}
+
+#[test]
+fn overview_lists_every_agent_with_its_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Host::at(dir.path(), Os::Mac);
+    std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
+    let s = setup("/x/app");
+    install(Agent::Cursor, &Scope::User, &s, &host).unwrap().apply("app").unwrap();
+    let o = overview(&s, &Scope::User, &host);
+    assert_eq!(o.len(), 6);
+    let cursor = o.iter().find(|a| a.agent == Agent::Cursor).unwrap();
+    assert!(cursor.found && cursor.state == Some(State::Current));
+    let claude = o.iter().find(|a| a.agent == Agent::Claude).unwrap();
+    assert!(!claude.found && claude.state == Some(State::Missing));
+    assert_eq!(serde_json::to_value(cursor).unwrap()["state"], "current");
+}
+
+#[test]
+fn two_runs_in_one_second_keep_both_backups_and_skills_folders_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Host::at(dir.path(), Os::Mac);
+    write(&dir.path().join(".claude.json"), OTHER_JSON);
+    let s = setup("/x/app");
+    install(Agent::Claude, &Scope::User, &s, &host).unwrap().apply("app").unwrap();
+    uninstall(Agent::Claude, &Scope::User, "app", &host).unwrap().apply("app").unwrap();
+    let backups: Vec<(String, String)> = snapshot(dir.path()).into_iter().filter(|(p, _)| p.contains("-backup-")).collect();
+    assert_eq!(backups.len(), 2, "{backups:?}");
+    assert!(backups.iter().any(|(_, t)| t == OTHER_JSON), "the first backup holds the original");
+    assert!(!dir.path().join(".claude/skills").exists());
+    // a re-run reports what is already in place in one line
+    install(Agent::Claude, &Scope::User, &s, &host).unwrap().apply("app").unwrap();
+    let mut s2 = s.clone();
+    s2.server.command = "/y/app".into();
+    let text = install(Agent::Claude, &Scope::User, &s2, &host).unwrap().describe(false);
+    assert!(text.contains("update") && text.contains("(2 files already up to date)") && !text.contains("unchanged"), "{text}");
 }

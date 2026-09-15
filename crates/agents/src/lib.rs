@@ -216,7 +216,13 @@ impl Plan {
             let mut backup = None;
             if c.shared && c.path.is_file() {
                 let name = c.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let b = c.path.with_file_name(format!("{name}.{backup_tag}-backup-{stamp}"));
+                // never over an earlier backup (two runs in the same second)
+                let mut b = c.path.with_file_name(format!("{name}.{backup_tag}-backup-{stamp}"));
+                let mut n = 1u32;
+                while b.exists() && n < 1000 {
+                    n += 1;
+                    b = c.path.with_file_name(format!("{name}.{backup_tag}-backup-{stamp}-{n}"));
+                }
                 std::fs::copy(&c.path, &b).map_err(io(&b))?;
                 backup = Some(b);
             }
@@ -232,11 +238,14 @@ impl Plan {
                         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(&c.path)(e)),
                         _ => {}
                     }
-                    // a skill's folder goes with its SKILL.md when nothing else is in it
+                    // a skill's folder goes with its SKILL.md when nothing else is in it, and the
+                    // skills folder when that was the last skill
                     if c.path.file_name().is_some_and(|n| n == SKILL_FILE)
                         && let Some(dir) = c.path.parent()
+                        && std::fs::remove_dir(dir).is_ok()
+                        && let Some(skills) = dir.parent()
                     {
-                        let _ = std::fs::remove_dir(dir);
+                        let _ = std::fs::remove_dir(skills);
                     }
                 }
             }
@@ -245,16 +254,27 @@ impl Plan {
         Ok(done)
     }
 
-    /// The plan as text: one line per file, then the part that is ours for each change.
+    /// The plan as text: one line per file that changes (and how many are already as wanted),
+    /// with the part that is ours for each change when `with_preview` is set (long files are cut
+    /// after their first lines).
     pub fn describe(&self, with_preview: bool) -> String {
+        const PREVIEW_LINES: usize = 12;
         let mut out = format!("{}:\n", self.agent.title());
-        for c in &self.changes {
+        for c in self.changes.iter().filter(|c| c.action != Action::Unchanged) {
             out.push_str(&format!("  {:<9} {}  ({})\n", c.action.as_str(), c.path.display(), c.what));
             if with_preview && matches!(c.action, Action::Create | Action::Update) {
-                for line in c.preview.lines() {
+                let lines: Vec<&str> = c.preview.lines().collect();
+                for line in lines.iter().take(PREVIEW_LINES) {
                     out.push_str(&format!("      | {line}\n"));
                 }
+                if lines.len() > PREVIEW_LINES {
+                    out.push_str(&format!("      | … {} more lines\n", lines.len() - PREVIEW_LINES));
+                }
             }
+        }
+        let same = self.changes.iter().filter(|c| c.action == Action::Unchanged).count();
+        if same > 0 {
+            out.push_str(&format!("  ({same} file{} already up to date)\n", if same == 1 { "" } else { "s" }));
         }
         for n in &self.notes {
             out.push_str(&format!("  note: {n}\n"));
@@ -569,7 +589,7 @@ fn plan(agent: Agent, scope: &Scope, setup: Option<&Setup>, id: &str, host: &Hos
         let others: Vec<Agent> = Agent::ALL.into_iter().filter(|a| *a != agent && *a != Agent::Claude && has_server(*a, scope, id, host)).collect();
         if !others.is_empty() {
             let names: Vec<&str> = others.iter().map(|a| a.title()).collect();
-            notes.push(format!("kept the skills in {}: {} still use them", dir.display(), names.join(", ")));
+            notes.push(format!("kept the skills in {}: {} read them too and still have the server", dir.display(), names.join(", ")));
         }
         !others.is_empty()
     };
@@ -712,6 +732,33 @@ pub fn report(outcomes: &[Outcome], write: bool, preview: bool) -> String {
         out.push_str("(nothing written: --print)\n");
     }
     out
+}
+
+/// One agent in [`overview`]: found on this machine or not, and how far `setup` is installed.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentStatus {
+    pub agent: Agent,
+    pub id: &'static str,
+    pub title: &'static str,
+    pub found: bool,
+    pub evidence: Vec<String>,
+    /// `None` when its config could not be read (`error` says why).
+    pub state: Option<State>,
+    pub error: Option<String>,
+}
+
+/// Every supported agent with what [`detect`] found and its [`state`] for `setup`.
+pub fn overview(setup: &Setup, scope: &Scope, host: &Host) -> Vec<AgentStatus> {
+    detect(host)
+        .into_iter()
+        .map(|d| {
+            let (state, error) = match state(d.agent, scope, setup, host) {
+                Ok(s) => (Some(s), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+            AgentStatus { agent: d.agent, id: d.agent.id(), title: d.agent.title(), found: d.found, evidence: d.evidence, state, error }
+        })
+        .collect()
 }
 
 #[cfg(test)]
