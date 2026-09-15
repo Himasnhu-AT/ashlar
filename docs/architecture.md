@@ -26,6 +26,8 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 2 | `ashlar-trace-server` | Self-hosted telemetry server: ingest, SQLite store, rollups, dashboard | yes | – |
 | 2 | `ashlar-print` | System PDF print spooler (CUPS, Windows) | yes | – |
 | 2 | `ashlar-update` | Update checks: latest release from a releases API, semver comparison, background schedule, cached result, "later" per version | yes | – |
+| 2 | `ashlar-mcp-http` | MCP over streamable HTTP on loopback for an open app: bearer token, Host/Origin checks, a gate, sessions | yes | – |
+| 2 | `ashlar-agents` | Connect coding agents to an app: its MCP server in each agent's config, skills and rules from a docs category, install and uninstall | yes | – |
 | 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry over ashlar-trace: client, transport, hooks for commands, logs, frames and dialogs | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |

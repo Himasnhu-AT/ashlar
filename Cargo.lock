@@ -320,6 +320,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-agents"
+version = "0.1.0"
+dependencies = [
+ "ashlar-docs",
+ "ashlar-fs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml_edit 0.25.17+spec-1.1.0",
+]
+
+[[package]]
 name = "ashlar-app"
 version = "0.1.0"
 dependencies = [
@@ -496,6 +509,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "ashlar-mcp-http"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "serde_json",
 ]
 
 [[package]]
@@ -5452,6 +5473,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

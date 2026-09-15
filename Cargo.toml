@@ -23,6 +23,8 @@ ashlar-native = { path = "crates/native", version = "0.1.0", default-features = 
 ashlar-control = { path = "crates/control", version = "0.1.0" }
 ashlar-docs = { path = "crates/docs", version = "0.1.0" }
 ashlar-mcp = { path = "crates/mcp", version = "0.1.0" }
+ashlar-agents = { path = "crates/agents", version = "0.1.0" }
+ashlar-mcp-http = { path = "crates/mcp-http", version = "0.1.0" }
 ashlar-cli = { path = "crates/cli", version = "0.1.0" }
 ashlar-debug = { path = "crates/debug", version = "0.1.0" }
 ashlar-ui = { path = "crates/ui", version = "0.1.0" }
