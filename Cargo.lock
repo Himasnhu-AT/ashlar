@@ -634,6 +634,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-update"
+version = "0.1.0"
+dependencies = [
+ "ashlar-fs",
+ "log",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

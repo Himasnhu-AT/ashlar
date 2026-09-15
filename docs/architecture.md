@@ -24,6 +24,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 2 | `ashlar-control` | Agent control port: hardened JSON-lines server, client, standard method set | yes | – |
 | 2 | `ashlar-trace-server` | Self-hosted telemetry server: ingest, SQLite store, rollups, dashboard | yes | – |
 | 2 | `ashlar-print` | System PDF print spooler (CUPS, Windows) | yes | – |
+| 2 | `ashlar-update` | Update checks: latest release from a releases API, semver comparison, background schedule, cached result, "later" per version | yes | – |
 | 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry over ashlar-trace: client, transport, hooks for commands, logs, frames and dialogs | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
