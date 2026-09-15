@@ -614,5 +614,105 @@ pub fn state(agent: Agent, scope: &Scope, setup: &Setup, host: &Host) -> Result<
     Ok(if any_ours { State::Outdated } else { State::Missing })
 }
 
+/// Install or uninstall.
+#[derive(Debug, Clone, Copy)]
+pub enum Op<'a> {
+    Install(&'a Setup),
+    /// Remove what an install of this id added.
+    Uninstall(&'a str),
+}
+
+/// What happened for one agent in [`run`].
+#[derive(Debug, Clone, Serialize)]
+pub struct Outcome {
+    pub agent: Agent,
+    /// What would change (with `write`, what was meant to).
+    pub plan: Option<Plan>,
+    /// The files written, when `write` was set and it worked.
+    pub applied: Vec<Applied>,
+    pub error: Option<String>,
+}
+
+/// The agents `spec` names: `None` for the ones [`detect`] finds, `all` for every one, else a
+/// comma-separated list of [`Agent::id`]s (`claude,codex`).
+pub fn select(spec: Option<&str>, host: &Host) -> Result<Vec<Agent>, String> {
+    match spec.map(str::trim) {
+        None | Some("") => {
+            let found: Vec<Agent> = detect(host).into_iter().filter(|d| d.found).map(|d| d.agent).collect();
+            if found.is_empty() {
+                return Err(format!("no coding agent found on this machine; name one with --for ({})", ids()));
+            }
+            Ok(found)
+        }
+        Some("all") => Ok(Agent::ALL.to_vec()),
+        Some(list) => {
+            let mut out = Vec::new();
+            for part in list.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                let a = Agent::parse(part).ok_or_else(|| format!("unknown agent `{part}` (known: {}, all)", ids()))?;
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+            Ok(out)
+        }
+    }
+}
+
+fn ids() -> String {
+    Agent::ALL.iter().map(|a| a.id()).collect::<Vec<_>>().join(", ")
+}
+
+/// Plan `op` for each of `agents` and, with `write`, apply it (backups tagged `backup_tag`). One
+/// agent's failure (an unreadable config) does not stop the others.
+pub fn run(op: Op<'_>, agents: &[Agent], scope: &Scope, host: &Host, write: bool, backup_tag: &str) -> Vec<Outcome> {
+    agents
+        .iter()
+        .map(|&agent| {
+            let planned = match op {
+                Op::Install(s) => install(agent, scope, s, host),
+                Op::Uninstall(id) => uninstall(agent, scope, id, host),
+            };
+            match planned {
+                Err(e) => Outcome { agent, plan: None, applied: Vec::new(), error: Some(e.to_string()) },
+                Ok(plan) if !write => Outcome { agent, plan: Some(plan), applied: Vec::new(), error: None },
+                Ok(plan) => match plan.apply(backup_tag) {
+                    Ok(applied) => Outcome { agent, plan: Some(plan), applied, error: None },
+                    Err(e) => Outcome { agent, plan: Some(plan), applied: Vec::new(), error: Some(e.to_string()) },
+                },
+            }
+        })
+        .collect()
+}
+
+/// [`run`]'s outcomes as text for a terminal: per agent, each file and what was (or, without
+/// `write`, would be) done, with our part of each file when `preview` is set.
+pub fn report(outcomes: &[Outcome], write: bool, preview: bool) -> String {
+    let mut out = String::new();
+    for o in outcomes {
+        match (&o.plan, &o.error) {
+            (_, Some(e)) if o.applied.is_empty() => out.push_str(&format!("{}:\n  failed: {e}\n", o.agent.title())),
+            (Some(p), _) if p.is_noop() => {
+                out.push_str(&format!("{}: up to date\n", o.agent.title()));
+                for n in &p.notes {
+                    out.push_str(&format!("  note: {n}\n"));
+                }
+            }
+            (Some(p), _) => {
+                out.push_str(&p.describe(preview || !write));
+                for a in o.applied.iter().filter(|a| a.backup.is_some()) {
+                    if let Some(b) = &a.backup {
+                        out.push_str(&format!("  backup    {}\n", b.display()));
+                    }
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    if !write {
+        out.push_str("(nothing written: --print)\n");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

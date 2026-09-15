@@ -236,3 +236,24 @@ fn config_dir_overrides_are_honoured() {
     let in_home: Vec<String> = snapshot(&dir.path().join("home")).into_iter().map(|(p, _)| p).collect();
     assert!(in_home.iter().all(|p| p.starts_with(".agents/skills/")), "{in_home:?}");
 }
+
+#[test]
+fn select_run_and_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = Host::at(dir.path(), Os::Mac);
+    assert!(select(None, &host).unwrap_err().contains("no coding agent"));
+    std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
+    assert_eq!(select(None, &host).unwrap(), [Agent::Gemini]);
+    assert_eq!(select(Some("claude, code,claude"), &host).unwrap(), [Agent::Claude, Agent::VsCode]);
+    assert_eq!(select(Some("all"), &host).unwrap().len(), 6);
+    assert!(select(Some("emacs"), &host).unwrap_err().contains("unknown agent `emacs`"));
+    let s = setup("/x/app");
+    let dry = run(Op::Install(&s), &[Agent::Gemini], &Scope::User, &host, false, "app");
+    assert!(report(&dry, false, false).contains("(nothing written: --print)"));
+    assert!(!dir.path().join(".gemini/settings.json").exists());
+    let done = run(Op::Install(&s), &[Agent::Gemini], &Scope::User, &host, true, "app");
+    assert_eq!(done[0].applied.len(), 3, "{done:?}");
+    assert!(report(&run(Op::Install(&s), &[Agent::Gemini], &Scope::User, &host, true, "app"), true, false).contains("Gemini CLI: up to date"));
+    let gone = run(Op::Uninstall("app"), &[Agent::Gemini], &Scope::User, &host, true, "app");
+    assert_eq!(gone[0].applied.iter().filter(|a| a.action == Action::Remove).count(), 2);
+}
