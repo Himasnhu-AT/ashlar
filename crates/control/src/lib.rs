@@ -14,6 +14,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod client;
+mod explain;
 pub mod key;
 mod lines;
 mod methods;
@@ -21,6 +22,7 @@ mod protocol;
 mod server;
 
 pub use client::{Client, MAX_REPLY};
+pub use explain::{explain, explain_reply};
 pub use lines::{DEFAULT_MAX_LINE, serve_stream};
 pub use methods::{AppInfo, DEBUG_METHODS, MAX_BATCH, NoUi, STANDARD_METHODS, UI_METHODS, UiHandler, answer, handle, matches_query};
 pub use protocol::{PROTOCOL_VERSION, Reply, Request};

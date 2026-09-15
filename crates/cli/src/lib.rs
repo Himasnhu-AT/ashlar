@@ -78,6 +78,29 @@ impl Io<'_> {
         if r.is_ok() { Exit::Ok } else { Exit::Failed }
     }
 
+    /// A failure: with `json`, the reply line on stdout (as [`Io::reply`]); without it, one line
+    /// of plain text on stderr (`<tool>: <message>`), for a person reading a terminal.
+    pub fn fail(&mut self, json: bool, tool: &str, msg: impl std::fmt::Display) -> Exit {
+        if json {
+            return self.reply(&Reply::err(msg));
+        }
+        let _ = writeln!(self.err, "{tool}: {msg}");
+        Exit::Failed
+    }
+
+    /// A reply: with `json` the line on stdout; without it a success is the result as indented
+    /// JSON on stdout and an error is plain text on stderr (see [`Io::fail`]).
+    pub fn reply_as(&mut self, json: bool, tool: &str, r: &Reply) -> Exit {
+        match r {
+            _ if json => self.reply(r),
+            Reply::Ok(v) => {
+                let _ = writeln!(self.out, "{}", serde_json::to_string_pretty(v).unwrap_or_default());
+                Exit::Ok
+            }
+            Reply::Err { error, .. } => self.fail(false, tool, error),
+        }
+    }
+
     /// A usage error: the reply line on stdout, a hint on stderr.
     pub fn usage(&mut self, msg: impl std::fmt::Display, usage: &str) -> Exit {
         let _ = writeln!(self.out, "{}", Reply::err(&msg).to_json(None));
@@ -104,6 +127,7 @@ pub struct Cli {
     instructions: String,
     docs: ashlar_mcp::Library,
     user_docs: Option<PathBuf>,
+    prompts: Option<String>,
     verbs: Vec<Verb>,
 }
 
@@ -125,7 +149,11 @@ impl Target {
 const STANDARD: &[(&str, &str, &str)] = &[
     ("commands", "commands [--json] [--query Q] [--connect PORT]", "list commands"),
     ("describe", "describe <id> [--connect PORT]", "one command in full, with its parameter schema"),
-    ("docs", "docs [category|path.md] [--query Q] [--json] [--where]", "the documentation: categories, a category, or a file verbatim"),
+    (
+        "docs",
+        "docs [category|path.md] [--query Q] [--json] [--where] | docs save|append <path.md> [--file F] [--replace-builtin] | docs delete <path.md>",
+        "the documentation: categories, a category, or a file verbatim; save, append to or delete a page of your own",
+    ),
     ("exec", "exec <id> [json|-] [--connect PORT]", "run one command (params as JSON, `-` reads stdin)"),
     ("run", "run <file.jsonl|-> [--keep-going] [--connect PORT]", "run {\"command\",\"params\"} lines, one reply each"),
     ("mcp", "mcp [--connect PORT | --isolate] [--per-command]", "MCP server on stdio"),
@@ -143,6 +171,7 @@ impl Cli {
             instructions: String::new(),
             docs: ashlar_mcp::Library::new(),
             user_docs: None,
+            prompts: None,
             verbs: Vec::new(),
         }
     }
@@ -170,6 +199,12 @@ impl Cli {
     /// used (same path: the user's page wins). `docs --where` prints it; it is never created.
     pub fn user_docs(mut self, dir: impl Into<PathBuf>) -> Self {
         self.user_docs = Some(dir.into());
+        self
+    }
+
+    /// The documentation category `mcp` serves as prompts ([`McpServer::prompts`]).
+    pub fn prompts(mut self, category: impl Into<String>) -> Self {
+        self.prompts = Some(category.into());
         self
     }
 
@@ -231,7 +266,10 @@ impl Cli {
         for v in &self.verbs {
             let _ = writeln!(out, "  {name} {:<52} {}", v.usage, v.about);
         }
-        let _ = writeln!(out, "\nReplies are one JSON line {{\"ok\":…}}; exit codes 0 ok, 1 failed, 2 usage.");
+        let _ = writeln!(
+            out,
+            "\nReplies are one JSON line {{\"ok\":…}} (`commands`, `docs` and `version` print text unless --json, and their errors as text on stderr); exit codes 0 ok, 1 failed, 2 usage."
+        );
     }
 
     fn usage_of(verb: &str) -> &'static str {
@@ -264,9 +302,10 @@ impl Cli {
             Ok(c) => c,
             Err(e) => return io.usage(e, usage),
         };
+        let name = self.app.name.clone();
         let mut target = match self.target(connect) {
             Ok(t) => t,
-            Err(e) => return io.reply(&Reply::err(e)),
+            Err(e) => return io.fail(json, &name, e),
         };
         let r = target.call("engine.commands", json!({"query": query}), &self.app);
         if json {
@@ -288,7 +327,7 @@ impl Cli {
                 }
                 Exit::Ok
             }
-            e => io.reply(&e),
+            e => io.reply_as(false, &name, &e),
         }
     }
 
@@ -312,9 +351,12 @@ impl Cli {
         let r = match target.call("engine.commands", json!({}), &self.app) {
             Reply::Ok(v) => {
                 let list: Vec<CommandInfo> = serde_json::from_value(v).unwrap_or_default();
-                match list.into_iter().find(|c| c.id == id) {
+                match list.iter().find(|c| c.id == id) {
                     Some(c) => Reply::ok(serde_json::to_value(c).unwrap_or_default()),
-                    None => Reply::err(format!("no command `{id}` (see `{} commands`)", self.app.name)),
+                    None => {
+                        let hint = ashlar_command::did_you_mean_command(&id, &list).map(|h| format!("; {h}")).unwrap_or_default();
+                        Reply::err(format!("no command `{id}`{hint} (see `{} commands`)", self.app.name))
+                    }
                 }
             }
             e => e,
@@ -452,6 +494,12 @@ impl Cli {
             opts = opts.tools(ToolMode::PerCommand);
         }
         let mut server = McpServer::new(backend, opts).docs(self.library());
+        if let Some(dir) = &self.user_docs {
+            server = server.user_docs(dir.clone());
+        }
+        if let Some(c) = &self.prompts {
+            server = server.prompts(c.clone());
+        }
         // stdout carries only the protocol; problems go to stderr.
         match server.serve(&mut *io.input, &mut *io.out) {
             Ok(()) => Exit::Ok,
@@ -479,9 +527,22 @@ impl Cli {
             Ok(q) => q,
             Err(e) => return io.usage(e, usage),
         };
+        let file = match args.value("--file") {
+            Ok(f) => f,
+            Err(e) => return io.usage(e, usage),
+        };
+        let replace = args.flag("--replace-builtin");
         let target = args.positional();
+        let write = target.as_deref().filter(|t| matches!(*t, "save" | "append" | "delete")).map(str::to_string);
+        let page = if write.is_some() { args.positional() } else { None };
         if let Err(e) = args.finish() {
             return io.usage(e, usage);
+        }
+        if let Some(verb) = write {
+            return self.docs_write(&verb, page, file, replace, json, io);
+        }
+        if file.is_some() || replace {
+            return io.usage("--file and --replace-builtin go with `docs save` / `docs append`", usage);
         }
         let name = self.app.name.clone();
         if place {
@@ -494,7 +555,7 @@ impl Cli {
                     }
                     Exit::Ok
                 }
-                None => io.reply(&Reply::err(format!("{name} has no folder for your own documentation"))),
+                None => io.fail(json, &name, format!("{name} has no folder for your own documentation")),
             };
         }
         let lib = self.library();
@@ -515,14 +576,14 @@ impl Cli {
                     let _ = write!(io.out, "{text}");
                     Exit::Ok
                 }
-                Err(e) => io.reply(&Reply::err(format!("{e} (see `{name} docs`)"))),
+                Err(e) => io.fail(json, &name, format!("{e} (see `{name} docs`)")),
             };
         }
         let category = target.unwrap_or_default();
         let Some(cat) = lib.category(&category) else {
             let close = lib.close_matches(&category);
             let hint = if close.is_empty() { String::new() } else { format!("; did you mean {}?", close.join(", ")) };
-            return io.reply(&Reply::err(format!("no category `{category}`{hint} (see `{name} docs`)")));
+            return io.fail(json, &name, format!("no category `{category}`{hint} (see `{name} docs`)"));
         };
         if let Some(q) = query.as_deref() {
             let hits = lib.list(Some(&cat.path), Some(q), true);
@@ -569,6 +630,49 @@ impl Cli {
             write_docs(io.out, &docs);
         }
         Exit::Ok
+    }
+
+    /// `docs save|append|delete <path>`: write the user's own pages (text from `--file` or stdin).
+    fn docs_write(&mut self, verb: &str, page: Option<String>, file: Option<String>, replace: bool, json: bool, io: &mut Io<'_>) -> Exit {
+        let usage = Self::usage_of("docs");
+        let name = self.app.name.clone();
+        let Some(dir) = self.user_docs.clone() else { return io.fail(json, &name, format!("{name} has no folder for your own documentation")) };
+        let Some(page) = page else { return io.usage(format!("docs {verb} needs a page path, e.g. memory/style.md"), usage) };
+        let text = if verb == "delete" {
+            String::new()
+        } else {
+            let read = match &file {
+                Some(f) if f != "-" => std::fs::read_to_string(f).map_err(|e| format!("could not read {f}: {e}")),
+                _ => {
+                    let mut s = String::new();
+                    io.input.read_to_string(&mut s).map(|_| s).map_err(|e| format!("could not read stdin: {e}"))
+                }
+            };
+            match read {
+                Ok(t) => t,
+                Err(e) => return io.usage(e, usage),
+            }
+        };
+        let built_in = self.docs.built_in_only();
+        let result = match verb {
+            "save" => ashlar_mcp::docs::write::save(&dir, &built_in, &page, &text, replace),
+            "append" => ashlar_mcp::docs::write::append(&dir, &page, &text),
+            _ => ashlar_mcp::docs::write::delete(&dir, &built_in, &page),
+        };
+        match result {
+            Ok(w) if json => io.reply(&Reply::ok(json!({"path": w.path, "file": w.file.display().to_string(), "created": w.created,
+                "bytes": w.bytes, "replacesBuiltIn": w.replaces_built_in}))),
+            Ok(w) => {
+                let done = match verb {
+                    "delete" => "deleted",
+                    _ if w.created => "created",
+                    _ => "saved",
+                };
+                let _ = writeln!(io.out, "{done} {} ({})", w.path, w.file.display());
+                Exit::Ok
+            }
+            Err(e) => io.fail(json, &name, e),
+        }
     }
 
     fn serve(&mut self, args: Args, io: &mut Io<'_>) -> Exit {

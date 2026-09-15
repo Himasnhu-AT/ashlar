@@ -109,7 +109,10 @@ fn standard(method: &str, p: &Value, dispatch: &mut dyn Dispatch, ui: &dyn UiHan
             Reply::ok(serde_json::to_value(list).unwrap_or_default())
         }
         "engine.execute" => match p.get("command").and_then(Value::as_str) {
-            Some(id) => Reply::from_command(execute(dispatch, id, params_of(p))),
+            Some(id) => match execute(dispatch, id, params_of(p)) {
+                Ok(v) => Reply::Ok(v),
+                Err(e) => crate::explain::explain(&e, &commands(dispatch)),
+            },
             None => Reply::err("engine.execute needs a string `command`"),
         },
         "engine.batch" => batch(dispatch, p),
@@ -168,8 +171,12 @@ fn batch(dispatch: &mut dyn Dispatch, p: &Value) -> Reply {
         match execute(dispatch, id, params_of(step)) {
             Ok(v) => out.push(json!({"command": id, "ok": true, "result": v})),
             Err(e) => {
-                out.push(json!({"command": id, "ok": false, "error": e.to_string(), "detail": e}));
-                first_failure.get_or_insert(format!("step {} (`{id}`) failed: {e}", i.saturating_add(1)));
+                let (msg, detail) = match crate::explain::explain(&e, &commands(dispatch)) {
+                    Reply::Err { error, detail } => (error, detail.unwrap_or(Value::Null)),
+                    Reply::Ok(_) => (e.to_string(), serde_json::to_value(&e).unwrap_or(Value::Null)),
+                };
+                out.push(json!({"command": id, "ok": false, "error": msg, "detail": detail}));
+                first_failure.get_or_insert(format!("step {} (`{id}`) failed: {msg}", i.saturating_add(1)));
                 failed = failed.saturating_add(1);
                 if !keep_going {
                     break;
@@ -237,8 +244,12 @@ mod tests {
         assert_eq!(v.as_array().unwrap().len(), 1);
         assert_eq!(call(&mut d, "engine.execute", json!({"command": "count.add", "params": {"by": 5}})), Reply::ok(json!(5)));
         assert_eq!(call(&mut d, "engine.execute", json!({"command": "count.add"})), Reply::ok(json!(6)));
-        let Reply::Err { detail, .. } = call(&mut d, "engine.execute", json!({"command": "nope"})) else { panic!() };
-        assert_eq!(detail, Some(json!({"kind": "unknown", "id": "nope"})));
+        let Reply::Err { error, detail } = call(&mut d, "engine.execute", json!({"command": "nope"})) else { panic!() };
+        assert_eq!(detail, Some(json!({"kind": "unknown", "id": "nope", "suggestions": []})));
+        assert!(error.starts_with("unknown command `nope`;"), "{error}");
+        let Reply::Err { error, detail } = call(&mut d, "engine.execute", json!({"command": "count.ad"})) else { panic!() };
+        assert!(error.contains("did you mean `count.add`"), "{error}");
+        assert_eq!(detail.unwrap()["suggestions"][0]["id"], "count.add");
         assert!(!call(&mut d, "engine.execute", json!({"command": 3})).is_ok());
     }
 

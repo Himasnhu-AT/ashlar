@@ -71,7 +71,7 @@ fn every_problem_is_reported_at_once() {
     let msg = bad(reg.execute(&mut d, "image.resize", json!({"widht": 1, "height": 0, "scale": "big", "fit": "fill", "keepAspect": 1})));
     assert_eq!(
         msg,
-        "unknown parameter(s) `widht`; accepted: width, height, scale, fit, keepAspect, note, meta; \
+        "unknown parameter(s) `widht` (did you mean `width`?); accepted: width, height, scale, fit, keepAspect, note, meta; \
          missing required parameter `width`; `height` must be at least 1, got 0; `scale` must be a number, got a string; \
          `fit` must be one of contain, cover, stretch, got `fill`; `keepAspect` must be true or false, got a number"
     );

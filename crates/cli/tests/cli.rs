@@ -290,12 +290,21 @@ fn docs_shows_the_tree_a_category_and_a_file_verbatim() {
     let q = run_in(&mut c, &["docs", "--query", "INSTRUCTIONS", "--json"], "").reply();
     assert_eq!(q["result"]["docs"].as_array().unwrap().len(), 1);
 
+    // errors are plain text on stderr for a person, a reply line with --json
     let miss = run_in(&mut c, &["docs", "add.md"], "");
-    assert_eq!(miss.exit, Exit::Failed);
+    assert_eq!((miss.exit, miss.out.as_str()), (Exit::Failed, ""));
+    assert!(miss.err.starts_with("counter: no document `add.md`") && miss.err.contains("`skills/add.md`"), "{}", miss.err);
+    let miss = run_in(&mut c, &["docs", "add.md", "--json"], "");
     assert!(miss.reply()["error"].as_str().unwrap().contains("`skills/add.md`"));
-    assert_eq!(run_in(&mut c, &["docs", "nope"], "").exit, Exit::Failed);
+    let nope = run_in(&mut c, &["docs", "add"], "");
+    assert_eq!((nope.exit, nope.out.as_str()), (Exit::Failed, ""));
+    assert!(nope.err.contains("no category `add`; did you mean skills/add.md?"), "{}", nope.err);
+    assert!(serde_json::from_str::<Value>(nope.err.trim()).is_err(), "not JSON: {}", nope.err);
+    assert_eq!(run_in(&mut c, &["docs", "nope", "--json"], "").reply()["ok"], false);
     // no folder of the user's own
-    assert_eq!(run_in(&mut c, &["docs", "--where"], "").exit, Exit::Failed);
+    let place = run_in(&mut c, &["docs", "--where"], "");
+    assert_eq!((place.exit, place.out.as_str()), (Exit::Failed, ""));
+    assert!(place.err.contains("no folder for your own documentation"), "{}", place.err);
 
     // the MCP server serves the same library
     let mcp_in = [
@@ -333,4 +342,66 @@ fn the_users_folder_is_read_on_top_and_where_names_it() {
     let all = run_in(&mut c, &["docs", "--query", "mine", "--json"], "").reply();
     let sources: Vec<&str> = all["result"]["docs"].as_array().unwrap().iter().map(|d| d["source"].as_str().unwrap()).collect();
     assert_eq!(sources, ["yours", "yours"]);
+}
+
+#[test]
+fn a_docs_category_is_served_as_prompts() {
+    let mut c = cli().docs(library()).prompts("skills");
+    let mcp_in = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": {"name": "add", "arguments": {"brief": "add three"}}}),
+    ]
+    .map(|v| v.to_string())
+    .join("\n")
+        + "\n";
+    let l = run_in(&mut c, &["mcp"], &mcp_in).lines();
+    assert_eq!(l[0]["result"]["capabilities"]["prompts"], json!({"listChanged": false}));
+    let names: Vec<&str> = l[1]["result"]["prompts"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["add", "more/deep"]);
+    let text = l[2]["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+    assert!(text.contains("Instructions on adding.") && text.ends_with("## The brief\n\nadd three\n"), "{text}");
+    // without prompts registered there is no capability
+    let l = run_in(&mut cli().docs(library()), &["mcp"], &(mcp_in.lines().next().unwrap().to_string() + "\n")).lines();
+    assert!(l[0]["result"]["capabilities"].get("prompts").is_none());
+}
+
+#[test]
+fn describe_names_the_closest_command() {
+    let o = run(&["describe", "count.ad"]);
+    assert_eq!(o.exit, Exit::Failed);
+    assert!(o.reply()["error"].as_str().unwrap().contains("did you mean `count.add` {by?}"), "{}", o.out);
+    let o = run(&["exec", "count.adx"]);
+    let e = o.reply()["error"].as_str().unwrap().to_string();
+    assert!(e.starts_with("unknown command `count.adx`; did you mean `count.add`"), "{e}");
+}
+
+#[test]
+fn docs_save_append_delete_write_only_the_users_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mine = tmp.path().join("agent-docs");
+    let mut c = cli().docs(library()).user_docs(&mine);
+    let page = "---\ntitle: Preferences\ndescription: Formats and exports\n---\n1080x1920, 30 fps.\n";
+    let o = run_in(&mut c, &["docs", "save", "memory/preferences.md"], page);
+    assert_eq!(o.exit, Exit::Ok, "{}", o.err);
+    assert!(o.out.starts_with("created memory/preferences.md"), "{}", o.out);
+    let src = tmp.path().join("note.txt");
+    std::fs::write(&src, "Likes hard cuts.").unwrap();
+    let o = run_in(&mut c, &["docs", "append", "memory/preferences.md", "--file", src.to_str().unwrap(), "--json"], "");
+    assert_eq!(o.reply()["result"]["created"], false);
+    let read = run_in(&mut c, &["docs", "memory/preferences.md"], "");
+    assert!(read.out.ends_with("1080x1920, 30 fps.\n\nLikes hard cuts.\n") && read.out.contains("updated: "), "{}", read.out);
+    // refusals are plain text
+    let o = run_in(&mut c, &["docs", "save", "skills/add.md"], page);
+    assert_eq!(o.exit, Exit::Failed);
+    assert!(o.err.contains("built-in"), "{}", o.err);
+    assert_eq!(run_in(&mut c, &["docs", "save", "skills/add.md", "--replace-builtin"], page).exit, Exit::Ok);
+    assert!(run_in(&mut c, &["docs", "save", "../x.md"], page).err.contains("not allowed"));
+    assert_eq!(run_in(&mut c, &["docs", "save"], page).exit, Exit::Usage);
+    let o = run_in(&mut c, &["docs", "delete", "memory/preferences.md"], "");
+    assert!(o.out.starts_with("deleted memory/preferences.md"), "{}", o.out);
+    assert!(!mine.join("memory/preferences.md").exists());
+    // a CLI without a user folder cannot write
+    let o = run_in(&mut cli().docs(library()), &["docs", "save", "memory/x.md"], page);
+    assert!(o.exit == Exit::Failed && o.err.contains("no folder"), "{}", o.err);
 }
