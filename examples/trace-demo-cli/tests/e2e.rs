@@ -415,7 +415,10 @@ fn panic_is_reported_as_a_crashed_session_with_one_panic_issue() {
     assert_eq!(db.count("SELECT count(*) FROM crashes"), 1);
     assert_eq!(db.text("SELECT message FROM crashes"), "demo panic in the main loop");
     assert!(db.text("SELECT location FROM crashes").contains("main.rs"));
-    assert!(db.text("SELECT backtrace FROM crashes").contains("demo_cli"), "the backtrace should name the host crate");
+    // the host's own frame: `demo_cli::crash_on_purpose` in debug builds; release builds
+    // (line-tables-only debug info) name inlined frames without the crate path
+    let backtrace = db.text("SELECT backtrace FROM crashes");
+    assert!(backtrace.contains("crash_on_purpose"), "the backtrace should name the host's frames:\n{backtrace}");
     let breadcrumbs = db.text("SELECT breadcrumbs FROM crashes");
     assert!(breadcrumbs.contains("opened a document") && breadcrumbs.contains("about to fail"), "{breadcrumbs}");
     assert_eq!(db.text("SELECT session_id FROM crashes"), db.text("SELECT session_id FROM sessions WHERE status = 'crashed'"));
