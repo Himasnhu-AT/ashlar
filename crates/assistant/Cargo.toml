@@ -1,0 +1,38 @@
+[package]
+name = "ashlar-assistant"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "An in-app AI assistant harness, independent of the model: conversation and tool types, providers (an account backend, Anthropic, OpenAI-compatible), the agent loop with approvals, keys in the OS keychain, an MCP server as the tool host"
+
+[lints]
+workspace = true
+
+[features]
+default = ["http"]
+# The HTTPS providers (ureq with rustls, the RustCrypto provider and the OS verifier). Desktop only:
+# without it (and on wasm32) the types, the agent loop and the mock provider remain.
+http = ["dep:ureq", "dep:rustls", "dep:rustls-rustcrypto"]
+# API keys in the OS keychain (ashlar-native's secrets).
+keychain = ["dep:ashlar-native", "ashlar-native/secrets"]
+# An app's MCP server (ashlar-mcp) as the assistant's tools, in process.
+mcp = ["dep:ashlar-mcp"]
+# A loopback HTTP server and Anthropic-format streams for tests (an app's own tests too).
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+ashlar-native = { workspace = true, optional = true }
+ashlar-mcp = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"], optional = true }
+rustls = { version = "0.23", default-features = false, optional = true }
+rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
+
+[dev-dependencies]
+ashlar-assistant = { path = ".", features = ["http", "mcp", "testing"] }
+ashlar-command = { workspace = true }

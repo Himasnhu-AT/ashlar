@@ -1,0 +1,14 @@
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":"Two lookups."},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_aaa","type":"function","function":{"name":"project_inspect","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_bbb","type":"function","function":{"name":"describe_command","arguments":"{\"id\":"}}]},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"title.add\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
