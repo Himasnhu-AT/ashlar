@@ -360,6 +360,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-assistant"
+version = "0.1.0"
+dependencies = [
+ "ashlar-assistant",
+ "ashlar-command",
+ "ashlar-mcp",
+ "ashlar-native",
+ "log",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "ashlar-cli"
 version = "0.1.0"
 dependencies = [

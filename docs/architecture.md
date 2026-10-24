@@ -31,6 +31,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 3 | `ashlar-telemetry` | Always-on crash, performance and usage telemetry over ashlar-trace: client, transport, hooks for commands, logs, frames and dialogs | yes | – |
 | 3 | `ashlar-mcp` | MCP server generated from the command registry (stdio), headless or bridged | yes | – |
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
+| 4 | `ashlar-assistant` | In-app AI assistant harness, independent of the model: conversation and tool types, providers (an account backend, Anthropic, OpenAI-compatible), the agent loop with approvals, keys in the OS keychain, an MCP server as the tool host | yes | – |
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
