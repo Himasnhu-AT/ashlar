@@ -157,7 +157,7 @@ mod build {
                 let s = AccountBackend::new(&a.base_url, &a.name, a.tokens.clone()).status()?;
                 let models = s.models.iter().map(|m| m.id.clone()).collect();
                 match s.reason_text() {
-                    None => Ok((format!("Connected. AI is included{}.", s.plan.map(|p| format!(" in your {p} plan")).unwrap_or_default()), models)),
+                    None => Ok(("Connected. AI is available for your account.".to_string(), models)),
                     Some(why) => Err(Error::PlanRequired(why)),
                 }
             }

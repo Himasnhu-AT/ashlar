@@ -125,6 +125,7 @@ pub fn from_http(status: u16, retry_after_secs: Option<u64>, body: &[u8], servic
     match (status, code.as_str()) {
         (_, "pro_required" | "plan_required") => Error::PlanRequired(or(&message, "AI is not part of this account's plan.")),
         (_, "budget_exhausted") => Error::BudgetExhausted(or(&message, "The AI budget for this period is used up.")),
+        (_, "credits_exhausted") => Error::BudgetExhausted(or(&message, "This account's AI for this period is used up.")),
         (_, "sign_in_required") | (401, "unauthorized") => Error::SignInRequired,
         (_, "disabled") => Error::Unavailable(or(&message, "AI is switched off for now.")),
         (_, "rate_limited" | "rate_limit_error" | "rate_limit_exceeded") | (429, _) => Error::RateLimited { retry_after_secs, message },

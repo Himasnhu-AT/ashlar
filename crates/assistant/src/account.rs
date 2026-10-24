@@ -63,6 +63,37 @@ pub struct AccountStatus {
     pub default_model: Option<String>,
     #[serde(default)]
     pub limits: AccountLimits,
+    /// The account's AI credits this period, when the backend meters them.
+    #[serde(default)]
+    pub credits: Option<AccountCredits>,
+}
+
+/// AI credits in the current period (`credits` in the status).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountCredits {
+    #[serde(default)]
+    pub granted: Option<i64>,
+    #[serde(default)]
+    pub used: i64,
+    #[serde(default)]
+    pub reserved: i64,
+    #[serde(default)]
+    pub remaining: i64,
+    /// RFC 3339.
+    #[serde(default)]
+    pub period_start: Option<String>,
+    /// RFC 3339: when the credits renew.
+    #[serde(default)]
+    pub period_end: Option<String>,
+}
+
+/// Which billing page to open ([`AccountBackend::billing_link`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BillingPage {
+    /// Start a subscription (`POST /v1/billing/checkout`).
+    Checkout,
+    /// Manage the subscription (`POST /v1/billing/portal`).
+    Portal,
 }
 
 impl AccountStatus {
@@ -76,11 +107,12 @@ impl AccountStatus {
         if self.available {
             return None;
         }
+        // plan-neutral: an app that sells plans says so itself
         Some(
             match self.reason.as_deref() {
                 Some("sign_in_required") => "Sign in to use AI with your account.",
-                Some("pro_required") => "AI is part of Pro. Add your own API key to use it now.",
-                Some("budget_exhausted") => "The AI budget for this period is used up. Add your own API key to keep going.",
+                Some("pro_required" | "plan_required") => "Not available for your account yet. Add your own API key to use AI now.",
+                Some("budget_exhausted" | "credits_exhausted") => "AI through your account is used up for now. Add your own API key to keep going.",
                 Some("disabled") => "AI through your account is switched off for now.",
                 _ => "AI isn't available for this account.",
             }
@@ -118,6 +150,50 @@ mod client {
         /// `name` is how errors refer to the server ("the account server").
         pub fn new(base_url: impl Into<String>, name: impl Into<String>, tokens: Arc<dyn TokenSource>) -> Self {
             Self { base_url: base_url.into().trim_end_matches('/').to_string(), name: name.into(), tokens, http: Http::new() }
+        }
+
+        /// `GET /v1/config` (no sign-in): whether the app may show plans and prices. `false` when
+        /// the server says so, lacks the field, or can't be reached.
+        pub fn pricing_enabled(&self) -> bool {
+            let url = format!("{}/v1/config", self.base_url);
+            if check_url(&url, false).is_err() {
+                return false;
+            }
+            match self.http.get(&url, &[("accept", "application/json")], &self.name) {
+                Ok(r) if r.status == 200 => r.json().ok().and_then(|v| v["pricing_enabled"].as_bool()).unwrap_or(false),
+                _ => false,
+            }
+        }
+
+        /// The web page to start (`Checkout`) or manage (`Portal`) a subscription: `POST
+        /// /v1/billing/checkout|portal` with the sign-in, answering `{"url"}` (or `{"link"}`).
+        /// Only an `https://` link is returned.
+        pub fn billing_link(&self, page: BillingPage) -> Result<String, Error> {
+            let path = match page {
+                BillingPage::Checkout => "checkout",
+                BillingPage::Portal => "portal",
+            };
+            let url = format!("{}/v1/billing/{path}", self.base_url);
+            check_url(&url, true)?;
+            let token = self.tokens.token()?;
+            let post = |t: &str| {
+                self.http.post(&url, &[("authorization", &format!("Bearer {t}")), ("accept", "application/json")], b"{}".to_vec(), &self.name)
+            };
+            let mut reply = post(&token)?;
+            if reply.status == 401 {
+                reply = post(&self.tokens.refresh(&token)?)?;
+            }
+            if reply.status != 200 {
+                let (s, after) = (reply.status, reply.retry_after);
+                let e = from_http(s, after, &reply.error_body(), &self.name);
+                return Err(reply.detail(e));
+            }
+            let v = reply.json()?;
+            let link = v["url"].as_str().or(v["link"].as_str()).unwrap_or_default().to_string();
+            if !link.starts_with("https://") {
+                return Err(Error::Protocol("the billing page's link is missing".into()));
+            }
+            Ok(link)
         }
 
         /// `GET /v1/ai/status`.
@@ -204,6 +280,13 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(s.model(), Some("claude-opus-5-5"));
         assert_eq!(s.limits.requests_left_today, Some(100));
-        assert!(s.reason_text().unwrap_or_default().contains("part of Pro"));
+        assert_eq!(s.reason_text().as_deref(), Some("Not available for your account yet. Add your own API key to use AI now."));
+        assert!(s.credits.is_none());
+        let s: AccountStatus = serde_json::from_str(
+            r#"{"available":true,"reason":null,"credits":{"granted":1900,"used":12,"reserved":0,"remaining":1888,"period_start":"2026-10-01T00:00:00Z","period_end":"2026-11-01T00:00:00Z"}}"#,
+        )
+        .unwrap_or_default();
+        let c = s.credits.unwrap_or_default();
+        assert_eq!((c.remaining, c.period_end.as_deref()), (1888, Some("2026-11-01T00:00:00Z")));
     }
 }
