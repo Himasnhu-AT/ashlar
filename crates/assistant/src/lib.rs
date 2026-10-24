@@ -46,7 +46,7 @@ pub mod worker;
 
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use account::AccountBackend;
-pub use account::{AccountStatus, TokenSource};
+pub use account::{AccountLimits, AccountModel, AccountStatus, TokenSource};
 pub use agent::{AgentConfig, AgentEvent, Approval, DenyAll, FnTools, Observer, ToolHost, ToolOutput, TurnEnd, TurnOutcome, run_turn};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use anthropic::AnthropicApi;
