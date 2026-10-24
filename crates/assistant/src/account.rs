@@ -260,10 +260,13 @@ mod client {
                 return Err(reply.detail(e));
             }
             let id = reply.request_id.clone();
-            read_stream(reply.body, request.model, events, cancel, &self.name).map_err(|e| match &id {
+            let cap = reply.max_tokens_cap;
+            let mut r = read_stream(reply.body, request.model, events, cancel, &self.name).map_err(|e| match &id {
                 Some(id) if !matches!(e, Error::Cancelled) => e.with_detail(&format!("Request ID: {id}")),
                 _ => e,
-            })
+            })?;
+            r.max_tokens_cap = cap;
+            Ok(r)
         }
     }
 }

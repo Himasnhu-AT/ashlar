@@ -20,6 +20,8 @@ pub(crate) struct Http {
 pub(crate) struct Reply {
     pub status: u16,
     pub retry_after: Option<u64>,
+    /// `x-ai-max-tokens`: the output limit the server lowered the request to.
+    pub max_tokens_cap: Option<u32>,
     /// The server's id for the request (`x-request-id`, or Anthropic's `request-id`), for support.
     pub request_id: Option<String>,
     pub body: Box<dyn Read + Send>,
@@ -130,8 +132,9 @@ fn reply(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>, service: &str
         .and_then(|v| v.to_str().ok())
         .map(|v| v.chars().filter(|c| c.is_ascii_graphic()).take(100).collect::<String>())
         .filter(|v| !v.is_empty());
+    let max_tokens_cap = h.get("x-ai-max-tokens").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u32>().ok());
     let body: Box<dyn Read + Send> = Box::new(response.into_body().into_reader());
-    Ok(Reply { status, retry_after, request_id, body })
+    Ok(Reply { status, retry_after, max_tokens_cap, request_id, body })
 }
 
 /// A transport failure in words; never built from a request's headers.

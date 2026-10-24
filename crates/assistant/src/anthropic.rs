@@ -336,7 +336,7 @@ impl Assembler {
             blocks,
             native: Some(Native { format: FORMAT.into(), model: model.clone(), content: Value::Array(native) }),
         };
-        Ok(Response { message, stop, usage: self.usage, model })
+        Ok(Response { message, stop, usage: self.usage, model, max_tokens_cap: None })
     }
 }
 
