@@ -103,6 +103,9 @@ mod client {
     use crate::provider::{Cancel, Provider, Request, Response};
     use crate::types::StreamEvent;
 
+    /// The longest `Retry-After` (seconds) waited out and retried once by itself.
+    pub const SHORT_WAIT_S: u64 = 15;
+
     /// The account backend at `base_url`, as a provider.
     pub struct AccountBackend {
         base_url: String,
@@ -129,7 +132,8 @@ mod client {
             }
             if reply.status != 200 {
                 let (s, after) = (reply.status, reply.retry_after);
-                return Err(from_http(s, after, &reply.error_body(), &self.name));
+                let e = from_http(s, after, &reply.error_body(), &self.name);
+                return Err(reply.detail(e));
             }
             serde_json::from_value(reply.json()?).map_err(|e| Error::Protocol(format!("the AI status: {e}")))
         }
@@ -153,17 +157,37 @@ mod client {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
+            let mut token = token;
             let mut reply = post(&token, body.clone())?;
             if reply.status == 401 {
                 // an expired access token: once more with a fresh one
-                let fresh = self.tokens.refresh(&token)?;
-                reply = post(&fresh, body)?;
+                token = self.tokens.refresh(&token)?;
+                reply = post(&token, body.clone())?;
+            }
+            // the shared budget is held by requests in flight: the server says to wait a few
+            // seconds (a daily limit says hours); wait once and try again
+            if reply.status == 429
+                && let Some(wait) = reply.retry_after.filter(|s| (1..=SHORT_WAIT_S).contains(s))
+            {
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(wait);
+                while std::time::Instant::now() < until {
+                    if cancel.is_cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                reply = post(&token, body)?;
             }
             if reply.status != 200 {
                 let (s, after) = (reply.status, reply.retry_after);
-                return Err(from_http(s, after, &reply.error_body(), &self.name));
+                let e = from_http(s, after, &reply.error_body(), &self.name);
+                return Err(reply.detail(e));
             }
-            read_stream(reply.body, request.model, events, cancel, &self.name)
+            let id = reply.request_id.clone();
+            read_stream(reply.body, request.model, events, cancel, &self.name).map_err(|e| match &id {
+                Some(id) if !matches!(e, Error::Cancelled) => e.with_detail(&format!("Request ID: {id}")),
+                _ => e,
+            })
         }
     }
 }

@@ -55,7 +55,11 @@ fn rate_limited_text(after: Option<u64>, message: &str) -> String {
 }
 
 fn seconds_text(s: u64) -> String {
-    if s < 90 { format!("{s} s") } else { format!("{} min", s.div_ceil(60)) }
+    match s {
+        0..90 => format!("{s} s"),
+        90..5400 => format!("{} min", s.div_ceil(60)),
+        _ => format!("{} h", s.div_ceil(3600)),
+    }
 }
 
 impl Error {
@@ -77,6 +81,22 @@ impl Error {
             Error::Cancelled => "cancelled",
             Error::Protocol(_) => "protocol",
             Error::Other(_) => "other",
+        }
+    }
+
+    /// The same error with `detail` added to its text where the text is the server's own (a
+    /// request id for support: "Request ID: air_…").
+    pub fn with_detail(self, detail: &str) -> Self {
+        let add = |m: String| if m.is_empty() { detail.to_string() } else { format!("{m} ({detail})") };
+        match self {
+            Error::Upstream(m) => Error::Upstream(add(m)),
+            Error::BadRequest(m) => Error::BadRequest(add(m)),
+            Error::Protocol(m) => Error::Protocol(add(m)),
+            Error::Other(m) => Error::Other(add(m)),
+            Error::Unavailable(m) => Error::Unavailable(add(m)),
+            Error::BudgetExhausted(m) => Error::BudgetExhausted(add(m)),
+            Error::TooLarge => Error::Other(format!("{} ({detail})", Error::TooLarge)),
+            other => other,
         }
     }
 
@@ -148,6 +168,15 @@ mod tests {
         let e = from_http(429, Some(30), br#"{"error":"rate_limited","message":"Slow down."}"#, "x");
         assert_eq!(e.to_string(), "Slow down. Try again in 30 s.");
         assert_eq!(from_http(401, None, br#"{"error":"unauthorized","message":"no"}"#, "x"), Error::SignInRequired);
+        // the daily limit: Retry-After is the time to midnight
+        let e = from_http(429, Some(5 * 3600 + 20), br#"{"error":"rate_limited","message":"Today's AI requests are used up."}"#, "x");
+        assert_eq!(e.to_string(), "Today's AI requests are used up. Try again in 6 h.");
+        let e = from_http(503, None, br#"{"error":"disabled","message":"AI is switched off on this server."}"#, "x");
+        assert_eq!(e, Error::Unavailable("AI is switched off on this server.".into()));
+        let e = from_http(502, None, br#"{"error":"upstream_error","message":"The AI provider failed."}"#, "x").with_detail("Request ID: air_1");
+        assert_eq!(e.to_string(), "The AI provider failed. (Request ID: air_1)");
+        let e = from_http(400, None, br#"{"error":"invalid_request","message":"messages.1: bad block"}"#, "x");
+        assert_eq!(e.to_string(), "The request was refused: messages.1: bad block");
     }
 
     #[test]
