@@ -89,10 +89,17 @@ impl Release {
         }
     }
 
-    /// Where to download it: the release's link, else its mirror, else `fallback` (each only when
+    /// Where to download it: the mirror, else the release's link, else `fallback` (each only when
     /// [`is_safe_url`]). `None` when none of the three is safe.
     pub fn download_url(&self, fallback: &str) -> Option<String> {
-        [Some(self.url.as_str()), self.mirror.as_deref(), Some(fallback)].into_iter().flatten().find(|url| is_safe_url(url)).map(str::to_string)
+        [self.mirror.as_deref(), Some(self.url.as_str()), Some(fallback)].into_iter().flatten().find(|url| is_safe_url(url)).map(str::to_string)
+    }
+
+    /// The release's link when [`Release::download_url`] picked the mirror: a second place to get
+    /// the same file. `None` unless both are safe and they differ.
+    pub fn backup_url(&self) -> Option<String> {
+        let mirror = self.mirror.as_deref().filter(|m| is_safe_url(m))?;
+        (is_safe_url(&self.url) && self.url != mirror).then(|| self.url.clone())
     }
 }
 
@@ -150,12 +157,21 @@ mod tests {
     }
 
     #[test]
-    fn download_falls_back_to_the_mirror_then_the_fallback() {
+    fn download_prefers_the_mirror_then_the_link_then_the_fallback() {
         let mut r = release("1.0.0");
         assert_eq!(r.download_url("https://example.com/download").as_deref(), Some("https://example.com/app.dmg"));
-        r.url = "ftp://example.com/app.dmg".into();
+        assert_eq!(r.backup_url(), None, "no mirror: nothing second");
         r.mirror = Some("https://mirror.example.com/app.dmg".into());
         assert_eq!(r.download_url("https://example.com/download").as_deref(), Some("https://mirror.example.com/app.dmg"));
+        assert_eq!(r.backup_url().as_deref(), Some("https://example.com/app.dmg"));
+        r.url = "ftp://example.com/app.dmg".into();
+        assert_eq!(r.download_url("https://example.com/download").as_deref(), Some("https://mirror.example.com/app.dmg"));
+        assert_eq!(r.backup_url(), None, "an unsafe link is not offered");
+        r.url = "https://example.com/app.dmg".into();
+        r.mirror = Some("http://mirror.example.com/app.dmg".into());
+        assert_eq!(r.download_url("https://example.com/download").as_deref(), Some("https://example.com/app.dmg"));
+        assert_eq!(r.backup_url(), None, "an unsafe mirror is skipped");
+        r.url = String::new();
         r.mirror = None;
         assert_eq!(r.download_url("https://example.com/download").as_deref(), Some("https://example.com/download"));
         assert_eq!(r.download_url("not a url"), None);

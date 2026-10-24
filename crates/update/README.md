@@ -12,7 +12,8 @@ The API: `GET {base}/v1/releases/{app}/latest` answers one release
 |---|---|
 | `Version` | `MAJOR.MINOR.PATCH[-pre][+build]` (a leading `v` allowed), semver.org order |
 | `Release::parse`, `Outcome::of` | the answer, tolerant of added or missing fields; body capped at 256 KiB, notes at 64 KiB; "newer or not" |
-| `Release::download_url(fallback)` | the release link, else the mirror, else the fallback page; `https://` only |
+| `Release::download_url(fallback)` | the mirror, else the release link, else the fallback page; `https://` only |
+| `Release::backup_url()` | the release link when `download_url` picked the mirror (to show as a second source) |
 | `check(fetch, base, app, current)` | one blocking check (a command-line `update` verb). Refuses a non-https base (loopback `http://` allowed) and a bad app id before any request |
 | `HttpsFetch` | feature `https` (default): ureq + rustls with the RustCrypto provider and the OS verifier, no redirects, 20 s timeout |
 | `Updater` | the app's background checker (below) |

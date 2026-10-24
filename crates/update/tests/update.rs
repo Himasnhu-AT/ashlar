@@ -40,8 +40,10 @@ fn a_newer_release_is_available_with_its_fields() {
     assert!(release.notes.contains("Faster export"));
     assert_eq!(
         release.download_url("https://example.com/download").as_deref(),
-        Some("https://downloads.example.com/my-app-1.4.0-macos-universal.dmg")
+        Some("https://mirror.example.com/my-app-1.4.0.dmg"),
+        "the mirror first"
     );
+    assert_eq!(release.backup_url().as_deref(), Some("https://downloads.example.com/my-app-1.4.0-macos-universal.dmg"));
 }
 
 #[test]
