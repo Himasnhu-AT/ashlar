@@ -41,6 +41,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-debug", 4),
     ("ashlar-print", 2),
     ("ashlar-update", 2),
+    ("ashlar-integrations", 2),
     ("ashlar-agents", 2),
     ("ashlar-mcp-http", 2),
     ("ashlar-telemetry", 3),
