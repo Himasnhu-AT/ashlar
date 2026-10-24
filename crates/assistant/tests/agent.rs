@@ -107,9 +107,10 @@ fn approvals() {
 
 #[test]
 fn refusal_and_max_tokens_never_run_tools() {
-    for (stop, end) in
-        [(StopReason::Refusal { explanation: None }, TurnEnd::Refusal { explanation: None }), (StopReason::MaxTokens, TurnEnd::MaxTokens)]
-    {
+    for (stop, end) in [
+        (StopReason::Refusal { explanation: None }, TurnEnd::Refusal { explanation: None }),
+        (StopReason::MaxTokens, TurnEnd::MaxTokens { capped_by_server: None }),
+    ] {
         let call = Block::ToolCall(ToolCall { id: "t".into(), name: "execute".into(), input: json!({"id": "x"}), invalid_input: None });
         let mut p = MockProvider::new([MockReply::Reply { blocks: vec![call], stop, usage: Usage::default() }]);
         let mut c = Conversation::new();
@@ -210,4 +211,14 @@ fn worker_cancel_while_waiting_for_approval_answers_the_call() {
     };
     assert_eq!(end, TurnEnd::Cancelled);
     assert!(conv.unanswered_calls().is_empty());
+}
+
+#[test]
+fn a_reply_the_server_cut_short_says_why() {
+    let mut p = MockProvider::new([MockReply::CutByServer { text: "Part of an answer".into(), cap: 1024 }]);
+    let mut c = Conversation::new();
+    c.push_user_text("x");
+    let o = run(&mut p, &mut c, &mut Recorder::default(), Arc::default());
+    assert_eq!(o.end, TurnEnd::MaxTokens { capped_by_server: Some(1024) });
+    assert!(o.end.message().unwrap_or_default().contains("AI allowance is nearly used up"));
 }

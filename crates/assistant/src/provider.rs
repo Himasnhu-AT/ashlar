@@ -29,6 +29,10 @@ pub struct Response {
     pub usage: Usage,
     /// The model that answered (a fallback model may answer for the one asked).
     pub model: String,
+    /// The output limit a server lowered this request to (an account backend's
+    /// `x-ai-max-tokens`, when the account's allowance can't cover the one asked); a reply that
+    /// then stops at `max_tokens` was shortened by it.
+    pub max_tokens_cap: Option<u32>,
 }
 
 /// Stops a request or a turn. Clones share the flag.

@@ -233,7 +233,13 @@ impl Assembler {
         };
         events(StreamEvent::Stop(stop.clone()));
         let native = Native { format: FORMAT.into(), model: model.clone(), content: Value::Null };
-        Ok(Response { message: Message { role: Role::Assistant, blocks, native: Some(native) }, stop, usage: self.usage, model })
+        Ok(Response {
+            message: Message { role: Role::Assistant, blocks, native: Some(native) },
+            stop,
+            usage: self.usage,
+            model,
+            max_tokens_cap: None,
+        })
     }
 }
 

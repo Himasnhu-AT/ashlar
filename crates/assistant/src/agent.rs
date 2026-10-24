@@ -126,8 +126,11 @@ pub enum TurnEnd {
     Cancelled,
     /// [`AgentConfig::max_steps`] requests were made.
     MaxSteps,
-    /// The reply hit the token limit (its tool calls were not run).
-    MaxTokens,
+    /// The reply hit the token limit (its tool calls were not run). `capped_by_server`: the
+    /// server had lowered the limit to this because the account's AI allowance is nearly used up.
+    MaxTokens {
+        capped_by_server: Option<u32>,
+    },
     /// The model declined.
     Refusal {
         explanation: Option<String>,
@@ -142,7 +145,12 @@ impl TurnEnd {
             TurnEnd::Done => None,
             TurnEnd::Cancelled => Some("Stopped.".into()),
             TurnEnd::MaxSteps => Some("Stopped after the most steps one message may take. Send another message to continue.".into()),
-            TurnEnd::MaxTokens => Some("The reply was cut off at its length limit. Ask for a shorter answer or continue.".into()),
+            TurnEnd::MaxTokens { capped_by_server: Some(_) } => {
+                Some("The reply was shortened because your AI allowance is nearly used up. Add your own API key to keep going.".into())
+            }
+            TurnEnd::MaxTokens { capped_by_server: None } => {
+                Some("The reply was cut off at its length limit. Ask for a shorter answer or continue.".into())
+            }
             TurnEnd::Refusal { explanation } => Some(match explanation {
                 Some(e) if !e.is_empty() => format!("The model declined this request: {e}"),
                 _ => "The model declined this request. Try rephrasing it.".into(),
@@ -259,7 +267,7 @@ pub fn run_turn(
         observer.event(AgentEvent::Appended(reply.message));
         // a reply cut off or declined may hold half-written calls: never run them
         let end = match &reply.stop {
-            StopReason::MaxTokens => Some(TurnEnd::MaxTokens),
+            StopReason::MaxTokens => Some(TurnEnd::MaxTokens { capped_by_server: reply.max_tokens_cap }),
             StopReason::Refusal { explanation } => Some(TurnEnd::Refusal { explanation: explanation.clone() }),
             _ => None,
         };
@@ -274,7 +282,7 @@ pub fn run_turn(
         for call in &calls {
             let out = if let Some(e) = &end {
                 ToolOutput::error(match e {
-                    TurnEnd::MaxTokens => "Not run: the reply was cut off at its length limit.",
+                    TurnEnd::MaxTokens { .. } => "Not run: the reply was cut off at its length limit.",
                     _ => "Not run: the reply was declined.",
                 })
             } else if cancel.is_cancelled() {

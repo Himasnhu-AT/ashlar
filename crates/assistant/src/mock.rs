@@ -23,6 +23,12 @@ pub enum MockReply {
     Fail(Error),
     /// Stream "…" until cancelled (tests of Stop).
     Hang,
+    /// A reply the server cut short: it lowered the output limit to `cap` and the reply stopped
+    /// at `max_tokens`.
+    CutByServer {
+        text: String,
+        cap: u32,
+    },
 }
 
 impl MockReply {
@@ -108,6 +114,12 @@ impl Provider for MockProvider {
         match next {
             None => Err(Error::Other("the mock provider has no more replies".into())),
             Some(MockReply::Fail(e)) => Err(e),
+            Some(MockReply::CutByServer { text, cap }) => {
+                events(StreamEvent::TextDelta(text.clone()));
+                let usage = Usage { input_tokens: 100, output_tokens: u64::from(cap), ..Usage::default() };
+                let message = Message { role: Role::Assistant, blocks: vec![Block::Text { text }], native: None };
+                Ok(Response { message, stop: StopReason::MaxTokens, usage, model: r.model.into(), max_tokens_cap: Some(cap) })
+            }
             Some(MockReply::Hang) => loop {
                 if cancel.is_cancelled() {
                     return Err(Error::Cancelled);
@@ -139,7 +151,13 @@ impl Provider for MockProvider {
                 }
                 events(StreamEvent::Usage(usage));
                 events(StreamEvent::Stop(stop.clone()));
-                Ok(Response { message: Message { role: Role::Assistant, blocks, native: None }, stop, usage, model: r.model.into() })
+                Ok(Response {
+                    message: Message { role: Role::Assistant, blocks, native: None },
+                    stop,
+                    usage,
+                    model: r.model.into(),
+                    max_tokens_cap: None,
+                })
             }
         }
     }

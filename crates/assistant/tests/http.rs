@@ -292,3 +292,16 @@ fn pricing_flag_and_billing_links() {
     let gone = AccountBackend::new("http://127.0.0.1:9", "x", Arc::new(|| -> Result<String, Error> { Ok("t".into()) }));
     assert!(!gone.pricing_enabled());
 }
+
+#[test]
+fn the_backend_cap_on_max_tokens_is_reported() {
+    let s = MockServer::start(|_| {
+        HttpReply::sse(anthropic_stream("claude-opus-5-5", &[json!({"type": "text", "text": "Part"})], "max_tokens"))
+            .header("x-ai-max-tokens", "1024")
+    })
+    .unwrap();
+    let tokens: Arc<dyn TokenSource> = Arc::new(|| -> Result<String, Error> { Ok("t".into()) });
+    let mut b = AccountBackend::new(s.url(), "the account server", tokens);
+    let r = send(&mut b, "claude-opus-5-5").unwrap();
+    assert_eq!((r.stop, r.max_tokens_cap), (StopReason::MaxTokens, Some(1024)));
+}
