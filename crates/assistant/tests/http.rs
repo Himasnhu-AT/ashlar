@@ -183,3 +183,84 @@ fn keys_never_go_over_plain_http_to_another_host() {
     let mut p = OpenAiCompatible::new("http://10.1.2.3:8080/v1", ApiKey::new("sk"));
     assert_eq!(send(&mut p, "m").unwrap_err().code(), "config");
 }
+
+#[test]
+fn account_backend_contract_additions() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let tries = Arc::new(AtomicU32::new(0));
+    let t = Arc::clone(&tries);
+    let s = MockServer::start(move |r| {
+        let rid = ("x-request-id", "air_test123");
+        match r.json()["model"].as_str() {
+            Some("off") => HttpReply::json(503, &json!({"error": "disabled", "message": "AI is switched off on this server."})).header(rid.0, rid.1),
+            Some("broken") => HttpReply::json(502, &json!({"error": "upstream_error", "message": "The AI provider failed. Try again."})).header(rid.0, rid.1),
+            Some("bad") => HttpReply::json(400, &json!({"error": "invalid_request", "message": "messages.0.content: text must be non-empty"})).header(rid.0, rid.1),
+            Some("huge") => HttpReply::json(413, &json!({"error": "too_large", "message": "too large"})),
+            Some("daily") => HttpReply::json(429, &json!({"error": "rate_limited", "message": "You've used today's AI requests."})).header("retry-after", "30000"),
+            Some("held") if t.fetch_add(1, Ordering::SeqCst) == 0 => HttpReply::json(429, &json!({"error": "rate_limited", "message": "Busy."})).header("retry-after", "1"),
+            Some("fallback") => {
+                // the server added fallbacks: a fallback block and usage.iterations
+                let mut sse = anthropic_stream("claude-opus-5", &[json!({"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-5"}}), json!({"type": "text", "text": "Done."})], "end_turn");
+                sse = sse.replace(r#""usage":{"output_tokens":42}"#, r#""usage":{"output_tokens":42,"iterations":[{"type":"message","input_tokens":10},{"type":"fallback_message","input_tokens":12}]}"#);
+                HttpReply::sse(sse).header(rid.0, rid.1)
+            }
+            Some(m) => HttpReply::sse(anthropic_text(m, "Hi")),
+            None => HttpReply::json(400, &json!({})),
+        }
+    })
+    .unwrap();
+    let tokens: Arc<dyn TokenSource> = Arc::new(|| -> Result<String, Error> { Ok("t".into()) });
+    let mut b = AccountBackend::new(s.url(), "the account server", tokens);
+    let e = send(&mut b, "off").unwrap_err();
+    assert_eq!(e.to_string(), "AI is switched off on this server. (Request ID: air_test123)");
+    assert_eq!(e.code(), "unavailable");
+    assert_eq!(send(&mut b, "broken").unwrap_err().to_string(), "The AI provider failed. Try again. (Request ID: air_test123)");
+    assert_eq!(
+        send(&mut b, "bad").unwrap_err().to_string(),
+        "The request was refused: messages.0.content: text must be non-empty (Request ID: air_test123)"
+    );
+    assert_eq!(send(&mut b, "huge").unwrap_err().code(), "too_large");
+    // the daily limit is not waited out; it says when
+    let e = send(&mut b, "daily").unwrap_err();
+    assert_eq!(e.to_string(), "You've used today's AI requests. Try again in 9 h.");
+    // a short wait (budget held by requests in flight) is waited out once
+    let r = send(&mut b, "held").unwrap();
+    assert_eq!(r.message.text(), "Hi");
+    assert_eq!(tries.load(Ordering::SeqCst), 2);
+    // fallback blocks and usage.iterations pass through and are replayed verbatim
+    let r = send(&mut b, "fallback").unwrap();
+    assert_eq!(r.message.text(), "Done.");
+    let native = r.message.native.clone().unwrap().content;
+    assert_eq!(native[0]["type"], "fallback");
+    let mut c = Conversation::new();
+    c.push_user_text("x");
+    c.push(r.message);
+    c.push_user_text("y");
+    let req = Request {
+        model: "claude-opus-5-5",
+        system: "",
+        tools: &[],
+        messages: c.messages(),
+        max_tokens: 10,
+        effort: None,
+        thinking: Thinking::Default,
+    };
+    assert_eq!(anthropic::request_body(&req, anthropic::BodyOptions::default())["messages"][1]["content"], native);
+}
+
+#[test]
+fn combined_tools_route_by_name() {
+    let spec = |n: &str| ToolSpec { name: n.into(), description: String::new(), input_schema: json!({"type": "object"}), strict: false };
+    let a = FnTools::new(vec![spec("execute"), spec("doc_inspect")], |c| ToolOutput::ok(format!("app {}", c.name)));
+    let b = FnTools::new(vec![spec("earshot__synth"), spec("execute")], |c| ToolOutput::ok(format!("ext {}", c.name)))
+        .approval(|_| Some("Writes files.".into()));
+    let mut t = CombinedTools::new(vec![Box::new(a), Box::new(b)]);
+    let names: Vec<_> = t.tools().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["execute", "doc_inspect", "earshot__synth"]);
+    let call = |n: &str| ToolCall { id: "1".into(), name: n.into(), input: json!({}), invalid_input: None };
+    assert_eq!(t.call(&call("execute"), &Cancel::new()).content, "app execute");
+    assert_eq!(t.call(&call("earshot__synth"), &Cancel::new()).content, "ext earshot__synth");
+    assert_eq!(t.needs_approval(&call("earshot__synth")).as_deref(), Some("Writes files."));
+    assert!(t.needs_approval(&call("execute")).is_none());
+    assert!(t.call(&call("nope"), &Cancel::new()).is_error);
+}

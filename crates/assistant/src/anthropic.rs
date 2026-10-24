@@ -426,12 +426,17 @@ mod api {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let reply = self.http.post(&url, &headers, body, "Anthropic")?;
+            let mut reply = self.http.post(&url, &headers, body, "Anthropic")?;
             if reply.status != 200 {
                 let (status, after) = (reply.status, reply.retry_after);
-                return Err(from_http(status, after, &reply.error_body(), "Anthropic"));
+                let e = from_http(status, after, &reply.error_body(), "Anthropic");
+                return Err(reply.detail(e));
             }
-            read_stream(reply.body, request.model, events, cancel, "Anthropic")
+            let id = reply.request_id.clone();
+            read_stream(reply.body, request.model, events, cancel, "Anthropic").map_err(|e| match &id {
+                Some(id) if !matches!(e, Error::Cancelled) => e.with_detail(&format!("Request ID: {id}")),
+                _ => e,
+            })
         }
     }
 }

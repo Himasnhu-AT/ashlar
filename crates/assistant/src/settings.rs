@@ -165,7 +165,7 @@ mod build {
                 let k = key(keys, ANTHROPIC)?.ok_or(Error::MissingKey)?;
                 let url = format!("{DEFAULT_BASE_URL}/v1/models");
                 check_url(&url, true)?;
-                let r = http.get(&url, &[("x-api-key", k.expose()), ("anthropic-version", VERSION)], "Anthropic")?;
+                let mut r = http.get(&url, &[("x-api-key", k.expose()), ("anthropic-version", VERSION)], "Anthropic")?;
                 if r.status != 200 {
                     let (s, a) = (r.status, r.retry_after);
                     return Err(from_http(s, a, &r.error_body(), "Anthropic"));
@@ -182,7 +182,7 @@ mod build {
                 let auth = k.as_ref().map(|k| format!("Bearer {}", k.expose()));
                 let headers: Vec<(&str, &str)> = auth.as_deref().map(|a| vec![("authorization", a)]).unwrap_or_default();
                 let name = crate::http::host(&url).unwrap_or_else(|| "the server".into());
-                let r = http.get(&url, &headers, &name)?;
+                let mut r = http.get(&url, &headers, &name)?;
                 if r.status != 200 {
                     let (s, a) = (r.status, r.retry_after);
                     return Err(from_http(s, a, &r.error_body(), &name));

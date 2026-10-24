@@ -9,10 +9,11 @@ tools and a UI, the harness runs the conversation.
 |---|---|
 | `types` | `Conversation` (append-only), `Message` / `Block` (text, thinking, tool call, tool result), `Native` (a provider's own content, replayed verbatim), `ToolSpec`, `StreamEvent`, `Usage`, `price(model)` |
 | `Provider` | one streamed request: `send(&Request, events, &Cancel) -> Response` |
-| `AccountBackend` | an app's own backend that holds the provider key (`GET /v1/ai/status`, `POST /v1/ai/messages`, Anthropic wire format, bearer token from a `TokenSource`, one retry with a refreshed token on 401) |
+| `AccountBackend` | an app's own backend that holds the provider key (`GET /v1/ai/status`, `POST /v1/ai/messages`, Anthropic wire format, bearer token from a `TokenSource`): one retry with a refreshed token on 401; a 429 whose `Retry-After` is at most 15 s is waited out and retried once (a longer one, such as a daily limit, is reported with the wait); the server's `x-request-id` is added to errors for support; content blocks it adds (`fallback`) and usage fields it adds (`iterations`) pass through and are replayed verbatim |
 | `AnthropicApi` | `api.anthropic.com/v1/messages` with the user's key (`x-api-key`, `anthropic-version: 2026-10-21`, refusal fallbacks on the models that take them) |
 | `OpenAiCompatible` | `{base}/chat/completions` (OpenAI, OpenRouter, Ollama, LM Studio…), key optional; tool calls mapped both ways |
-| `run_turn` | the agent loop over the app's `ToolHost` and `Observer` |
+| `run_turn` | the agent loop over the app's `ToolHost` and `Observer`; the tool list is read once per turn |
+| `CombinedTools` | several tool hosts as one (the app's tools, then integrations'), calls routed by name |
 | `spawn_turn` | the loop on a thread for a UI: `TurnHandle::poll / answer / cancel` |
 | `Settings`, `build_provider`, `check_connection` | the saved choice of provider and model; a settings page's Test button (model list or AI status, no tokens spent) |
 | `keys` | `KeyStore`: `KeychainKeys` (feature `keychain`, the OS keychain) or `MemoryKeys`; `ApiKey` never prints |

@@ -20,14 +20,24 @@ pub(crate) struct Http {
 pub(crate) struct Reply {
     pub status: u16,
     pub retry_after: Option<u64>,
+    /// The server's id for the request (`x-request-id`, or Anthropic's `request-id`), for support.
+    pub request_id: Option<String>,
     pub body: Box<dyn Read + Send>,
 }
 
 impl Reply {
+    /// `e` with the request id added for support, when the server sent one.
+    pub fn detail(&self, e: Error) -> Error {
+        match &self.request_id {
+            Some(id) => e.with_detail(&format!("Request ID: {id}")),
+            None => e,
+        }
+    }
+
     /// The body of a failed request, bounded.
-    pub fn error_body(self) -> Vec<u8> {
+    pub fn error_body(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
-        let _ = self.body.take(MAX_ERROR_BODY).read_to_end(&mut out);
+        let _ = (&mut self.body).take(MAX_ERROR_BODY).read_to_end(&mut out);
         out
     }
 
@@ -113,8 +123,15 @@ fn reply(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>, service: &str
     let response = r.map_err(|e| transport_error(e, service))?;
     let status = response.status().as_u16();
     let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    let h = response.headers();
+    let request_id = h
+        .get("x-request-id")
+        .or_else(|| h.get("request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().filter(|c| c.is_ascii_graphic()).take(100).collect::<String>())
+        .filter(|v| !v.is_empty());
     let body: Box<dyn Read + Send> = Box::new(response.into_body().into_reader());
-    Ok(Reply { status, retry_after, body })
+    Ok(Reply { status, retry_after, request_id, body })
 }
 
 /// A transport failure in words; never built from a request's headers.

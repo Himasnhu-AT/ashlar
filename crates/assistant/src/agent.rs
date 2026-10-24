@@ -337,6 +337,53 @@ impl ToolHost for FnTools {
     }
 }
 
+/// Several tool hosts as one: the app's own tools and, say, external integrations. `tools()`
+/// lists each host's tools in host order (keep each host's order stable, for caching); a call and
+/// its approval go to the host that listed the name (a name listed twice keeps the first host).
+pub struct CombinedTools {
+    hosts: Vec<Box<dyn ToolHost>>,
+    /// Tool name → host index, from the last `tools()`.
+    owner: std::collections::HashMap<String, usize>,
+}
+
+impl CombinedTools {
+    pub fn new(hosts: Vec<Box<dyn ToolHost>>) -> Self {
+        Self { hosts, owner: std::collections::HashMap::new() }
+    }
+
+    fn host(&mut self, name: &str) -> Option<&mut Box<dyn ToolHost>> {
+        let i = *self.owner.get(name)?;
+        self.hosts.get_mut(i)
+    }
+}
+
+impl ToolHost for CombinedTools {
+    fn tools(&mut self) -> Vec<ToolSpec> {
+        self.owner.clear();
+        let mut out = Vec::new();
+        for (i, h) in self.hosts.iter_mut().enumerate() {
+            for t in h.tools() {
+                if !self.owner.contains_key(&t.name) {
+                    self.owner.insert(t.name.clone(), i);
+                    out.push(t);
+                }
+            }
+        }
+        out
+    }
+
+    fn needs_approval(&mut self, call: &ToolCall) -> Option<String> {
+        self.host(&call.name)?.needs_approval(call)
+    }
+
+    fn call(&mut self, call: &ToolCall, cancel: &Cancel) -> ToolOutput {
+        match self.host(&call.name) {
+            Some(h) => h.call(call, cancel),
+            None => ToolOutput::error(format!("There is no tool named `{}`.", call.name)),
+        }
+    }
+}
+
 /// A short form of a call's arguments for a one-line display (`{"id":"seq.new","params":{…}}`).
 pub fn short_args(input: &Value, max: usize) -> String {
     let s = input.to_string();

@@ -301,10 +301,11 @@ mod api {
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let reply = self.http.post(&self.url, &headers, body, &self.name)?;
+            let mut reply = self.http.post(&self.url, &headers, body, &self.name)?;
             if reply.status != 200 {
                 let (s, after) = (reply.status, reply.retry_after);
-                return Err(from_http(s, after, &reply.error_body(), &self.name));
+                let e = from_http(s, after, &reply.error_body(), &self.name);
+                return Err(reply.detail(e));
             }
             read_stream(reply.body, request.model, events, cancel, &self.name)
         }
