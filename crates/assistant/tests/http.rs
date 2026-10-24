@@ -264,3 +264,31 @@ fn combined_tools_route_by_name() {
     assert!(t.needs_approval(&call("execute")).is_none());
     assert!(t.call(&call("nope"), &Cancel::new()).is_error);
 }
+
+#[test]
+fn pricing_flag_and_billing_links() {
+    let on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let o = Arc::clone(&on);
+    let s = MockServer::start(move |r| match (r.method.as_str(), r.path.as_str()) {
+        ("GET", "/v1/config") => {
+            assert!(r.header("authorization").is_none(), "no sign-in for the config");
+            HttpReply::json(200, &json!({"pricing_enabled": o.load(std::sync::atomic::Ordering::SeqCst)}))
+        }
+        ("POST", "/v1/billing/checkout") => HttpReply::json(200, &json!({"url": "https://pay.example.com/checkout/1"})),
+        ("POST", "/v1/billing/portal") => HttpReply::json(200, &json!({"link": "http://not-secure.example.com/"})),
+        _ => HttpReply::json(404, &json!({"error": "not_found", "message": "no"})),
+    })
+    .unwrap();
+    let tokens: Arc<dyn TokenSource> = Arc::new(|| -> Result<String, Error> { Ok("t".into()) });
+    let b = AccountBackend::new(s.url(), "the account server", tokens);
+    assert!(!b.pricing_enabled());
+    on.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(b.pricing_enabled());
+    assert_eq!(b.billing_link(BillingPage::Checkout).unwrap(), "https://pay.example.com/checkout/1");
+    assert_eq!(b.billing_link(BillingPage::Portal).unwrap_err().code(), "protocol", "only https links are opened");
+    let checkout = s.requests().into_iter().find(|r| r.path == "/v1/billing/checkout").unwrap();
+    assert_eq!(checkout.header("authorization"), Some("Bearer t"));
+    // unreachable: hidden
+    let gone = AccountBackend::new("http://127.0.0.1:9", "x", Arc::new(|| -> Result<String, Error> { Ok("t".into()) }));
+    assert!(!gone.pricing_enabled());
+}
