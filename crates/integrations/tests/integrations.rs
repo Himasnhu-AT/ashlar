@@ -331,3 +331,41 @@ fn a_corrupt_download_is_refused() {
     assert!(s.items[0].last_error.as_deref().unwrap().contains("sha256"), "{:?}", s.items[0].last_error);
     assert_eq!(s.items[0].installed, None);
 }
+
+/// A real bundle end to end, by hand: `REAL_ID=<id> REAL_ENTRY=<entry> REAL_ENTRY_ARGS=<json> REAL_ZIP=<zip> REAL_TEAM=<team id> REAL_DATA=<folder with its
+/// assets> REAL_TOOL=<tool> REAL_ARGS=<json> cargo test -p ashlar-integrations -- --ignored real_bundle`.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a real signed bundle"]
+fn real_bundle() {
+    let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+    let zip = fs::read(var("REAL_ZIP")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("integrations");
+    let mut e = entry(1, &zip);
+    let id = var("REAL_ID");
+    e.id = id.clone();
+    e.entry = var("REAL_ENTRY");
+    e.args = serde_json::from_str(&var("REAL_ENTRY_ARGS")).unwrap();
+    e.url = format!("https://downloads.example.com/{id}-1.zip");
+    let http = Arc::new(MemHttp::default());
+    http.put(&e.url, zip);
+    // The assets are already there (linked in), so nothing else is downloaded.
+    let data = root.join(&id).join("data");
+    fs::create_dir_all(&data).unwrap();
+    for f in fs::read_dir(var("REAL_DATA")).unwrap().flatten() {
+        std::os::unix::fs::symlink(f.path(), data.join(f.file_name())).unwrap();
+    }
+    let ix = Integrations::new(config(&root), http, Arc::new(Codesign::new(&var("REAL_TEAM"))), || {});
+    ix.set_catalog(vec![e]);
+    let t = Instant::now();
+    ix.install(&id).unwrap();
+    let s = wait(&ix, "running", |s| s.items[0].job.is_none());
+    assert!(matches!(s.items[0].server, ServerStatus::Running { .. }), "{s:#?}");
+    eprintln!("installed and started in {:.1} s; tools: {:?}", t.elapsed().as_secs_f32(), s.items[0].tools);
+    let t = Instant::now();
+    let out = ix.call(&var("REAL_TOOL"), &serde_json::from_str(&var("REAL_ARGS")).unwrap(), None);
+    eprintln!("{} in {:.1} s: {}", var("REAL_TOOL"), t.elapsed().as_secs_f32(), out.text().chars().take(300).collect::<String>());
+    assert!(!out.is_error);
+    ix.shutdown();
+}
