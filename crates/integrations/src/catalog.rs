@@ -36,6 +36,9 @@ pub struct Entry {
     pub platform: String,
     #[serde(default)]
     pub arch: String,
+    /// Where the zip is. Empty when the catalog doesn't publish links: a [`crate::Links`] then asks for
+    /// one at install time (a link signed for the signed-in account).
+    #[serde(default)]
     pub url: String,
     pub sha256: String,
     pub size: u64,
@@ -108,7 +111,7 @@ impl Entry {
         if self.version == 0 {
             return bad("version 0");
         }
-        if !url_ok(&self.url) || self.mirror.as_deref().is_some_and(|m| !url_ok(m)) {
+        if (!self.url.is_empty() && !url_ok(&self.url)) || self.mirror.as_deref().is_some_and(|m| !url_ok(m)) {
             return bad("download URLs must be https://");
         }
         if !sha_ok(&self.sha256) {
@@ -261,10 +264,12 @@ mod tests {
         universal["arch"] = "universal".into();
         let mut escape = entry_json("escape", 1);
         escape["entry"] = "escape/../../bin/sh".into();
-        let body = serde_json::json!({"integrations": [entry_json("b", 1), entry_json("b", 3), entry_json("b", 2), bad, intel, universal, escape, {"id": 5}]});
+        let mut unlinked = entry_json("nolink", 1);
+        unlinked.as_object_mut().unwrap().remove("url");
+        let body = serde_json::json!({"integrations": [entry_json("b", 1), entry_json("b", 3), entry_json("b", 2), bad, intel, universal, escape, unlinked, {"id": 5}]});
         let list = parse_catalog(body.to_string().as_bytes(), "macos", "arm64").unwrap();
         let ids: Vec<_> = list.iter().map(|e| (e.id.as_str(), e.version)).collect();
-        assert_eq!(ids, [("b", 3), ("uni", 1)]);
+        assert_eq!(ids, [("b", 3), ("nolink", 1), ("uni", 1)]);
         assert!(parse_catalog(b"[]", "macos", "arm64").is_err());
     }
 
