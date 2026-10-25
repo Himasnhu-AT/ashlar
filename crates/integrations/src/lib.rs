@@ -13,6 +13,7 @@
 //! | [`Integrations`] | the app's handle: catalog, install/update/remove, enable/disable, [`Snapshot`] for the UI, tools and calls for the assistant |
 //! | [`catalog`] | the catalog's entries and the bundle's `integration.json` manifest, validated |
 //! | [`download`] | resumable, verified downloads over an [`Http`] trait ([`HttpsClient`] with feature `https`) |
+//! | [`links`] | download links asked for at install time, signed for the signed-in account ([`SignedLinks`], [`Integrations::set_links`]) |
 //! | [`verify`] | the code-signature check ([`Codesign`]) |
 //! | [`mcp`] | the MCP stdio client: handshake, `tools/list`, `tools/call`, timeouts, cancellation |
 //! | [`server`] | one supervised server: start, restart after a crash, cached tool list |
@@ -28,6 +29,7 @@
 
 pub mod catalog;
 pub mod download;
+pub mod links;
 pub mod mcp;
 pub mod server;
 mod service;
@@ -39,6 +41,7 @@ pub use catalog::{Asset, Entry, Manifest};
 #[cfg(all(feature = "https", not(target_arch = "wasm32")))]
 pub use download::HttpsClient;
 pub use download::{Http, HttpResponse};
+pub use links::{Link, LinkError, Links, SignedLinks, Tokens};
 pub use server::ServerStatus;
 pub use service::{
     CatalogState, Config, DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, HostTool, Integrations, Item, Job, Refused, Snapshot, version_at_least,

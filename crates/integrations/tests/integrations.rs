@@ -369,3 +369,62 @@ fn real_bundle() {
     assert!(!out.is_error);
     ix.shutdown();
 }
+
+/// Serves the zip only on signed links; a link works for one request, which it cuts short.
+struct SignedOnly {
+    zip: Vec<u8>,
+    used: Mutex<Vec<String>>,
+}
+
+impl Http for SignedOnly {
+    fn get(&self, url: &str, from: u64) -> Result<HttpResponse, String> {
+        let mut used = self.used.lock().unwrap();
+        if !url.contains("sig=") || used.iter().any(|u| u == url) {
+            return Ok(HttpResponse { status: 403, body: Box::new(Cursor::new(b"link_expired".to_vec())) });
+        }
+        used.push(url.to_string());
+        let start = from as usize;
+        let end = (start + self.zip.len() / 2 + 1).min(self.zip.len());
+        let status = if from > 0 { 206 } else { 200 };
+        Ok(HttpResponse { status, body: Box::new(Cursor::new(self.zip[start..end].to_vec())) })
+    }
+}
+
+struct CountingLinks {
+    n: Mutex<u32>,
+}
+
+impl ashlar_integrations::Links for CountingLinks {
+    fn link(&self, entry: &Entry) -> Result<ashlar_integrations::Link, ashlar_integrations::LinkError> {
+        let mut n = self.n.lock().unwrap();
+        *n += 1;
+        Ok(ashlar_integrations::Link { url: format!("https://downloads.example.com/{}-{}.zip?sig={n}", entry.id, entry.version), mirror: None })
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn signed_links_are_asked_for_and_renewed_when_they_run_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("integrations");
+    let zip = bundle_zip(dir.path(), 1);
+    let mut e = entry(1, &zip);
+    e.url = String::new(); // the catalog publishes no link
+    let http = Arc::new(SignedOnly { zip, used: Mutex::new(Vec::new()) });
+    // no links: refused at once
+    let ix = Integrations::new(config(&root), http.clone(), Arc::new(AcceptAll), || {});
+    ix.set_catalog(vec![e.clone()]);
+    assert!(ix.install("fake").unwrap_err().to_string().contains("link"));
+    // with links: the first one runs out halfway, the second finishes the download
+    let links = Arc::new(CountingLinks { n: Mutex::new(0) });
+    ix.set_links(links.clone());
+    ix.install("fake").unwrap();
+    let s = wait(&ix, "the install", |s| s.items[0].job.is_none());
+    assert_eq!(*links.n.lock().unwrap(), 2, "a new link after the first ran out");
+    assert_eq!(s.items[0].installed, Some(1), "{s:#?}");
+    // (this server has no model file, so the first-use download is what fails)
+    assert!(s.items[0].last_error.as_deref().unwrap_or_default().contains("weights.bin"), "{s:#?}");
+    let state = fs::read_to_string(root.join("state.json")).unwrap();
+    assert!(!state.contains("sig="), "signed links aren't kept");
+    ix.shutdown();
+}

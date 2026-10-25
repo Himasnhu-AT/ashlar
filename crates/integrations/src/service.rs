@@ -15,13 +15,16 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::catalog::{Entry, MAX_CATALOG, Manifest, expand, parse_catalog, url_ok};
-use crate::download::{Http, get_small};
+use crate::download::{DownloadError, Http, get_small};
+use crate::links::Links;
 use crate::mcp::ServerCommand;
 use crate::server::{Server, ServerConfig, ServerStatus};
 use crate::store::{self, InstallError, Installed, Store, assets_digest, missing_assets};
 use crate::tool::{CallOutput, SEPARATOR, Tool, qualified_name};
 use crate::verify::Verify;
 
+/// How many links one install may ask for (each one resumes the download).
+const LINK_ROUNDS: usize = 4;
 /// Default time a server gets to answer the handshake.
 pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Default time a tool call may take.
@@ -138,6 +141,7 @@ struct Shared {
     errors: Mutex<BTreeMap<String, String>>,
     /// Manifests of installed versions, read once.
     manifests: Mutex<BTreeMap<(String, u32), Manifest>>,
+    links: Mutex<Option<Arc<dyn Links>>>,
     waker: Waker,
     closed: AtomicBool,
 }
@@ -185,6 +189,7 @@ impl Integrations {
             jobs: Mutex::new(BTreeMap::new()),
             errors: Mutex::new(BTreeMap::new()),
             manifests: Mutex::new(BTreeMap::new()),
+            links: Mutex::new(None),
             waker: Arc::new(waker),
             closed: AtomicBool::new(false),
         });
@@ -262,6 +267,9 @@ impl Integrations {
         if !version_at_least(&self.shared.config.app_version, &entry.min_app_version) {
             return Err(Refused::Other(format!("{} needs app version {} or later", entry.title, entry.min_app_version)));
         }
+        if entry.url.is_empty() && self.links().is_none() {
+            return Err(Refused::Other(format!("{} can't be downloaded by this build (it has no account to ask for a link)", entry.title)));
+        }
         let cancel = self.begin(id, Job::Downloading { done: 0, total: entry.size })?;
         let me = self.clone();
         let id = id.to_string();
@@ -272,12 +280,31 @@ impl Integrations {
         Ok(())
     }
 
-    fn do_install(&self, entry: &Entry, cancel: &AtomicBool) -> Result<(), InstallError> {
-        let id = entry.id.clone();
-        let progress = |done: u64| self.set_job(&id, Job::Downloading { done, total: entry.size });
+    /// Where install links come from, when the catalog doesn't publish them.
+    pub fn set_links(&self, links: Arc<dyn Links>) {
+        *self.shared.links.lock().unwrap_or_else(PoisonError::into_inner) = Some(links);
+    }
+
+    fn links(&self) -> Option<Arc<dyn Links>> {
+        self.shared.links.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    fn do_install(&self, listed: &Entry, cancel: &AtomicBool) -> Result<(), InstallError> {
+        let id = listed.id.clone();
+        let progress = |done: u64| self.set_job(&id, Job::Downloading { done, total: listed.size });
         let root = self.shared.config.root.clone();
-        // Download and check without holding the store: other integrations keep working meanwhile.
-        let prepared = {
+        let links = self.links();
+        // Download and check without holding the store: other integrations keep working meanwhile. A
+        // signed link that runs out mid-download (403) is asked for again and the download resumes.
+        let mut entry = listed.clone();
+        let mut prepared = None;
+        for round in 0..LINK_ROUNDS {
+            if entry.url.is_empty() || round > 0 {
+                let Some(links) = &links else { break };
+                let link = links.link(listed).map_err(|e| InstallError::Link(e.to_string()))?;
+                entry.url = link.url;
+                entry.mirror = link.mirror;
+            }
             let verify = Arc::clone(&self.shared.verify);
             let http = Arc::clone(&self.shared.http);
             let team = self.shared.config.team_id.clone();
@@ -287,8 +314,24 @@ impl Integrations {
                     self.set_job(&id, Job::Verifying);
                 }
             };
-            store::prepare(&root, entry, http.as_ref(), verify.as_ref(), team.as_deref(), &progress_then_verify, cancel)?
+            match store::prepare(&root, &entry, http.as_ref(), verify.as_ref(), team.as_deref(), &progress_then_verify, cancel) {
+                Err(InstallError::Download(DownloadError::Failed { detail, .. }))
+                    if links.is_some() && detail.contains("HTTP 403") && round + 1 < LINK_ROUNDS =>
+                {
+                    log::info!(target: "integrations", "[{id}] the download link ran out; asking for a new one");
+                }
+                result => {
+                    prepared = Some(result?);
+                    break;
+                }
+            }
+        }
+        let Some(mut prepared) = prepared else {
+            return Err(InstallError::Link("no download link".into()));
         };
+        // Signed links don't outlive the install.
+        prepared.entry.url.clear();
+        prepared.entry.mirror = None;
         // Swap versions with the server stopped.
         self.stop_server(&id);
         self.shared.store.lock().unwrap_or_else(PoisonError::into_inner).commit(prepared)?;

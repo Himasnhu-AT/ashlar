@@ -64,6 +64,8 @@ pub enum InstallError {
     Signature(String),
     #[error("{0}")]
     Disk(String),
+    #[error("{0}")]
+    Link(String),
 }
 
 /// The integrations folder and its state file.
