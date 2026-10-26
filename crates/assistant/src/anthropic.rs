@@ -104,6 +104,9 @@ pub fn request_body(r: &Request<'_>, opts: BodyOptions) -> Value {
         body.insert("system".into(), json!([{"type": "text", "text": r.system, "cache_control": {"type": "ephemeral"}}]));
     }
     body.insert("messages".into(), Value::Array(messages(r.messages)));
+    // Cache the conversation so far, not only the system prompt: every step of a tool loop re-sends
+    // all earlier tool results, and this puts the cache breakpoint on the last block each time.
+    body.insert("cache_control".into(), json!({"type": "ephemeral"}));
     if !r.tools.is_empty() {
         let tools: Vec<Value> = r
             .tools
@@ -461,6 +464,7 @@ mod tests {
         };
         let b = request_body(&r, BodyOptions::default());
         assert_eq!(b["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(b["cache_control"]["type"], "ephemeral", "the conversation is cached too");
         assert_eq!(b["tool_choice"]["type"], "auto");
         assert_eq!(b["tools"][0]["eager_input_streaming"], true);
         assert_eq!(b["output_config"]["effort"], "medium");
