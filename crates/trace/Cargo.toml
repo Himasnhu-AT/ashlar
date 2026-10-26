@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 keywords = ["telemetry", "crash-reporting", "analytics", "metrics"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 default = ["http", "sysinfo"]

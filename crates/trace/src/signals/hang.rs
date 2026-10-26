@@ -46,6 +46,8 @@ impl State {
 
     /// Opens a turn. One atomic update. A turn that is already open keeps its start, so a nested or
     /// repeated call cannot hide how long the loop has really been busy.
+    // `fetch_update` is named `try_update` from Rust 1.99; the MSRV (1.95) has only the old name.
+    #[allow(deprecated)]
     pub(super) fn begin_turn(&self, epoch: Instant) {
         let start = Self::stamp(epoch).saturating_add(1);
         let _ = self.turn.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |turn| (turn <= NO_TURN).then_some(start));
@@ -53,6 +55,8 @@ impl State {
 
     /// Closes the open turn. One atomic update. Without an open turn it does nothing; in particular it
     /// does not switch a host that only sends heartbeats over to turns.
+    // `fetch_update` is named `try_update` from Rust 1.99; the MSRV (1.95) has only the old name.
+    #[allow(deprecated)]
     pub(super) fn end_turn(&self) {
         let _ = self.turn.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |turn| (turn > NO_TURN).then_some(NO_TURN));
     }
@@ -62,6 +66,8 @@ impl State {
     }
 
     /// Ends one pause. When the last one ends, watching starts afresh so the paused time is not a hang.
+    // `fetch_update` is named `try_update` from Rust 1.99; the MSRV (1.95) has only the old name.
+    #[allow(deprecated)]
     pub(super) fn resume(&self, epoch: Instant) {
         // The fresh start is stored before the pause count drops. The other way round, a check that ran
         // in between would see no pause and a start from before it, and report the whole pause as a hang.
@@ -73,6 +79,8 @@ impl State {
 
     /// Moves the start of whatever is being watched to now: the last beat if there has been one, the open
     /// turn if there is one. Starts nothing that was not being watched.
+    // `fetch_update` is named `try_update` from Rust 1.99; the MSRV (1.95) has only the old name.
+    #[allow(deprecated)]
     fn start_afresh(&self, epoch: Instant) {
         let now = Self::stamp(epoch);
         let _ = self.last_beat.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |beat| (beat != 0).then_some(now));

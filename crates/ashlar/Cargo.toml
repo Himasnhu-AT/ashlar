@@ -1,9 +1,20 @@
 [package]
-name = "ashlar"
+name = "ashlar-rs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Build fast desktop and web apps in Rust: store, commands, UI, native, agent control"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["egui", "gui", "framework", "desktop", "app"]
+categories = ["gui", "development-tools"]
+readme = "../../README.md"
+
+# The package is `ashlar-rs`; apps still write `use ashlar::…`.
+[lib]
+name = "ashlar"
 
 [lints]
 workspace = true

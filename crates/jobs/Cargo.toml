@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Background jobs: progress, cancel, panic isolation, apply-on-UI-thread"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["background", "jobs", "progress", "cancel", "threads"]
+categories = ["concurrency", "gui"]
 
 [lints]
 workspace = true

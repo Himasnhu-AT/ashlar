@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Commands: registry, typed params, one execute chokepoint, discovery"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["commands", "command-palette", "undo", "framework"]
+categories = ["gui", "data-structures"]
 
 [lints]
 workspace = true

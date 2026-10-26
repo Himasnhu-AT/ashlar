@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in ashlar doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search the existing issues first.
+        **Security issues:** don't report them here; see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal code sample or a list of steps. A small repository is ideal.
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: crates
+    attributes:
+      label: Crate(s) and version
+      placeholder: "ashlar-rs 0.1.0, ashlar-ui 0.1.0 (or a commit hash)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      multiple: true
+      options: [macOS, Windows, Linux (X11), Linux (Wayland), Web (wasm32)]
+    validations:
+      required: true
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      description: Output of `rustc --version`
+      placeholder: "rustc 1.95.0"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, backtrace or screenshots
+      description: Crash logs are in the app's logs folder (`crash-<time>-<pid>.log`). Remove anything private before you paste.
+      render: text

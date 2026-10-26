@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Documentation library for agents: folders are categories, markdown files are documents, embedded at build time"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["documentation", "markdown", "agents", "embed"]
+categories = ["development-tools"]
 
 [lints]
 workspace = true

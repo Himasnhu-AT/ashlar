@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new building block or an improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ashlar holds general building blocks that serve more than one kind of app. Widgets for one
+        domain (a timeline, a CAD canvas) usually belong in the app that needs them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to build, and what's missing or hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The API or behaviour you'd like. Sketch code if it helps.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: input
+    id: crate
+    attributes:
+      label: Which crate(s) would this touch?
+      placeholder: "ashlar-ui, ashlar-native…"
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to implement this myself

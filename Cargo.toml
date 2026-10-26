@@ -8,10 +8,15 @@ exclude = ["examples/trace-demo-gui"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+license = "BSD-3-Clause"
+authors = ["The ashlar contributors"]
+repository = "https://github.com/Himasnhu-AT/ashlar"
+homepage = "https://github.com/Himasnhu-AT/ashlar"
 
 [workspace.dependencies]
 # internal
-ashlar = { path = "crates/ashlar", version = "0.1.0" }
+# published as `ashlar-rs` (the `ashlar` name on crates.io belongs to another project); imported as `ashlar`
+ashlar = { path = "crates/ashlar", version = "0.1.0", package = "ashlar-rs" }
 ashlar-store = { path = "crates/store", version = "0.1.0" }
 ashlar-command = { path = "crates/command", version = "0.1.0" }
 ashlar-jobs = { path = "crates/jobs", version = "0.1.0" }

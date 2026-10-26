@@ -1,7 +1,7 @@
 # Architecture
 
 ashlar is a workspace of small crates stacked in ranks. An app depends on the umbrella crate
-`ashlar` and turns on the features it needs; each layer below it can also be used on its own.
+`ashlar-rs` (imported as `ashlar`) and turns on the features it needs; each layer below it can also be used on its own.
 
 ## Crate ranks
 
@@ -36,7 +36,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
-| 7 | `ashlar` | Umbrella crate: re-exports the others behind features | no | – |
+| 7 | `ashlar-rs` | Umbrella crate (imported as `ashlar`): re-exports the others behind features | no | – |
 | 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
 

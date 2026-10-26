@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Headless logging and crash safety: directive filters, stderr + rotating file + in-memory ring, panic hook, launch guard"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["logging", "crash", "panic", "log-rotation"]
+categories = ["development-tools::debugging"]
 
 [lints]
 workspace = true

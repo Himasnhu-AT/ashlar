@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ashlar_trace::transport::{Reply, Request, Transport, TransportError};
 
-/// HTTPS with ureq, rustls and the RustCrypto provider (no `ring`, no bundled roots) and the
+/// HTTPS with ureq, rustls and the ring provider (no bundled roots) and the
 /// operating system's certificate verifier. Plain HTTP only to a loopback address
 /// ([`crate::endpoint_host`]); no redirects.
 pub struct Https {
@@ -18,7 +18,7 @@ const MAX_REPLY_BYTES: u64 = 64 * 1024;
 
 impl Https {
     pub fn new(endpoint: &str) -> Https {
-        let provider = Arc::new(rustls_rustcrypto::provider());
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
         let agent = ureq::Agent::config_builder()
             .tls_config(
                 ureq::tls::TlsConfig::builder()

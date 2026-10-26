@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "MCP over streamable HTTP on loopback: bearer token, Host/Origin checks, a gate, sessions"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["mcp", "model-context", "http", "agents"]
+categories = ["web-programming::http-server", "development-tools"]
 
 [lints]
 workspace = true

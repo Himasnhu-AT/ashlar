@@ -707,7 +707,9 @@ fn index_segments(dir: &Path) -> (Vec<Segment>, u64) {
         let is_segment = file.extension().is_some_and(|extension| extension == SEGMENT_EXTENSION);
         // A segment is a regular file. A link with a segment's name is left alone and never read.
         let is_segment = is_segment && entry.file_type().is_ok_and(|kind| kind.is_file());
-        if let (Some(seq), true, Ok(metadata)) = (seq, is_segment, entry.metadata()) {
+        // The file's own metadata, not the folder listing's: on Windows the listing can show an old
+        // size for a file that is still open, and a segment that looks empty is deleted.
+        if let (Some(seq), true, Ok(metadata)) = (seq, is_segment, std::fs::symlink_metadata(&file)) {
             next_seq = next_seq.max(seq + 1);
             if metadata.len() > 0 {
                 segments.push(Segment { seq, bytes: metadata.len() });
@@ -726,7 +728,8 @@ fn folder_stats(dir: &Path) -> (u64, Option<SystemTime>) {
     let mut bytes = 0;
     let mut newest = std::fs::metadata(dir).and_then(|metadata| metadata.modified()).ok();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let Ok(metadata) = entry.metadata() else { continue };
+        // As in `index_segments`: the file's own size, which on Windows can differ from the listing's.
+        let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else { continue };
         if metadata.is_file() {
             bytes += metadata.len();
             if let Ok(modified) = metadata.modified() {
@@ -874,10 +877,26 @@ mod tests {
     fn disk_bytes(dir: &Path) -> u64 {
         let mut total = 0;
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-            let metadata = entry.metadata().unwrap();
+            let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
             total += if metadata.is_dir() { disk_bytes(&entry.path()) } else { metadata.len() };
         }
         total
+    }
+
+    /// Backdates a folder. Windows opens a folder only with backup semantics and the right to change
+    /// its attributes.
+    fn set_folder_modified(dir: &Path, time: SystemTime) {
+        let mut options = OpenOptions::new();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            options.access_mode(FILE_WRITE_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        #[cfg(not(windows))]
+        options.read(true);
+        options.open(dir).unwrap().set_modified(time).unwrap();
     }
 
     /// Sends everything the spool will give, returning (session id, item) in order.
@@ -1084,7 +1103,7 @@ mod tests {
         let stale = dir.path().join(SPOOL_DIR).join("stale");
         std::fs::create_dir_all(&stale).unwrap();
         let old = SystemTime::now() - Duration::from_secs(3600);
-        File::open(&stale).unwrap().set_modified(old).unwrap();
+        set_folder_modified(&stale, old);
         spool.adopt_orphans(INSTALL, &DropCounts::default());
         assert!(!stale.exists());
     }
@@ -1426,7 +1445,7 @@ mod tests {
         for entry in std::fs::read_dir(&silent).unwrap().flatten() {
             OpenOptions::new().write(true).open(entry.path()).unwrap().set_modified(long_ago).unwrap();
         }
-        File::open(&silent).unwrap().set_modified(long_ago).unwrap();
+        set_folder_modified(&silent, long_ago);
 
         let mut spool = running(dir.path(), "now", 3, 1 << 20).without_locking();
         assert!(spool.adopt_orphans(INSTALL, &DropCounts::default()).is_empty(), "silence is not proof of an unclean end");

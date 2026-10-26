@@ -1,4 +1,4 @@
-//! HTTPS for the providers: ureq with rustls, the RustCrypto provider and the operating system's
+//! HTTPS for the providers: ureq with rustls, the ring provider and the operating system's
 //! certificate verifier; no redirects. Plain HTTP only to this computer (a local model server or a
 //! test server), or to another host when no secret is sent.
 
@@ -81,7 +81,7 @@ pub(crate) fn check_url(url: &str, sends_secret: bool) -> Result<(), Error> {
 
 impl Http {
     pub fn new() -> Self {
-        let provider = Arc::new(rustls_rustcrypto::provider());
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
         let agent = ureq::Agent::config_builder()
             .tls_config(
                 ureq::tls::TlsConfig::builder()

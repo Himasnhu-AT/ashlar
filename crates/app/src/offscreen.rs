@@ -98,7 +98,7 @@ fn render(rs: &RenderState, f: &OffscreenFrame<'_>) -> Result<egui::ColorImage, 
         let data = slice.get_mapped_range().map_err(|e| format!("reading the frame back: {e}"))?;
         let mut pixels = Vec::with_capacity((w as usize).saturating_mul(h as usize));
         for row in data.chunks(padded) {
-            for p in row.get(..unpadded).unwrap_or(&[]).chunks_exact(4) {
+            for p in row.get(..unpadded).unwrap_or(&[]).as_chunks::<4>().0 {
                 let at = |i: usize| p.get(rgba.get(i).copied().unwrap_or(0)).copied().unwrap_or(0);
                 pixels.push(egui::Color32::from_rgba_premultiplied(at(0), at(1), at(2), 255));
             }

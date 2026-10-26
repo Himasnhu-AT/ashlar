@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Files and settings: app dirs, durable atomic writes, keyed settings, recent files"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["settings", "config", "atomic-write", "app-dirs", "recent-files"]
+categories = ["filesystem", "config"]
 
 [lints]
 workspace = true

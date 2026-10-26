@@ -8,6 +8,12 @@ description = "Native OS features behind one API: dialogs, menus, clipboard, pow
 # The only crate allowed `unsafe`, for OS FFI (docs/adr/0001-native-ffi.md). The workspace lints are
 # copied here with `unsafe_code = "deny"` instead of `forbid`, so FFI modules can opt in with
 # `#[allow(unsafe_code)]`; every `unsafe` block carries a `// SAFETY:` comment.
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["native", "dialogs", "menu", "clipboard", "keychain"]
+categories = ["os", "gui"]
 [lints.rust]
 unsafe_code = "deny"
 

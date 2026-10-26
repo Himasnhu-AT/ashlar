@@ -85,9 +85,12 @@ impl Spawned {
         self.child.id()
     }
 
-    /// Asks the server to stop (SIGTERM) and waits for it.
+    /// Asks the server to stop (SIGTERM; elsewhere it is killed) and waits for it.
     pub fn stop(&mut self) {
+        #[cfg(unix)]
         let _ = Command::new("kill").arg(self.child.id().to_string()).status();
+        #[cfg(not(unix))]
+        let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }

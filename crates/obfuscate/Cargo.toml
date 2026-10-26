@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Compile-time string obfuscation: keep build-time values out of a strings dump of the binary"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["obfuscation", "strings", "compile-time", "macro"]
+categories = ["development-tools::build-utils"]
 
 [lints]
 workspace = true

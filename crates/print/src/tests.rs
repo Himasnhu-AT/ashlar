@@ -400,8 +400,14 @@ mod windows {
         let port = format!("{}\\{unique}.prn", std::env::temp_dir().display());
         let prepare = format!(
             "Add-PrinterPort -Name '{port}'; Add-Printer -Name '{unique}' -DriverName 'Generic / Text Only' -PortName '{port}'; \
-             $null = (Get-CimInstance Win32_Printer -Filter \"Name='{unique}'\" | Invoke-CimMethod -MethodName Pause)"
+             $null = (Get-CimInstance Win32_Printer -Filter \"Name='{unique}'\" | Invoke-CimMethod -MethodName Pause); \
+             Add-Type -AssemblyName System.Drawing; $settings = New-Object System.Drawing.Printing.PrinterSettings; \
+             $settings.PrinterName = '{unique}'; \
+             for ($i = 0; -not $settings.IsValid -and $i -lt 75; $i++) {{ Start-Sleep -Milliseconds 200; $settings.PrinterName = '{unique}' }}; \
+             if (-not $settings.IsValid) {{ exit 1 }}"
         );
+        // The spooler can take a moment to list a new queue; the setup above waits until the same
+        // check the print script makes passes, so the print below doesn't race it.
         let cleanup = format!(
             "Get-PrintJob -PrinterName '{unique}' -ErrorAction SilentlyContinue | Remove-PrintJob -ErrorAction SilentlyContinue; \
              Remove-Printer -Name '{unique}' -ErrorAction SilentlyContinue; Remove-PrinterPort -Name '{port}' -ErrorAction SilentlyContinue"

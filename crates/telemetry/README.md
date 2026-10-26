@@ -7,7 +7,7 @@ app built on ashlar.
   (tracer's `force_consent`); `DO_NOT_TRACK` is ignored. `TRACER_DISABLED` (a switch for developer
   machines and CI) turns it off. No endpoint, a bad one (`https://` only, `http://` to loopback),
   no write key, no data folder or the web: a disabled client, no requests, nothing on disk.
-- **Its own transport:** ureq + rustls + the RustCrypto provider + the OS certificate verifier
+- **Its own transport:** ureq + rustls + the ring provider + the OS certificate verifier
   (no `ring`, no bundled roots), no redirects.
 - **Never sent:** command parameters, file names, paths, typed text. Commands are reported by
   their registered id; log lines are redacted before they are kept as crash breadcrumbs.

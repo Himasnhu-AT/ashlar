@@ -126,7 +126,9 @@ mod tests {
     fn platform_dirs_are_distinct_and_named_after_the_app() {
         let Some(d) = platform("com", "Example Org", "Demo App") else { return };
         for p in [&d.cache, &d.logs] {
-            assert!(p.to_string_lossy().contains("Demo"), "{p:?}");
+            // each OS spells it its own way: "Demo App", "Demo-App" (macOS), "demoapp" (Linux)
+            let letters: String = p.to_string_lossy().chars().filter(char::is_ascii_alphanumeric).collect();
+            assert!(letters.to_ascii_lowercase().contains("demoapp"), "{p:?}");
         }
         assert_ne!(d.cache, d.data);
         assert_ne!(d.logs, d.data);

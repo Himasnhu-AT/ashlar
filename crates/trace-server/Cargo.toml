@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 keywords = ["telemetry", "crash-reporting", "analytics", "self-hosted"]
 categories = ["development-tools::debugging", "web-programming::http-server"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 ashlar-trace-proto = { workspace = true }

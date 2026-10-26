@@ -4,15 +4,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Update checks: an app's latest release from a releases API, semantic-version comparison, a background schedule, a cached last result, 'later' per version"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["update", "updater", "semver", "releases"]
+categories = ["os", "network-programming"]
 
 [lints]
 workspace = true
 
 [features]
 default = ["https"]
-# The HTTPS fetcher (`HttpsFetch`): ureq with rustls, the RustCrypto provider and the OS verifier,
+# The HTTPS fetcher (`HttpsFetch`): ureq with rustls, the ring provider and the OS verifier,
 # the TLS stack ashlar-telemetry already links, so an app adds no second one.
-https = ["dep:ureq", "dep:rustls", "dep:rustls-rustcrypto"]
+https = ["dep:ureq", "dep:rustls"]
 
 [dependencies]
 ashlar-fs = { workspace = true }
@@ -23,8 +29,7 @@ log = { workspace = true, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"], optional = true }
-rustls = { version = "0.23", default-features = false, optional = true }
-rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

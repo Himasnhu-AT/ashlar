@@ -150,6 +150,14 @@ impl Worker {
                 }
                 self.note_held();
                 self.send_cycle(true);
+                // A batch refused in that pass is counted after the counts were stored. Store them
+                // again and give them one more pass; once only, since a server that refuses everything
+                // would otherwise be sent the count of its own refusals for ever. What that pass
+                // cannot send stays on disk for the next process.
+                if stop && self.store_drop_counts() {
+                    self.send_cycle(true);
+                    self.store_drop_counts();
+                }
                 let clean = self.nothing_left();
                 self.flush_done = flush_requested;
                 self.shared.notify(|control| {
@@ -388,20 +396,23 @@ impl Worker {
     }
 
     /// Turns the drop counts into a `drops` item in the spool, so it leaves with the next batch and is
-    /// not lost if that batch has to be retried.
-    fn store_drop_counts(&mut self) {
+    /// not lost if that batch has to be retried. True when an item was stored.
+    fn store_drop_counts(&mut self) -> bool {
         if !self.shared.consent.any() {
-            return;
+            return false;
         }
         let reasons = self.shared.drops.take();
-        if !reasons.is_empty() {
-            let item = self.shared.item(ItemBody::Drops(Drops { reasons: reasons.clone() }));
-            if !self.shared.store_uncounted(CAT_META, &item) {
-                // Kept for the next pass, exactly as they were: failing to store the counts is not
-                // itself counted, or an unwritable disk would count one more loss on every pass.
-                self.shared.drops.merge(reasons);
-            }
+        if reasons.is_empty() {
+            return false;
         }
+        let item = self.shared.item(ItemBody::Drops(Drops { reasons: reasons.clone() }));
+        if self.shared.store_uncounted(CAT_META, &item) {
+            return true;
+        }
+        // Kept for the next pass, exactly as they were: failing to store the counts is not itself
+        // counted, or an unwritable disk would count one more loss on every pass.
+        self.shared.drops.merge(reasons);
+        false
     }
 
     fn post(&mut self, path: &str, body: &[u8], gzip: bool) -> Outcome {

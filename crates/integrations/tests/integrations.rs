@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// The install path needs a code-signed bundle, so its tests and their helpers are macOS-only.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
 //! The MCP client, the server supervisor and the whole install → run → call → remove path, against the
 //! fake server binary this crate builds (feature `fake-server`).
 
@@ -78,6 +80,8 @@ fn a_crash_fails_the_call_and_bad_servers_are_refused() {
     assert!(matches!(McpClient::start(&missing, "t", "1", T).unwrap_err(), McpError::Spawn(_)));
 }
 
+// `kill -0` asks whether the process still exists
+#[cfg(unix)]
 #[test]
 fn dropping_the_client_stops_the_server() {
     let client = McpClient::start(&command(&[], &[]), "tests", "1", T).unwrap();

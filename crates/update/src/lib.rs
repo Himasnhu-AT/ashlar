@@ -10,7 +10,7 @@
 //! | [`Version`] | `MAJOR.MINOR.PATCH[-pre][+build]`, ordered as semver.org orders it |
 //! | [`Release`], [`Outcome`] | the API's answer (tolerant of added or missing fields) and "newer or not" |
 //! | [`check`] | one blocking check through a [`Fetch`] (a command-line `update` verb) |
-//! | [`HttpsFetch`] | ureq + rustls (RustCrypto provider, OS verifier), feature `https` |
+//! | [`HttpsFetch`] | ureq + rustls (ring provider, OS verifier), feature `https` |
 //! | [`Updater`] | the app's background checker: first check [`FIRST_DELAY`] after launch, then every [`INTERVAL`] while "check automatically" is on, [`RETRY`] after a failure, at once on [`Updater::check_now`]; last result and "later" kept in a state file |
 //!
 //! Failures (offline, server down, a bad answer) are never shown on their own: an automatic check

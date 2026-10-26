@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 keywords = ["telemetry", "crash-reporting", "analytics"]
 categories = ["development-tools::debugging"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 serde.workspace = true

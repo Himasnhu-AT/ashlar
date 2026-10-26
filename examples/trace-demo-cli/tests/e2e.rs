@@ -561,13 +561,11 @@ fn data_recorded_offline_arrives_exactly_once_and_a_replay_changes_nothing() {
     assert_eq!(db.count("SELECT count(*) FROM crashes"), 1);
     assert_eq!(db.count("SELECT sum(frame_count) FROM perf"), 42);
     assert_eq!(db.count("SELECT count(*) FROM installs"), 1);
-    let counts = [
-        db.count("SELECT count(*) FROM events"),
-        db.count("SELECT count(*) FROM perf"),
-        db.count("SELECT count(*) FROM crashes"),
-        db.count("SELECT count FROM issues"),
-        db.count("SELECT count(*) FROM sessions"),
-    ];
+    // Only rows of the sessions that exist now: the replaying run has a session of its own, and it
+    // may live long enough to record a performance sample.
+    let known = db.strings("SELECT session_id FROM sessions").iter().map(|id| format!("'{}'", id.replace('\'', "''"))).collect::<Vec<_>>().join(",");
+    let rows = |table: &str| db.count(&format!("SELECT count(*) FROM {table} WHERE session_id IN ({known})"));
+    let counts = [rows("events"), rows("perf"), rows("crashes"), db.count("SELECT count FROM issues"), rows("sessions")];
     assert_eq!(std::fs::read_dir(&spool).unwrap().count(), 0, "everything delivered, nothing left");
 
     // Put the same spool back, as if the client had never heard the answer, and run again.
@@ -575,13 +573,8 @@ fn data_recorded_offline_arrives_exactly_once_and_a_replay_changes_nothing() {
     let replay = demo.run("relaunch", &[]);
     assert!(replay.status.success(), "{}", replay.stderr);
     assert_eq!(std::fs::read_dir(&spool).unwrap().count(), 0, "the replayed folder is sent and removed before the process exits");
-    let again = [
-        db.count("SELECT count(*) FROM events"),
-        db.count("SELECT count(*) FROM perf"),
-        db.count("SELECT count(*) FROM crashes"),
-        db.count("SELECT count FROM issues"),
-        db.count("SELECT count(*) FROM sessions") - 1, // the second relaunch has a session of its own
-    ];
+    assert_eq!(db.count("SELECT count(*) FROM sessions"), counts[4] + 1, "the replaying run adds only its own session");
+    let again = [rows("events"), rows("perf"), rows("crashes"), db.count("SELECT count FROM issues"), rows("sessions")];
     assert_eq!(counts, again, "replaying delivered items must not change anything");
 }
 

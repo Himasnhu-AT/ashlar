@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Documents: Arc snapshots, revisions, undo history, versioned formats with migrations, autosave"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["undo", "document", "autosave", "history", "migrations"]
+categories = ["data-structures", "gui"]
 
 [lints]
 workspace = true

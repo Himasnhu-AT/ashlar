@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "ashlar-debug: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests)"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["egui", "gui-testing", "automation", "screenshot", "agents"]
+categories = ["development-tools::testing", "development-tools::debugging"]
 
 [lints]
 workspace = true

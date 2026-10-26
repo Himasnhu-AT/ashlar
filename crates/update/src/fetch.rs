@@ -90,7 +90,7 @@ mod https {
     use super::{Fetch, Response};
     use crate::release::MAX_BODY;
 
-    /// HTTPS GETs with ureq, rustls and the RustCrypto provider (no `ring`, no bundled roots) and
+    /// HTTPS GETs with ureq, rustls and the ring provider (no bundled roots) and
     /// the operating system's certificate verifier: the stack ashlar-telemetry uses. No redirects,
     /// 10 s to connect, 20 s in all.
     pub struct HttpsFetch {
@@ -101,7 +101,7 @@ mod https {
     impl HttpsFetch {
         /// `user_agent`: e.g. `"my-app/1.2.3"`.
         pub fn new(user_agent: &str) -> HttpsFetch {
-            let provider = Arc::new(rustls_rustcrypto::provider());
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
             let agent = ureq::Agent::config_builder()
                 .tls_config(
                     ureq::tls::TlsConfig::builder()

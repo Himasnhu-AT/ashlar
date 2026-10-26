@@ -8,6 +8,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # the release workflow runs the whole gate on the tagged commit before it publishes
+  workflow_call:
 
 permissions:
   contents: read

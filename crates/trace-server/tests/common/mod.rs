@@ -16,6 +16,8 @@ pub struct Reply {
     pub status: u16,
     pub body: String,
     pub retry_after: Option<String>,
+    /// The `Connection` header, lowercase.
+    pub connection: Option<String>,
 }
 
 impl Reply {
@@ -130,13 +132,19 @@ impl TestServer {
         Reply {
             status: response.status().as_u16(),
             retry_after: response.headers().get("retry-after").and_then(|value| value.to_str().ok()).map(str::to_string),
+            connection: response.headers().get("connection").and_then(|value| value.to_str().ok()).map(str::to_ascii_lowercase),
             body: response.body_mut().read_to_string().unwrap_or_default(),
         }
     }
 
     pub fn get(&self, path: &str) -> Reply {
         let mut response = self.agent.get(format!("{}{path}", self.base)).call().unwrap();
-        Reply { status: response.status().as_u16(), retry_after: None, body: response.body_mut().read_to_string().unwrap_or_default() }
+        Reply {
+            status: response.status().as_u16(),
+            retry_after: None,
+            connection: None,
+            body: response.body_mut().read_to_string().unwrap_or_default(),
+        }
     }
 
     /// Posts an envelope with the server's key, gzip-compressed like the SDK does.

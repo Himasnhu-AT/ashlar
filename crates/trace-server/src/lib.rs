@@ -11,6 +11,9 @@
 //! - [`cli`](crate::cli): subcommands.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// Handlers return `Result<_, Response>` so an early `?` can answer with any status: the axum
+// pattern. A response is big, but it is built once per request, so boxing it would gain nothing.
+#![allow(clippy::result_large_err)]
 
 pub mod cli;
 pub mod config;

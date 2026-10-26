@@ -107,7 +107,10 @@ fn unknown_fields_and_item_types_are_tolerated() {
 fn unknown_missing_and_revoked_keys_are_401() {
     let server = TestServer::demo();
     let body = serde_json::to_vec(&envelope("i1", "s1", vec![])).unwrap();
-    assert_eq!(server.post_raw("/v1/ingest", Some("tk_nope"), false, &body).status, 401);
+    let refused = server.post_raw("/v1/ingest", Some("tk_nope"), false, &body);
+    assert_eq!(refused.status, 401);
+    // refused before the body is read: the client must not reuse the connection
+    assert_eq!(refused.connection.as_deref(), Some("close"));
     assert_eq!(server.post_raw("/v1/ingest", None, false, &body).status, 401);
     assert_eq!(server.post_raw("/v1/forget", Some("tk_nope"), false, b"{}").status, 401);
     assert_eq!(server.post_raw("/v1/ingest", Some(&server.key), false, &body).status, 200);

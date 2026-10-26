@@ -1,6 +1,8 @@
 //! Failure injection: a locked, unwritable or half-migrated database, a newer schema, and killing the real
 //! server while it is being loaded.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::too_many_arguments, clippy::type_complexity)]
+// Killing the server needs Unix signals, so that test and its helpers exist only there.
+#![cfg_attr(not(unix), allow(dead_code, unused_imports))]
 
 mod common;
 
@@ -195,6 +197,7 @@ fn hammer(port: u16, key: &str, stop_after: Duration, kill: impl FnOnce() + Send
 }
 
 #[test]
+#[cfg(unix)]
 fn killing_the_server_under_load_loses_no_acknowledged_item() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");

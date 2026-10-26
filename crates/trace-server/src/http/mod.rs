@@ -218,6 +218,14 @@ fn json<T: Serialize>(status: StatusCode, body: &T) -> Response {
     }
 }
 
+/// A refusal sent before the request body was read. The connection cannot carry another request
+/// (the unread body is still in it), so the client is told to close it: one that kept it in its pool
+/// would see its next request fail with a dropped connection instead of an answer.
+fn unread_body(mut response: Response) -> Response {
+    response.headers_mut().insert(header::CONNECTION, HeaderValue::from_static("close"));
+    response
+}
+
 fn failure(status: StatusCode, message: &str) -> Response {
     #[derive(Serialize)]
     struct Failure<'a> {
@@ -320,10 +328,10 @@ async fn ingest_handler(State(state): State<AppState>, request: Request) -> Resp
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0);
     let app = match authenticate(&state, &parts.headers, peer).await {
         Ok(app) => app,
-        Err(response) => return response,
+        Err(response) => return unread_body(response),
     };
     if state.storage_full().await {
-        return failure(StatusCode::INSUFFICIENT_STORAGE, "storage full");
+        return unread_body(failure(StatusCode::INSUFFICIENT_STORAGE, "storage full"));
     }
     let bytes = match read_body(&parts.headers, body).await {
         Ok(bytes) => bytes,
@@ -351,7 +359,7 @@ async fn forget_handler(State(state): State<AppState>, request: Request) -> Resp
     let peer = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0);
     let app = match authenticate(&state, &parts.headers, peer).await {
         Ok(app) => app,
-        Err(response) => return response,
+        Err(response) => return unread_body(response),
     };
     let bytes = match read_body(&parts.headers, body).await {
         Ok(bytes) => bytes,

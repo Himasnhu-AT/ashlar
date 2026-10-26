@@ -4,15 +4,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Integrations: downloadable, code-signed tool servers an app installs from a catalog and runs as MCP servers over stdio, their tools offered to an in-app assistant"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["mcp", "plugins", "code-signing", "integrations", "agents"]
+categories = ["development-tools"]
 
 [lints]
 workspace = true
 
 [features]
 default = ["https"]
-# The HTTPS downloader (ureq with rustls, the RustCrypto provider and the OS verifier, the TLS stack
+# The HTTPS downloader (ureq with rustls, the ring provider and the OS verifier, the TLS stack
 # the other ashlar network crates link).
-https = ["dep:ureq", "dep:rustls", "dep:rustls-rustcrypto"]
+https = ["dep:ureq", "dep:rustls"]
 # The fake MCP server binary the tests drive (also usable from an app's own tests).
 fake-server = []
 
@@ -26,8 +32,7 @@ sha2 = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"], optional = true }
-rustls = { version = "0.23", default-features = false, optional = true }
-rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 
 [dev-dependencies]
 ashlar-integrations = { path = ".", features = ["fake-server"] }

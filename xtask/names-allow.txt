@@ -4,3 +4,6 @@
 
 # The PostScript Printer Description format names its vendor in keywords (`*PPD-Adobe: "4.3"`).
 crates/print adobe
+
+# The README's "Built with ashlar" section names the apps built on ashlar (AGENTS.md §1).
+README.md bay

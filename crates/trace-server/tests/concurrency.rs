@@ -154,16 +154,28 @@ fn concurrent_forget_and_ingest_leave_no_rows_and_no_errors() {
 fn revoking_a_key_while_ingesting_gives_200s_then_401s_and_nothing_else() {
     let server = TestServer::demo();
     let statuses = std::sync::Mutex::new(Vec::new());
+    let revoked = std::sync::atomic::AtomicBool::new(false);
+    // Driven by what happened, not by the clock: revoke once some requests got through, and keep
+    // sending until well after, however fast the machine is.
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            for n in 0..150 {
+            let mut after = 0;
+            for n in 0..100_000 {
+                let done = revoked.load(Ordering::SeqCst);
                 let reply = server.ingest(&envelope("i1", "s1", vec![event(&format!("e{n}"), "file.open")]));
                 statuses.lock().unwrap().push(reply.status);
+                after += u32::from(done);
+                if after >= 20 {
+                    break;
+                }
             }
         });
         scope.spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(60));
+            while statuses.lock().unwrap().len() < 20 {
+                std::thread::yield_now();
+            }
             assert!(server.store.revoke_key(&server.key, 1).unwrap());
+            revoked.store(true, Ordering::SeqCst);
         });
     });
     let statuses = statuses.into_inner().unwrap();

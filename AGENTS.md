@@ -19,7 +19,8 @@ A crate here must serve more than one app and never depend on one. Never name th
 ashlar, anywhere in this repository (public API, identifiers, docs, agent instructions, commit
 messages): describe them by kind instead, "a video editor", "a DAW". `cargo xtask names` enforces this
 over every file in the repository (the names are kept only as hashes; false positives go in
-`xtask/names-allow.txt`).
+`xtask/names-allow.txt`). The one exception is the "Built with ashlar" section of the root
+README, allowed in that file only.
 
 ## 2. Layering (`cargo xtask layers`)
 Crates have a rank (see `xtask/src/main.rs`); a crate depends only on lower ranks. Ranks 0–4 never

@@ -27,6 +27,7 @@ pub fn clear() {
     *HOOK.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
+#[cfg(unix)]
 fn run_hook(signal: i32) {
     let hook = HOOK.lock().unwrap_or_else(PoisonError::into_inner).take();
     if let Some(hook) = hook {

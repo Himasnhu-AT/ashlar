@@ -31,7 +31,7 @@ fn snapshot(dir: &Path) -> Vec<(String, String)> {
             if p.is_dir() {
                 walk(root, &p, out);
             } else {
-                out.push((p.strip_prefix(root).unwrap().display().to_string(), read(&p)));
+                out.push((p.strip_prefix(root).unwrap().display().to_string().replace('\\', "/"), read(&p)));
             }
         }
     }
@@ -154,7 +154,7 @@ fn project_scope_writes_into_the_project() {
     let mut written = Vec::new();
     for agent in Agent::ALL {
         for a in install(agent, &scope, &s, &host).unwrap().apply("app").unwrap() {
-            written.push(a.path.strip_prefix(dir.path()).unwrap().display().to_string());
+            written.push(a.path.strip_prefix(dir.path()).unwrap().display().to_string().replace('\\', "/"));
         }
     }
     for want in [

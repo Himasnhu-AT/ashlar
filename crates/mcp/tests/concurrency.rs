@@ -51,8 +51,10 @@ fn a_cancelled_request_gets_no_response_running_or_queued() {
         &[
             slow(1, 300),
             cancel(1),
-            call(2, "execute", json!({"command": "count.add"})),
+            // Sent ahead of its request, so the reader has recorded it before the request can be
+            // taken from the queue: otherwise a busy machine may start the request first.
             cancel(2),
+            call(2, "execute", json!({"command": "count.add"})),
             json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}),
         ],
     );

@@ -126,11 +126,11 @@ pub fn cli_path(host: &Host, name: &str, fallback: Option<PathBuf>) -> Option<Pa
     host.which(name).or_else(|| fallback.filter(|p| is_program(p)))
 }
 
-#[cfg(test)]
+// the only test needs Unix file modes
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn finds_programs_and_prefers_the_installed_tool() {
         use std::os::unix::fs::PermissionsExt;

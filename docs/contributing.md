@@ -33,6 +33,8 @@ Other tasks:
 CI (`.github/workflows/ci.yml`) runs `cargo xtask ci` on Linux, macOS and Windows, `cargo xtask
 msrv`, and the advisory check. Actions are pinned by commit SHA; update them together.
 
+Releases (crates.io and GitHub) are in [releasing.md](releasing.md).
+
 Tools needed locally: stable Rust with `rustfmt`, `clippy` and the `wasm32-unknown-unknown`
 target; cargo-deny is optional locally and installed on CI.
 

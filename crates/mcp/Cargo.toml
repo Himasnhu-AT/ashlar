@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "MCP server generated from the command registry (stdio), headless or bridged"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["mcp", "model-context", "agents", "ai", "commands"]
+categories = ["development-tools", "api-bindings"]
 
 [lints]
 workspace = true

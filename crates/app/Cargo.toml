@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "ashlar runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["egui", "gui", "framework", "desktop", "app"]
+categories = ["gui"]
 
 [lints]
 workspace = true

@@ -432,6 +432,8 @@ mod review {
     #[derive(Default)]
     struct ServerState {
         forget_status: u16,
+        /// What ingest answers; 200 when unset.
+        ingest_status: Option<u16>,
         /// Path and status of every request.
         seen: Vec<(String, u16)>,
         /// Every ingest body, unpacked, one after the other.
@@ -462,7 +464,7 @@ mod review {
     impl Transport for Server {
         fn send(&mut self, request: &Request<'_>) -> Result<Reply, TransportError> {
             let mut state = self.0.lock().unwrap();
-            let status = if request.path == routes::FORGET { state.forget_status } else { 200 };
+            let status = if request.path == routes::FORGET { state.forget_status } else { state.ingest_status.unwrap_or(200) };
             state.seen.push((request.path.to_owned(), status));
             if request.path == routes::INGEST {
                 use std::io::Read;
@@ -500,6 +502,25 @@ mod review {
             std::thread::sleep(Duration::from_millis(5));
         }
         false
+    }
+
+    #[test]
+    fn a_batch_refused_in_the_last_pass_is_still_counted() {
+        let dir = TempDir::new("review");
+        let server = Server::default();
+        server.0.lock().unwrap().ingest_status = Some(400);
+        let pipeline = sending(dir.path(), &server, |_| {});
+        // The session start and end leave in the pass the shutdown makes, and are refused there.
+        pipeline.shutdown();
+        assert!(server.count(routes::INGEST, 400) > 0);
+        let rejected: u64 = spooled(dir.path())
+            .iter()
+            .filter_map(|(_, _, item)| match &item.body {
+                ItemBody::Drops(drops) => drops.reasons.get("server_rejected").copied(),
+                _ => None,
+            })
+            .sum();
+        assert!(rejected > 0, "the refusal was not kept for the next process: {:?}", spooled(dir.path()));
     }
 
     #[test]

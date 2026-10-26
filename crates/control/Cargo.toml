@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Agent control port: hardened JSON-lines server, client, standard method set"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["automation", "agents", "ipc", "testing", "json"]
+categories = ["development-tools::testing", "network-programming"]
 
 [lints]
 workspace = true

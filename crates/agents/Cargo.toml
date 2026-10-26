@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Connect coding agents to an app: its MCP server in each agent's config, skills and rules made from a docs category, install and uninstall"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["mcp", "agents", "ai", "claude", "codex"]
+categories = ["development-tools"]
 
 [lints]
 workspace = true

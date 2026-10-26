@@ -47,7 +47,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-telemetry", 3),
     ("ashlar-ui", 5),
     ("ashlar-app", 6),
-    ("ashlar", 7),
+    ("ashlar-rs", 7),
     ("ashlar-example-gallery", 8),
     ("ashlar-example-notes", 8),
     ("ashlar-example-trace-demo-cli", 8),

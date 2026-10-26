@@ -135,7 +135,7 @@ mod https {
     const MAX_ANSWER: usize = 64 * 1024;
 
     pub fn getter(user_agent: &str) -> Box<AuthorizedGet> {
-        let provider = Arc::new(rustls_rustcrypto::provider());
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .tls_config(
                 ureq::tls::TlsConfig::builder()

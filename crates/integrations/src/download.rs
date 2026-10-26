@@ -247,7 +247,7 @@ mod https {
 
     use super::{Http, HttpResponse};
 
-    /// [`Http`] over ureq + rustls (RustCrypto provider, the OS certificate verifier). Follows up to five
+    /// [`Http`] over ureq + rustls (ring provider, the OS certificate verifier). Follows up to five
     /// redirects (a downloads host may send a client to a fallback copy). One request may take at most 30
     /// minutes; a longer download continues with the next request, where it stopped.
     pub struct HttpsClient {
@@ -257,7 +257,7 @@ mod https {
 
     impl HttpsClient {
         pub fn new(user_agent: &str) -> HttpsClient {
-            let provider = Arc::new(rustls_rustcrypto::provider());
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
             let agent = ureq::Agent::config_builder()
                 .tls_config(
                     ureq::tls::TlsConfig::builder()

@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Always-on crash, performance and usage telemetry to a self-hosted ashlar-trace server: one client, hooks for the command chokepoint, logging, the frame loop and native dialogs"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["telemetry", "crash-reporting", "analytics", "egui"]
+categories = ["development-tools::debugging"]
 
 [lints]
 workspace = true
@@ -24,10 +30,9 @@ flate2 = { version = "1", optional = true }
 serde_json = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# pure-Rust TLS: rustls with the RustCrypto provider and the operating system's verifier
+# rustls with the ring provider and the operating system's verifier
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
-rustls = { version = "0.23", default-features = false }
-rustls-rustcrypto = "0.0.2-alpha"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 ashlar-telemetry = { path = ".", features = ["testing"] }

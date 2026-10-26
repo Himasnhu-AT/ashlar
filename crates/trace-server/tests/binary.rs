@@ -3,7 +3,6 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 fn binary(dir: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_ashlar-trace-server"));
@@ -64,7 +63,9 @@ fn the_commands_work_end_to_end_through_the_binary() {
 }
 
 #[test]
+#[cfg(unix)] // stops the server with SIGTERM
 fn serve_logs_a_warning_for_a_public_bind_without_a_proxy_and_stops_on_sigterm() {
+    use std::time::{Duration, Instant};
     let dir = tempfile::tempdir().unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let child = binary(dir.path()).env("TRACER_BIND", format!("0.0.0.0:{port}")).arg("serve").stderr(Stdio::piped()).spawn().unwrap();

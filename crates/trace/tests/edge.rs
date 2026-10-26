@@ -533,7 +533,17 @@ pub fn start_and_stop(times: usize) {
             assert!(tracer.flush_blocking(WAIT));
         }
     }
-    let after = open_files();
+    // The other tests in this binary run alongside and open files of their own for a moment, so a
+    // count that is high once is not a leak; one that stays high is.
+    let mut after = open_files();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while let (Some(before), Some(now)) = (before, after) {
+        if now <= before + 2 || std::time::Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        after = open_files();
+    }
     if let (Some(before), Some(after)) = (before, after) {
         assert!(after <= before + 2, "open files went from {before} to {after} over {times} starts");
     }
