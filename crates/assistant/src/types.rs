@@ -26,13 +26,25 @@ pub struct ToolCall {
     pub invalid_input: Option<String>,
 }
 
-/// The answer to one [`ToolCall`].
+/// A picture a tool returned, sent to models that take images.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    /// `image/png`, `image/jpeg`, `image/webp` or `image/gif`.
+    pub media_type: String,
+    /// The bytes, base64.
+    pub data: String,
+}
+
+/// The answer to one [`ToolCall`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub call_id: String,
     pub content: String,
     #[serde(default)]
     pub is_error: bool,
+    /// Pictures that go with the text (a rendered frame, a contact sheet).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
 }
 
 /// One piece of a message.
@@ -331,7 +343,7 @@ mod tests {
         let call = |id: &str| Block::ToolCall(ToolCall { id: id.into(), name: "t".into(), input: json!({}), invalid_input: None });
         c.push(Message { role: Role::Assistant, blocks: vec![call("a"), call("b")], native: None });
         assert_eq!(c.unanswered_calls().len(), 2);
-        c.push(Message::tool_results(vec![ToolResult { call_id: "a".into(), content: "ok".into(), is_error: false }]));
+        c.push(Message::tool_results(vec![ToolResult { call_id: "a".into(), content: "ok".into(), is_error: false, ..Default::default() }]));
         assert_eq!(c.unanswered_calls().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["b"]);
     }
 

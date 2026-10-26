@@ -36,11 +36,17 @@ pub fn messages(system: &str, list: &[Message]) -> Vec<Value> {
         match m.role {
             Role::User => {
                 let mut text = String::new();
+                let mut images = Vec::new();
                 for b in &m.blocks {
                     match b {
                         Block::ToolResult(r) => {
                             let content = if r.is_error { format!("Error: {}", r.content) } else { r.content.clone() };
                             out.push(json!({"role": "tool", "tool_call_id": r.call_id, "content": content}));
+                            images.extend(
+                                r.images
+                                    .iter()
+                                    .map(|i| json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{}", i.media_type, i.data)}})),
+                            );
                         }
                         Block::Text { text: t } => {
                             if !text.is_empty() {
@@ -50,6 +56,12 @@ pub fn messages(system: &str, list: &[Message]) -> Vec<Value> {
                         }
                         _ => {}
                     }
+                }
+                if !images.is_empty() {
+                    // tool messages carry text only: the pictures follow in a user message
+                    let mut parts = vec![json!({"type": "text", "text": "Images returned by the tool calls above:"})];
+                    parts.extend(images);
+                    out.push(json!({"role": "user", "content": parts}));
                 }
                 if !text.is_empty() {
                     out.push(json!({"role": "user", "content": text}));
@@ -335,7 +347,7 @@ mod tests {
         let list = [
             Message::user_text("go"),
             Message { role: Role::Assistant, blocks: vec![Block::Text { text: "On it.".into() }, Block::ToolCall(call)], native: None },
-            Message::tool_results(vec![ToolResult { call_id: "toolu_1".into(), content: "bad".into(), is_error: true }]),
+            Message::tool_results(vec![ToolResult { call_id: "toolu_1".into(), content: "bad".into(), is_error: true, ..Default::default() }]),
         ];
         let tools = [ToolSpec { name: "execute".into(), description: "d".into(), input_schema: json!({"type": "object"}), strict: false }];
         let r = Request { model: "m", system: "sys", tools: &tools, messages: &list, max_tokens: 100, effort: None, thinking: Thinking::Default };
@@ -348,5 +360,17 @@ mod tests {
         for k in ["temperature", "max_tokens", "top_p"] {
             assert!(b.get(k).is_none());
         }
+    }
+
+    #[test]
+    fn tool_images_follow_in_a_user_message() {
+        let img = crate::types::Image { media_type: "image/jpeg".into(), data: "QUJD".into() };
+        let m = messages(
+            "",
+            &[Message::tool_results(vec![ToolResult { call_id: "t1".into(), content: "frame".into(), images: vec![img], ..Default::default() }])],
+        );
+        assert_eq!(m[0]["role"], "tool");
+        assert_eq!(m[1]["role"], "user");
+        assert_eq!(m[1]["content"][1]["image_url"]["url"], "data:image/jpeg;base64,QUJD");
     }
 }

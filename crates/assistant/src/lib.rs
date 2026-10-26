@@ -60,6 +60,6 @@ pub use settings::{AccountConfig, ProviderKind, Settings};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use settings::{build_provider, check_connection};
 pub use types::{
-    Block, Conversation, Effort, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price,
+    Block, Conversation, Effort, Image, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price,
 };
 pub use worker::{TurnHandle, Wake, WorkerEvent, spawn_turn};

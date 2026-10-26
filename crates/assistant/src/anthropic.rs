@@ -45,13 +45,30 @@ fn tool_id(id: &str) -> String {
     if s.is_empty() { "call".into() } else { s }
 }
 
-fn user_content(m: &Message) -> Vec<Value> {
+/// The most images one request carries (the newest; older ones are named in text). The API takes 100.
+pub const MAX_IMAGES: usize = 40;
+
+fn user_content(m: &Message, skip_images: &mut usize) -> Vec<Value> {
     m.blocks
         .iter()
         .filter_map(|b| match b {
             Block::Text { text } if !text.is_empty() => Some(json!({"type": "text", "text": text})),
             Block::ToolResult(r) => {
-                let content = if r.content.is_empty() { "(no output)" } else { r.content.as_str() };
+                let text = if r.content.is_empty() { "(no output)" } else { r.content.as_str() };
+                let content = if r.images.is_empty() {
+                    json!(text)
+                } else {
+                    let mut parts = vec![json!({"type": "text", "text": text})];
+                    for img in &r.images {
+                        if *skip_images > 0 {
+                            *skip_images -= 1;
+                            parts.push(json!({"type": "text", "text": "[an earlier image, left out to keep the request small]"}));
+                        } else {
+                            parts.push(json!({"type": "image", "source": {"type": "base64", "media_type": img.media_type, "data": img.data}}));
+                        }
+                    }
+                    Value::Array(parts)
+                };
                 let mut v = json!({"type": "tool_result", "tool_use_id": tool_id(&r.call_id), "content": content});
                 if r.is_error {
                     v["is_error"] = json!(true);
@@ -84,10 +101,12 @@ fn assistant_content(m: &Message) -> Vec<Value> {
 
 /// The `messages` array.
 pub fn messages(list: &[Message]) -> Vec<Value> {
+    let total: usize = list.iter().flat_map(|m| m.tool_results_iter()).map(|r| r.images.len()).sum();
+    let mut skip = total.saturating_sub(MAX_IMAGES);
     list.iter()
         .filter_map(|m| {
             let (role, content) = match m.role {
-                Role::User => ("user", user_content(m)),
+                Role::User => ("user", user_content(m, &mut skip)),
                 Role::Assistant => ("assistant", assistant_content(m)),
             };
             (!content.is_empty()).then(|| json!({"role": role, "content": content}))
@@ -484,10 +503,38 @@ mod tests {
         let list = [
             Message::user_text("go"),
             Message { role: Role::Assistant, blocks: vec![Block::Thinking { text: "hm".into() }, Block::ToolCall(call)], native: None },
-            Message::tool_results(vec![ToolResult { call_id: "call:1".into(), content: String::new(), is_error: true }]),
+            Message::tool_results(vec![ToolResult { call_id: "call:1".into(), content: String::new(), is_error: true, ..Default::default() }]),
         ];
         let m = messages(&list);
         assert_eq!(m[1]["content"], json!([{"type": "tool_use", "id": "call_1", "name": "t", "input": {"a": 1}}]));
         assert_eq!(m[2]["content"][0], json!({"type": "tool_result", "tool_use_id": "call_1", "content": "(no output)", "is_error": true}));
+    }
+
+    #[test]
+    fn images_go_in_the_tool_result_and_only_the_newest_are_sent() {
+        let img = |d: &str| crate::types::Image { media_type: "image/png".into(), data: d.into() };
+        let mut list = vec![Message::user_text("look")];
+        for i in 0..(MAX_IMAGES + 2) {
+            list.push(Message::tool_results(vec![ToolResult {
+                call_id: format!("c{i}"),
+                content: "frame".into(),
+                images: vec![img(&format!("d{i}"))],
+                ..Default::default()
+            }]));
+        }
+        let m = messages(&list);
+        let first = &m[1]["content"][0]["content"];
+        assert_eq!(first[0], json!({"type": "text", "text": "frame"}));
+        assert_eq!(first[1]["type"], "text", "the oldest images are named, not sent");
+        let last = &m[MAX_IMAGES + 2]["content"][0]["content"];
+        assert_eq!(
+            last[1],
+            json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": format!("d{}", MAX_IMAGES + 1)}})
+        );
+        let sent = m.iter().filter(|v| v["content"][0]["content"][1]["type"] == "image").count();
+        assert_eq!(sent, MAX_IMAGES);
+        // a result without images keeps the plain string form
+        let plain = messages(&[Message::tool_results(vec![ToolResult { call_id: "x".into(), content: "ok".into(), ..Default::default() }])]);
+        assert_eq!(plain[0]["content"][0]["content"], "ok");
     }
 }

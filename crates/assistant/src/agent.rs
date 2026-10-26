@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::error::Error;
 use crate::provider::{Cancel, Provider, Request};
 use crate::schema;
-use crate::types::{Conversation, Effort, Message, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price};
+use crate::types::{Conversation, Effort, Image, Message, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price};
 
 /// How a turn runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,25 +35,34 @@ impl AgentConfig {
             max_tokens: 16_000,
             effort: Some(Effort::Medium),
             thinking: Thinking::Summarized,
-            max_steps: 24,
+            max_steps: 80,
         }
     }
 }
 
 /// What a tool returned.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
+    /// Pictures that go with the text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Image>,
 }
 
 impl ToolOutput {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false }
+        Self { content: content.into(), is_error: false, images: Vec::new() }
     }
 
     pub fn error(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true }
+        Self { content: content.into(), is_error: true, images: Vec::new() }
+    }
+
+    /// Adds a picture (sent to models that take images).
+    pub fn with_image(mut self, image: Image) -> Self {
+        self.images.push(image);
+        self
     }
 }
 
@@ -214,7 +223,7 @@ fn answer(call: &ToolCall, specs: &[ToolSpec], tools: &mut dyn ToolHost, observe
     }
     observer.event(AgentEvent::ToolStarted(call.clone()));
     let out = tools.call(call, cancel);
-    ToolOutput { content: cut(out.content), is_error: out.is_error }
+    ToolOutput { content: cut(out.content), is_error: out.is_error, images: out.images }
 }
 
 /// Run one turn on `conversation`, whose last message is the user's. Appends the replies and tool
@@ -291,7 +300,7 @@ pub fn run_turn(
                 answer(call, &specs, tools, observer, cancel)
             };
             observer.event(AgentEvent::ToolFinished { call_id: call.id.clone(), output: out.clone() });
-            results.push(ToolResult { call_id: call.id.clone(), content: out.content, is_error: out.is_error });
+            results.push(ToolResult { call_id: call.id.clone(), content: out.content, is_error: out.is_error, images: out.images });
         }
         let m = Message::tool_results(results);
         conversation.push(m.clone());

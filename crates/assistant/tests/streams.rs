@@ -45,7 +45,12 @@ fn anthropic_tool_use_with_thinking_is_replayed_verbatim() {
     let mut c = Conversation::new();
     c.push_user_text("make a sequence");
     c.push(r.message);
-    c.push(Message::tool_results(vec![ToolResult { call_id: "toolu_01A".into(), content: "{\"id\":\"s1\"}".into(), is_error: false }]));
+    c.push(Message::tool_results(vec![ToolResult {
+        call_id: "toolu_01A".into(),
+        content: "{\"id\":\"s1\"}".into(),
+        is_error: false,
+        ..Default::default()
+    }]));
     let req = Request {
         model: "claude-opus-5-5",
         system: "s",
@@ -163,7 +168,7 @@ fn a_conversation_moves_between_formats() {
     let mut c = Conversation::new();
     c.push_user_text("go");
     c.push(r.message);
-    c.push(Message::tool_results(vec![ToolResult { call_id: "toolu_01A".into(), content: "done".into(), is_error: false }]));
+    c.push(Message::tool_results(vec![ToolResult { call_id: "toolu_01A".into(), content: "done".into(), is_error: false, ..Default::default() }]));
     let req = Request { model: "local", system: "", tools: &[], messages: c.messages(), max_tokens: 1, effort: None, thinking: Thinking::Default };
     let b = openai::request_body(&req);
     let m = b["messages"].as_array().unwrap();
