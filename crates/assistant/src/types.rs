@@ -35,6 +35,20 @@ pub struct Image {
     pub data: String,
 }
 
+impl Image {
+    /// A picture from its file bytes.
+    pub fn from_bytes(media_type: impl Into<String>, bytes: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self { media_type: media_type.into(), data: base64::engine::general_purpose::STANDARD.encode(bytes) }
+    }
+
+    /// The file bytes (`None` when `data` isn't base64), for a thumbnail.
+    pub fn decode(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.decode(self.data.as_bytes()).ok()
+    }
+}
+
 /// The answer to one [`ToolCall`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -407,6 +421,14 @@ mod tests {
         assert_eq!(c.unanswered_calls().len(), 2);
         c.push(Message::tool_results(vec![ToolResult { call_id: "a".into(), content: "ok".into(), is_error: false, ..Default::default() }]));
         assert_eq!(c.unanswered_calls().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["b"]);
+    }
+
+    #[test]
+    fn images_round_trip_through_base64() {
+        let i = Image::from_bytes("image/png", &[1, 2, 3, 250]);
+        assert_eq!(i.data, "AQID+g==");
+        assert_eq!(i.decode(), Some(vec![1, 2, 3, 250]));
+        assert_eq!(Image { media_type: "image/png".into(), data: "not base64!".into() }.decode(), None);
     }
 
     #[test]
