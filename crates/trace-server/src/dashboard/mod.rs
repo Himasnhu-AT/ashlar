@@ -22,7 +22,7 @@ pub mod view;
 
 use axum::Router;
 use axum::extract::{Path, RawQuery, Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{Next, from_fn};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -63,8 +63,15 @@ pub fn routes() -> Router<AppState> {
 /// Adds the security headers to every dashboard response. Handlers may set their own policy first.
 async fn security_headers(request: Request, next: Next) -> Response {
     let is_static = request.uri().path().starts_with("/static/");
+    let has_body = !matches!(*request.method(), Method::GET | Method::HEAD);
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
+    // A form handler may answer before it reads the body (not signed in, no such app, too many
+    // attempts). Such a connection cannot carry another request, so the client is told to close
+    // it; forms are sent by hand, so a new connection each time costs nothing.
+    if has_body {
+        headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
+    }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));

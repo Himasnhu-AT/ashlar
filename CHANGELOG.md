@@ -46,8 +46,8 @@ First public release, on crates.io.
 ### Fixed
 
 - `ashlar-trace-server` sends `Connection: close` with a refusal made before the request body is
-  read (bad key, rate limit, storage full), so a client never reuses a connection the server is
-  about to drop.
+  read (bad key, rate limit, storage full) and with every dashboard form response, so a client
+  never reuses a connection the server is about to drop.
 - `ashlar-trace` on Windows reads each spooled file's size from the file itself, not the folder
   listing, which can show a stale size for a file still being written; a segment that looked empty
   was deleted.

@@ -553,6 +553,8 @@ fn every_dashboard_route_requires_a_login() {
         let page = b.post(path, &[("csrf", "x"), ("status", "resolved")]);
         assert_eq!(page.status, 303, "{path}");
         assert_eq!(page.location(), "/login", "{path}");
+        // answered without reading the form, so the connection is not offered for reuse
+        assert_eq!(page.headers.get("connection").map(Vec::as_slice), Some(&["close".to_string()][..]), "{path}");
     }
     // A forged or stale cookie does not help.
     b.cookies.insert("tracer_session".into(), "ff".repeat(32));
