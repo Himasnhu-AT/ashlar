@@ -70,7 +70,11 @@ pub struct Activity {
 
 impl Activity {
     /// This frame's activity from egui's input (`app_busy`: what the app itself counts as busy).
-    /// Input of a hidden window is the last shown frame's and is ignored.
+    /// The window counts as in the background when it is unfocused, minimized or covered. Don't
+    /// count on the covered flag: winit on macOS often never reports a covered window
+    /// (`occluded` stays `None` or `false` while the UI keeps running), so losing focus is the
+    /// signal that usually arrives. Input of a minimized or covered window is the last shown
+    /// frame's and is ignored.
     pub fn of(ctx: &egui::Context, app_busy: bool) -> Activity {
         ctx.input(|i| {
             let v = i.viewport();
@@ -211,9 +215,9 @@ impl MemoryReport {
     }
 }
 
-/// Frames per second over the last second of frames, `0` when no frame ran in that second (an
-/// app that paints on demand has no frame rate while idle; a smoothed value would show the last
-/// burst's rate forever).
+/// Frames per second: the frames of the last second, `0` when none ran in it (an app that paints
+/// on demand has no frame rate while idle; a smoothed value would show the last burst's rate
+/// forever).
 #[derive(Clone, Debug, Default)]
 pub struct FrameRate {
     times: std::collections::VecDeque<f64>,
@@ -231,13 +235,10 @@ impl FrameRate {
         self.times.push_back(now);
     }
 
-    /// Frames in the second before `now`.
+    /// Frames per second over the second before `now`: the frames that ran in it. Two frames
+    /// 11 ms apart on an idle app read 2, not the 91 fps their spacing would extrapolate to.
     pub fn fps(&self, now: f64) -> f64 {
-        let recent: Vec<f64> = self.times.iter().copied().filter(|t| now - *t <= 1.0 && *t <= now).collect();
-        match (recent.first(), recent.last()) {
-            (Some(a), Some(b)) if recent.len() >= 2 && b > a => (recent.len() - 1) as f64 / (b - a),
-            _ => 0.0,
-        }
+        self.times.iter().filter(|t| now - **t < 1.0 && **t <= now).count() as f64
     }
 
     /// Seconds since the last frame (`None` before the first).
@@ -303,6 +304,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unfocused_window_is_in_the_background_without_a_covered_flag() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let v = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        v.focused = Some(false);
+        v.occluded = None;
+        let mut seen = None;
+        ctx.run_ui(input, |ui| seen = Some(Activity::of(ui.ctx(), false))).textures_delta.clear();
+        assert_eq!(seen, Some(Activity { busy: false, background: true }));
+    }
+
+    #[test]
     fn reports_sum_their_parts() {
         let r = MemoryReport::new(Some(100), None).part("a", 3).parts([("b", 4)]);
         assert_eq!(r.accounted, 7);
@@ -328,8 +341,12 @@ mod tests {
         for i in 0..=60 {
             f.frame(i as f64 / 60.0);
         }
-        assert!((f.fps(1.0) - 60.0).abs() < 0.5, "{}", f.fps(1.0));
+        assert_eq!(f.fps(1.0), 60.0);
         assert_eq!(f.fps(5.0), 0.0);
         assert_eq!(f.since_last(5.0), Some(4.0));
+        // a control request and its follow-up frame on an idle app: 2 frames this second
+        f.frame(10.0);
+        f.frame(10.011);
+        assert_eq!(f.fps(10.5), 2.0);
     }
 }

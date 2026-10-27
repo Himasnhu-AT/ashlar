@@ -10,6 +10,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui`: `idle::FrameRate::fps` counts the frames of the last second (two frames 11 ms
+  apart on an idle app read 91 fps); `idle::Activity::of` documents that an unfocused window is
+  the background signal that arrives (winit rarely reports a covered one).
 - `ashlar-native`: `memory` is listed as an FFI module (the deny-panics check refused it); it no
   longer calls macOS's `malloc_zone_pressure_relief`, which released next to nothing on macOS 26, so
   `release_free_memory` is a no-op there; `memory::space_efficient_malloc()` tells whether the
