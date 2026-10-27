@@ -25,6 +25,8 @@ keychain = ["dep:ashlar-native", "ashlar-native/secrets"]
 mcp = ["dep:ashlar-mcp"]
 # A loopback HTTP server and Anthropic-format streams for tests (an app's own tests too).
 testing = []
+# What installed integrations bring besides tools: skills and MCP prompts as commands.
+integrations = ["dep:ashlar-integrations"]
 
 [dependencies]
 serde = { workspace = true }
@@ -33,6 +35,9 @@ thiserror = { workspace = true }
 log = { workspace = true }
 base64 = "0.22"
 ashlar-fs = { workspace = true }
+ashlar-agents = { workspace = true }
+ashlar-docs = { workspace = true }
+ashlar-integrations = { workspace = true, optional = true }
 ashlar-native = { workspace = true, optional = true }
 ashlar-mcp = { workspace = true, optional = true }
 

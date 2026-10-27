@@ -28,6 +28,10 @@
 //! - [`slash`]: `/` commands: the [`Builtin`]s, the app's own and saved prompts from a folder
 //!   ([`SlashRegistry`]).
 //! - [`compact`]: `/compact` summaries, chat titles, a rough token count.
+//! - [`skills`]: skills disclosed progressively ([`Skills`]: listed by name and description in the
+//!   system prompt, loaded with the `load_skill` tool, picked as `/name`), from docs, skill
+//!   folders and integrations ([`integration`], feature `integrations`: also their MCP prompts as
+//!   commands).
 //!
 //! Errors are [`Error`]s whose `Display` is a sentence for the user (sign-in needed, the plan
 //! does not include AI, the budget is used up, rate limited with the wait, the key was refused,
@@ -43,6 +47,8 @@ pub mod error;
 pub mod history;
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 mod http;
+#[cfg(feature = "integrations")]
+pub mod integration;
 pub mod keys;
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -52,6 +58,7 @@ pub mod openai;
 pub mod provider;
 pub mod schema;
 pub mod settings;
+pub mod skills;
 pub mod slash;
 pub mod sse;
 #[cfg(feature = "testing")]
@@ -76,6 +83,7 @@ pub use provider::{Cancel, Provider, Request, Response};
 pub use settings::{AccountConfig, ProviderKind, Settings};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use settings::{build_provider, check_connection};
+pub use skills::{SkillContent, SkillEntry, SkillTools, Skills};
 pub use slash::{Builtin, Invocation, SlashAction, SlashCommand, SlashRegistry};
 pub use types::{
     Block, Conversation, Effort, Image, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price,

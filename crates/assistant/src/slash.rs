@@ -111,6 +111,17 @@ pub enum SlashAction {
     App {
         id: String,
     },
+    /// A skill ([`crate::skills`]): its text goes into the message as a `skill` mention, with
+    /// what was typed after the command as the message ([`crate::skills::Skills::picked`]).
+    Skill {
+        name: String,
+    },
+    /// A prompt from elsewhere (an integration's MCP prompt, [`crate::integration`]): its text,
+    /// fetched with the arguments, is sent as the message. `source` is the integration's id.
+    External {
+        source: String,
+        name: String,
+    },
 }
 
 /// One command.

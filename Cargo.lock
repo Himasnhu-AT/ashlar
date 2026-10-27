@@ -308,9 +308,12 @@ dependencies = [
 name = "ashlar-assistant"
 version = "0.1.0"
 dependencies = [
+ "ashlar-agents",
  "ashlar-assistant",
  "ashlar-command",
+ "ashlar-docs",
  "ashlar-fs",
+ "ashlar-integrations",
  "ashlar-mcp",
  "ashlar-native",
  "base64 0.22.1",
