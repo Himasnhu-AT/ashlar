@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-telemetry`: `TelemetryConfig::build`: a build identifier (such as the commit a release was
+  packaged from) sent with every report, so a server can tell release sessions from developer ones.
 - `ashlar-assistant`: `Conversation::memory()`: the bytes a chat holds (pictures dominate) and how
   many pictures, for memory readouts.
 - `ashlar-ui`: `idle`: `IdleTrim` fires once per quiet spell (30 s idle, 10 s in the background)
