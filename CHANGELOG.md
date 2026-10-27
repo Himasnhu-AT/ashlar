@@ -8,6 +8,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+
+- `ashlar-assistant`: saved chats (`history`: `HistoryStore`, `HistorySaver`; versioned, crash-safe,
+  pictures in their own files), `@` mentions (`mention`, `Block::Mention`), `/` commands with saved
+  prompts (`slash`), and `/compact` summaries and chat titles (`compact`).
+- `ashlar-assistant`: `skills` (`Skills`: skills listed by name and description in the system prompt,
+  loaded with the `load_skill` / `read_skill_file` tools, picked as `/name`; from docs categories,
+  skill folders and integrations), `SlashAction::Skill` and `SlashAction::External`, and feature
+  `integrations` (`integration`: an integration's skills and MCP prompts as commands).
+- `ashlar-agents`: `skills::parse` and `skills::load_dir` read `SKILL.md` skill folders back from disk.
+- `ashlar-integrations`: MCP prompts (`Integrations::prompts`, `get_prompt`) and resources
+  (`skill_resources`, `read_resource`), and skill folders in a bundle (manifest `skills`, `skill_dirs`).
+- `ashlar-ui`: `markdown`, Markdown for chat replies (headings, lists, tables, code blocks with Copy,
+  inline styles and links), safe for text that is still streaming in.
+
 ## [0.1.0] - 2026-10-27
 
 First public release, on crates.io.

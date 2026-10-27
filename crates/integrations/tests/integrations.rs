@@ -40,7 +40,7 @@ fn the_client_talks_to_a_server() {
     assert_eq!(client.info().instructions.as_deref(), Some("a fake"));
     let tools = client.list_tools(T).unwrap();
     let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["echo", "env", "slow", "crash", "write", "secret"]); // both pages
+    assert_eq!(names, ["echo", "env", "slow", "crash", "write", "change", "secret"]); // both pages
     let out = client.call_tool("echo", &json!({"text": "hi"}), T, None).unwrap();
     assert_eq!((out.text().as_str(), out.is_error), ("hi", false));
     // The child gets only the environment it is given.
@@ -114,7 +114,7 @@ fn the_supervisor_restarts_after_a_crash_but_not_forever() {
     let server = Server::new(server_config(&log));
     assert_eq!(server.status(), ServerStatus::Stopped);
     server.start().unwrap();
-    assert!(matches!(server.status(), ServerStatus::Running { tools: 5, .. }));
+    assert!(matches!(server.status(), ServerStatus::Running { tools: 6, .. }));
     assert!(!server.tools().iter().any(|t| t.name == "secret"));
     assert!(server.call("secret", &json!({}), None).is_error);
 
@@ -179,6 +179,8 @@ fn bundle_zip(dir: &Path, version: u32) -> Vec<u8> {
                     "urls": ["https://cdn.example.com/missing", "https://hub.example.com/weights.bin"]}]
     });
     fs::write(folder.join("integration.json"), manifest.to_string()).unwrap();
+    fs::create_dir_all(folder.join("skills/levels")).unwrap();
+    fs::write(folder.join("skills/levels/SKILL.md"), "---\nname: levels\ndescription: Use when checking loudness.\n---\nMeasure first.").unwrap();
     let zip = dir.join(format!("fake-{version}.zip"));
     let ok = Command::new("/usr/bin/ditto").args(["-c", "-k", "--keepParent"]).arg(&folder).arg(&zip).status().unwrap().success();
     assert!(ok);
@@ -251,7 +253,7 @@ fn install_run_call_update_rollback_remove() {
 
     // Tools, prefixed and sorted, without the hidden one.
     let names: Vec<String> = ix.tools().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, ["fake__crash", "fake__echo", "fake__env", "fake__slow", "fake__write"]);
+    assert_eq!(names, ["fake__change", "fake__crash", "fake__echo", "fake__env", "fake__slow", "fake__write"]);
     assert_eq!(ix.call("fake__echo", &json!({"text": "hello"}), None).text(), "hello");
     let asset = ix.call("fake__env", &json!({"name": "FAKE_ASSET"}), None).text();
     assert_eq!(asset, root.join("fake/data/models/weights.bin").to_string_lossy());
@@ -260,6 +262,29 @@ fn install_run_call_update_rollback_remove() {
     assert!(ix.call("fake__secret", &json!({}), None).is_error);
     assert!(ix.call("other__echo", &json!({}), None).is_error);
     assert!(ix.owns("fake__echo") && !ix.owns("echo"));
+
+    // Prompts as commands, skill resources, and the bundle's skill folders.
+    let prompts: Vec<String> = ix.prompts().into_iter().map(|p| p.name).collect();
+    assert_eq!(prompts, ["fake:summarise"]);
+    assert_eq!(ix.get_prompt("fake:summarise", "the meeting").unwrap(), "Summarise the meeting in three lines.");
+    assert!(ix.get_prompt("fake:summarise", "").unwrap_err().contains("needs topic"));
+    assert!(ix.get_prompt("fake:nope", "x").is_err() && ix.get_prompt("nope", "x").is_err());
+    let skills = ix.skill_resources();
+    assert_eq!(skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["fake:mixing"]);
+    assert_eq!(skills[0].resource.description, "Use when balancing levels.");
+    assert!(ix.read_resource("fake", "skill://mixing").unwrap().contains("Keep peaks under -1 dB."));
+    assert!(ix.read_resource("fake", "skill://other").is_err());
+    // the server says its prompts changed: they are listed again
+    assert_eq!(ix.call("fake__change", &json!({}), None).text(), "changed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ix.prompts().iter().any(|p| p.name == "fake:extra") {
+        assert!(Instant::now() < deadline, "the new prompt never showed: {:?}", ix.prompts());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let dirs = ix.skill_dirs();
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(dirs[0].0, "fake");
+    assert!(dirs[0].1.join("levels/SKILL.md").is_file(), "{:?}", dirs[0].1);
 
     // Disabled: no tools, server stopped; enabled again: back.
     ix.set_enabled("fake", false).unwrap();

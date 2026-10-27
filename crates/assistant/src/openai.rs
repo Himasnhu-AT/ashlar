@@ -54,6 +54,12 @@ pub fn messages(system: &str, list: &[Message]) -> Vec<Value> {
                             }
                             text.push_str(t);
                         }
+                        Block::Mention(m) => {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(&m.prompt_text());
+                        }
                         _ => {}
                     }
                 }

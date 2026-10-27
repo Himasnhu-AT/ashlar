@@ -20,7 +20,7 @@ use crate::links::Links;
 use crate::mcp::ServerCommand;
 use crate::server::{Server, ServerConfig, ServerStatus};
 use crate::store::{self, InstallError, Installed, Store, assets_digest, missing_assets};
-use crate::tool::{CallOutput, SEPARATOR, Tool, qualified_name};
+use crate::tool::{CallOutput, Prompt, Resource, SEPARATOR, Tool, qualified_name};
 use crate::verify::Verify;
 
 /// How many links one install may ask for (each one resumes the download).
@@ -127,6 +127,29 @@ pub struct HostTool {
     pub integration: String,
     pub tool: Tool,
 }
+
+/// A prompt as a command: `<id>:<prompt>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostPrompt {
+    /// `<id>:<prompt>` ([`PROMPT_SEPARATOR`]).
+    pub name: String,
+    pub integration: String,
+    pub prompt: Prompt,
+}
+
+/// A resource an integration offers as a skill (`skill://<name>`), named `<id>:<name>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HostSkillResource {
+    pub name: String,
+    pub integration: String,
+    pub resource: Resource,
+}
+
+/// Between an integration's id and its prompt's or skill's name in a command (`earshot:transcribe`).
+pub const PROMPT_SEPARATOR: char = ':';
+
+/// The folder of skills in a bundle when its manifest names none.
+pub const DEFAULT_SKILLS_DIR: &str = "skills";
 
 type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -586,6 +609,103 @@ impl Integrations {
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    /// Servers that said their prompts or resources changed list them again in the background
+    /// (the snapshot's waker runs when they have).
+    fn refresh_changed_extras(&self, servers: &BTreeMap<String, Arc<Server>>) {
+        for (id, s) in servers {
+            if s.take_extras_changed() {
+                let (me, s) = (self.clone(), Arc::clone(s));
+                spawn(&format!("integrations-extras-{id}"), move || {
+                    if let Err(e) = s.refresh_extras() {
+                        log::warn!(target: "integrations", "[{}] listing prompts and resources again: {e}", s.id());
+                    }
+                    me.wake();
+                });
+            }
+        }
+    }
+
+    /// The prompts of every running integration as commands, sorted by name. A server that said
+    /// they changed lists them again in the background.
+    pub fn prompts(&self) -> Vec<HostPrompt> {
+        let servers = self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        self.refresh_changed_extras(&servers);
+        let mut out: Vec<HostPrompt> = servers
+            .iter()
+            .flat_map(|(id, s)| {
+                s.prompts().into_iter().map(move |p| HostPrompt {
+                    name: format!("{id}{PROMPT_SEPARATOR}{}", p.name),
+                    integration: id.clone(),
+                    prompt: p,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    /// A prompt's text (`name` as [`Self::prompts`] gives it) with `typed` (what followed the
+    /// command) as its arguments ([`Prompt::arguments_from`]). Blocks: call it off the UI thread.
+    pub fn get_prompt(&self, name: &str, typed: &str) -> Result<String, String> {
+        let (id, prompt) = name.split_once(PROMPT_SEPARATOR).ok_or_else(|| format!("{name:?} isn't an integration's prompt"))?;
+        let server =
+            self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned().ok_or_else(|| format!("{id} isn't running"))?;
+        let p = server.prompts().into_iter().find(|p| p.name == prompt).ok_or_else(|| format!("{id} has no prompt {prompt:?}"))?;
+        let missing: Vec<&str> =
+            p.arguments.iter().filter(|a| a.required).map(|a| a.name.as_str()).filter(|n| !p.arguments_from(typed).contains_key(*n)).collect();
+        if !missing.is_empty() {
+            return Err(format!("/{name} needs {}", missing.join(", ")));
+        }
+        server.get_prompt(prompt, &p.arguments_from(typed))
+    }
+
+    /// The skill folders of the enabled, installed integrations: `(id, folder)`, each folder
+    /// holding skill folders (`<name>/SKILL.md`): the manifest's `skills`, or `skills`, relative
+    /// to the folder that holds `integration.json`. Only folders inside the bundle.
+    pub fn skill_dirs(&self) -> Vec<(String, PathBuf)> {
+        let store = self.shared.store.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut out = Vec::new();
+        for id in store.ids() {
+            let Some(saved) = store.get(&id).filter(|s| s.enabled) else { continue };
+            let Some(current) = saved.current.as_ref() else { continue };
+            let bundle = store.version_dir(&id, current.version).join(&id);
+            let listed = self.manifest_of(&store, current).map(|m| m.skills).unwrap_or_default();
+            let dirs: Vec<String> = if listed.is_empty() { vec![DEFAULT_SKILLS_DIR.to_string()] } else { listed };
+            for d in dirs {
+                let dir = bundle.join(&d);
+                if dir.is_dir() && dir.canonicalize().ok().zip(bundle.canonicalize().ok()).is_some_and(|(d, b)| d.starts_with(b)) {
+                    out.push((id.clone(), dir));
+                }
+            }
+        }
+        out
+    }
+
+    /// The resources running integrations offer as skills, sorted by name (refreshed like
+    /// [`Self::prompts`]).
+    pub fn skill_resources(&self) -> Vec<HostSkillResource> {
+        let servers = self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        self.refresh_changed_extras(&servers);
+        let mut out: Vec<HostSkillResource> = servers
+            .iter()
+            .flat_map(|(id, s)| {
+                s.resources().into_iter().filter_map(move |r| {
+                    let n = r.skill_name()?.to_string();
+                    Some(HostSkillResource { name: format!("{id}{PROMPT_SEPARATOR}{n}"), integration: id.clone(), resource: r })
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    /// A resource's text from integration `id`. Blocks: call it off the UI thread.
+    pub fn read_resource(&self, id: &str, uri: &str) -> Result<String, String> {
+        let server =
+            self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned().ok_or_else(|| format!("{id} isn't running"))?;
+        server.read_resource(uri)
     }
 
     /// Whether `name` (a qualified name) belongs to an integration.

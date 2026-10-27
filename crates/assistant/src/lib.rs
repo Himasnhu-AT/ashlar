@@ -18,6 +18,21 @@
 //! - [`keys`]: API keys in the OS keychain (feature `keychain`) or in memory; never printed.
 //! - [`mcp::McpTools`] (feature `mcp`): an app's MCP server as the tool host, in process.
 //!
+//! The chat around the loop, the same for every app (what can be mentioned and which commands
+//! run stays the app's):
+//! - [`history`]: saved chats on disk ([`HistoryStore`], [`HistorySaver`] off the UI thread),
+//!   listed newest first, searched, renamed, deleted, reopened intact; versioned, crash-safe,
+//!   pictures in their own files.
+//! - [`mention`]: `@` mentions ([`Mention`], sent to the model as a [`Block::Mention`]) and the
+//!   picker's ranking, and [`mention::trigger_at`] for the word being typed after `@` or `/`.
+//! - [`slash`]: `/` commands: the [`Builtin`]s, the app's own and saved prompts from a folder
+//!   ([`SlashRegistry`]).
+//! - [`compact`]: `/compact` summaries, chat titles, a rough token count.
+//! - [`skills`]: skills disclosed progressively ([`Skills`]: listed by name and description in the
+//!   system prompt, loaded with the `load_skill` tool, picked as `/name`), from docs, skill
+//!   folders and integrations ([`integration`], feature `integrations`: also their MCP prompts as
+//!   commands).
+//!
 //! Errors are [`Error`]s whose `Display` is a sentence for the user (sign-in needed, the plan
 //! does not include AI, the budget is used up, rate limited with the wait, the key was refused,
 //! offline…).
@@ -27,17 +42,24 @@
 pub mod account;
 pub mod agent;
 pub mod anthropic;
+pub mod compact;
 pub mod error;
+pub mod history;
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 mod http;
+#[cfg(feature = "integrations")]
+pub mod integration;
 pub mod keys;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod mention;
 pub mod mock;
 pub mod openai;
 pub mod provider;
 pub mod schema;
 pub mod settings;
+pub mod skills;
+pub mod slash;
 pub mod sse;
 #[cfg(feature = "testing")]
 pub mod testing;
@@ -51,7 +73,9 @@ pub use agent::{AgentConfig, AgentEvent, Approval, CombinedTools, DenyAll, FnToo
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use anthropic::AnthropicApi;
 pub use error::Error;
+pub use history::{Chat, ChatMeta, HistoryError, HistoryLimits, HistorySaver, HistoryStore, TitleSource};
 pub use keys::{ApiKey, KeyStore, MemoryKeys};
+pub use mention::{Candidate, Mention, Trigger, TriggerKind};
 pub use mock::{MockProvider, MockReply};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use openai::OpenAiCompatible;
@@ -59,6 +83,8 @@ pub use provider::{Cancel, Provider, Request, Response};
 pub use settings::{AccountConfig, ProviderKind, Settings};
 #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
 pub use settings::{build_provider, check_connection};
+pub use skills::{SkillContent, SkillEntry, SkillTools, Skills};
+pub use slash::{Builtin, Invocation, SlashAction, SlashCommand, SlashRegistry};
 pub use types::{
     Block, Conversation, Effort, Image, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, ToolResult, ToolSpec, Usage, price,
 };

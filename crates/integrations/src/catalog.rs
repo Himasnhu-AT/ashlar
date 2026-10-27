@@ -203,6 +203,10 @@ pub struct Manifest {
     pub hidden_tools: Vec<String>,
     #[serde(default)]
     pub assets: Vec<Asset>,
+    /// Folders that hold skill folders (`<name>/SKILL.md`) for the assistant, relative to the
+    /// folder of `integration.json`; empty: its `skills` folder, when there is one.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 /// Environment variables a manifest may not set: they would change how the child loads code.
@@ -221,6 +225,9 @@ impl Manifest {
             if !rel_path_ok(&a.path) || !sha_ok(&a.sha256) || a.size > MAX_ASSET || a.urls.is_empty() || a.urls.iter().any(|u| !url_ok(u)) {
                 return Err(Invalid(format!("integration.json: bad asset {:?}", a.path.chars().take(80).collect::<String>())));
             }
+        }
+        if m.skills.len() > MAX_ASSETS || m.skills.iter().any(|p| !rel_path_ok(p)) {
+            return Err(Invalid("integration.json: bad skills folder".into()));
         }
         for k in m.env.keys() {
             if k.is_empty() || !k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') || RESERVED_ENV.iter().any(|r| k.starts_with(r)) {

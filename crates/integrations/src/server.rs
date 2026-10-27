@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::mcp::{McpClient, McpError, ServerCommand};
-use crate::tool::{CallOutput, Tool};
+use crate::tool::{CallOutput, Prompt, Resource, Tool};
 
 pub const MAX_CRASHES: usize = 3;
 pub const CRASH_WINDOW: Duration = Duration::from_secs(300);
@@ -43,8 +43,15 @@ pub struct ServerConfig {
 enum State {
     Stopped,
     Starting,
-    Running { client: Arc<McpClient>, tools: Arc<Vec<Tool>> },
+    Running { client: Arc<McpClient>, tools: Arc<Vec<Tool>>, extras: Arc<Extras> },
     Error { message: String, retry: bool },
+}
+
+/// What a server offers besides tools, listed once at start.
+#[derive(Debug, Default)]
+struct Extras {
+    prompts: Vec<Prompt>,
+    resources: Vec<Resource>,
 }
 
 /// A supervised server. Every method may be called from any thread.
@@ -77,7 +84,7 @@ impl Server {
         match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
             State::Stopped => ServerStatus::Stopped,
             State::Starting => ServerStatus::Starting,
-            State::Running { client, tools } => {
+            State::Running { client, tools, .. } => {
                 if client.is_alive() {
                     ServerStatus::Running { pid: client.pid(), tools: tools.len() }
                 } else {
@@ -103,13 +110,22 @@ impl Server {
                 .map_err(|e| e.to_string())?;
             let tools = client.list_tools(self.config.startup_timeout).map_err(|e| e.to_string())?;
             let tools: Vec<Tool> = tools.into_iter().filter(|t| !self.config.hidden.contains(&t.name)).collect();
-            Ok::<_, String>((client, tools))
+            // prompts and resources are extras: a server that fails to list them still runs
+            let prompts = client.list_prompts(self.config.startup_timeout).unwrap_or_else(|e| {
+                log::warn!(target: "integrations", "[{}] prompts: {e}", self.config.id);
+                Vec::new()
+            });
+            let resources = client.list_resources(self.config.startup_timeout).unwrap_or_else(|e| {
+                log::warn!(target: "integrations", "[{}] resources: {e}", self.config.id);
+                Vec::new()
+            });
+            Ok::<_, String>((client, tools, Extras { prompts, resources }))
         })();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         match started {
-            Ok((client, tools)) => {
-                log::info!(target: "integrations", "[{}] running: {} {} with {} tools", self.config.id, client.info().name, client.info().version, tools.len());
-                *state = State::Running { client: Arc::new(client), tools: Arc::new(tools) };
+            Ok((client, tools, extras)) => {
+                log::info!(target: "integrations", "[{}] running: {} {} with {} tools, {} prompts, {} resources", self.config.id, client.info().name, client.info().version, tools.len(), extras.prompts.len(), extras.resources.len());
+                *state = State::Running { client: Arc::new(client), tools: Arc::new(tools), extras: Arc::new(extras) };
                 Ok(())
             }
             Err(message) => {
@@ -140,7 +156,7 @@ impl Server {
         {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             match &*state {
-                State::Running { client, tools } if client.is_alive() => {
+                State::Running { client, tools, .. } if client.is_alive() => {
                     if client.take_tools_changed() {
                         let client = Arc::clone(client);
                         drop(state);
@@ -165,7 +181,7 @@ impl Server {
         }
         self.start()?;
         match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
-            State::Running { client, tools } => Ok((Arc::clone(client), Arc::clone(tools))),
+            State::Running { client, tools, .. } => Ok((Arc::clone(client), Arc::clone(tools))),
             _ => Err("the server isn't running".into()),
         }
     }
@@ -174,7 +190,7 @@ impl Server {
         let tools = client.list_tools(self.config.startup_timeout).map_err(|e| e.to_string())?;
         let tools = Arc::new(tools.into_iter().filter(|t| !self.config.hidden.contains(&t.name)).collect::<Vec<_>>());
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let State::Running { client: c, tools: t } = &mut *state
+        if let State::Running { client: c, tools: t, .. } = &mut *state
             && Arc::ptr_eq(c, &client)
         {
             *t = Arc::clone(&tools);
@@ -194,9 +210,66 @@ impl Server {
     /// The tools of the running server (none when it isn't running).
     pub fn tools(&self) -> Vec<Tool> {
         match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
-            State::Running { client, tools } if client.is_alive() => tools.as_ref().clone(),
+            State::Running { client, tools, .. } if client.is_alive() => tools.as_ref().clone(),
             _ => Vec::new(),
         }
+    }
+
+    fn extras(&self) -> Option<Arc<Extras>> {
+        match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
+            State::Running { client, extras, .. } if client.is_alive() => Some(Arc::clone(extras)),
+            _ => None,
+        }
+    }
+
+    /// True once after the running server said its prompts or resources changed.
+    pub fn take_extras_changed(&self) -> bool {
+        match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
+            State::Running { client, .. } if client.is_alive() => client.take_extras_changed(),
+            _ => false,
+        }
+    }
+
+    /// List the prompts and resources again (blocks: call it off the UI thread).
+    pub fn refresh_extras(&self) -> Result<(), String> {
+        let (client, _) = self.client()?;
+        let prompts = client.list_prompts(self.config.startup_timeout).map_err(|e| e.to_string())?;
+        let resources = client.list_resources(self.config.startup_timeout).map_err(|e| e.to_string())?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let State::Running { client: c, extras, .. } = &mut *state
+            && Arc::ptr_eq(c, &client)
+        {
+            *extras = Arc::new(Extras { prompts, resources });
+        }
+        Ok(())
+    }
+
+    /// The prompts of the running server (none when it isn't running).
+    pub fn prompts(&self) -> Vec<Prompt> {
+        self.extras().map(|e| e.prompts.clone()).unwrap_or_default()
+    }
+
+    /// The resources of the running server (none when it isn't running).
+    pub fn resources(&self) -> Vec<Resource> {
+        self.extras().map(|e| e.resources.clone()).unwrap_or_default()
+    }
+
+    /// A prompt's text with its arguments, by the server's own name. Blocks: call it off the UI thread.
+    pub fn get_prompt(&self, name: &str, arguments: &serde_json::Map<String, Value>) -> Result<String, String> {
+        if !self.prompts().iter().any(|p| p.name == name) {
+            return Err(format!("{} has no prompt {name:?}", self.config.id));
+        }
+        let (client, _) = self.client()?;
+        client.get_prompt(name, arguments, self.config.call_timeout).map_err(|e| e.to_string())
+    }
+
+    /// A resource's text, by its URI. Blocks: call it off the UI thread.
+    pub fn read_resource(&self, uri: &str) -> Result<String, String> {
+        if !self.resources().iter().any(|r| r.uri == uri) {
+            return Err(format!("{} has no resource {uri:?}", self.config.id));
+        }
+        let (client, _) = self.client()?;
+        client.read_resource(uri, self.config.call_timeout).map_err(|e| e.to_string())
     }
 
     /// Call one of its tools by the server's own name.
