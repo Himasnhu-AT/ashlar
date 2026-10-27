@@ -27,9 +27,8 @@ the video editor's platform crate these were adapted from):
    - `terminate` (Unix, through `libc`: `pipe`, `fcntl`, `sigaction`, and in the handler only
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server
      can end its telemetry session when it is asked to stop)
-   - `memory` (macOS `proc_pid_rusage` and `malloc_zone_pressure_relief`, glibc `malloc_trim`,
-     Windows `GetProcessMemoryInfo`; added for idle apps that hand freed memory back and report
-     their footprint)
+   - `memory` (macOS `proc_pid_rusage`, glibc `malloc_trim`, Windows `GetProcessMemoryInfo`;
+     added for idle apps that report their footprint and hand freed memory back)
 
    Everything else (dialogs, clipboard, secrets, notifications, macOS progress and preferences,
    single instance) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.

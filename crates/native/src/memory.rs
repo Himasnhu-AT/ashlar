@@ -6,16 +6,20 @@
 //! resident plus swapped memory and the resident size (`/proc/self/status`); on Windows the
 //! private commit and the working set.
 //!
-//! [`release_free_memory`] asks the allocator to return pages it holds free. Freeing a cache does
-//! not always make a process smaller at once: glibc keeps freed heap at the top of its arenas, and
-//! macOS's allocator keeps freed small and medium regions for reuse (macOS 26 hands them back by
-//! itself within seconds; earlier releases only under memory pressure). Call it after dropping
-//! caches (an app going idle), not per frame: it walks every allocator zone.
+//! [`release_free_memory`] asks the allocator to return pages it holds free. Where that works
+//! (glibc's `malloc_trim`) it shrinks the process at once. On macOS it does nothing: the system
+//! call for it (`malloc_zone_pressure_relief`) releases next to
+//! nothing (measured: 0–49 KB after freeing gigabytes): the default allocator keeps freed small
+//! and medium regions dirty for reuse and the kernel takes them back by itself over the next
+//! 30–60 s. A process started with `MallocSpaceEfficient=1` in its environment hands freed
+//! regions back at once (a bundled app sets it through `LSEnvironment` in its Info.plist);
+//! [`space_efficient_malloc`] says whether this one was. Call it after dropping caches, not per
+//! frame.
 //!
 //! | | macOS | Linux | Windows | Web |
 //! |---|---|---|---|---|
 //! | [`process_memory`] | `proc_pid_rusage` | `/proc/self/status` | `GetProcessMemoryInfo` | `None` |
-//! | [`release_free_memory`] | `malloc_zone_pressure_relief` | `malloc_trim` (glibc) | no-op | no-op |
+//! | [`release_free_memory`] | no-op (see above) | `malloc_trim` (glibc) | no-op | no-op |
 
 use serde::Serialize;
 
@@ -36,22 +40,24 @@ pub fn process_memory() -> Option<ProcessMemory> {
     imp::process_memory()
 }
 
-/// Return the allocator's free pages to the system. Returns the bytes it reports releasing
-/// (macOS; 0 where the allocator does not say, or nothing was done).
+/// Return the allocator's free pages to the system where the allocator can (glibc's
+/// `malloc_trim`). Returns the bytes released where the allocator says; 0 everywhere today (macOS
+/// has nothing that works, see the module docs; glibc does not say).
 pub fn release_free_memory() -> u64 {
     imp::release_free_memory()
+}
+
+/// Whether macOS's allocator runs in its space-efficient mode (`MallocSpaceEfficient=1` in the
+/// environment the process started with), which returns freed memory to the system at once.
+/// Always false elsewhere.
+pub fn space_efficient_malloc() -> bool {
+    cfg!(target_os = "macos") && std::env::var_os("MallocSpaceEfficient").is_some_and(|v| v != "0" && !v.is_empty())
 }
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod imp {
     use super::ProcessMemory;
-
-    // libmalloc (part of libSystem, always linked). `zone` null means every zone; `goal` 0 means
-    // release as much as possible. Returns the bytes released.
-    unsafe extern "C" {
-        fn malloc_zone_pressure_relief(zone: *mut libc::c_void, goal: libc::size_t) -> libc::size_t;
-    }
 
     pub fn process_memory() -> Option<ProcessMemory> {
         let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
@@ -71,11 +77,10 @@ mod imp {
         Some(ProcessMemory { footprint: info.ri_phys_footprint, resident: info.ri_resident_size })
     }
 
+    /// `malloc_zone_pressure_relief` was measured to release next to nothing on macOS 26 (0–49 KB
+    /// after freeing gigabytes), so there is no call here; see the module docs.
     pub fn release_free_memory() -> u64 {
-        // SAFETY: a null zone is documented to mean all zones; the call only returns free pages
-        // to the kernel and touches no memory the program uses.
-        let n = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
-        n as u64
+        0
     }
 }
 
@@ -151,26 +156,35 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     #[test]
-    fn the_footprint_grows_with_touched_memory_and_shrinks_after_release() {
+    fn the_footprint_counts_touched_memory() {
         let before = process_memory().expect("process memory");
         assert!(before.footprint > 0 && before.resident > 0, "{before:?}");
-        // 256 MB in 1 MB blocks (macOS's medium-block regions, which stay dirty once freed)
-        let mut blocks: Vec<Vec<u8>> = (0..256).map(|_| vec![1u8; 1 << 20]).collect();
+        // 256 MB in 1 MB blocks, every page written
+        let blocks: Vec<Vec<u8>> = (0..256).map(|_| vec![1u8; 1 << 20]).collect();
         let full = process_memory().expect("process memory");
         assert!(full.footprint >= before.footprint + (200 << 20), "{before:?} → {full:?}");
-        blocks.clear();
-        blocks.shrink_to_fit();
+        drop(blocks);
+        // Whether freed pages leave at once is the allocator's business (macOS keeps them for
+        // up to a minute unless MallocSpaceEfficient=1): only the call itself is checked here.
         release_free_memory();
-        // the system may take back freed pages a few seconds later (macOS 26)
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        let after = loop {
-            let now = process_memory().expect("process memory");
-            if now.footprint + (150 << 20) <= full.footprint || std::time::Instant::now() > deadline {
-                break now;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        };
-        assert!(after.footprint + (150 << 20) <= full.footprint, "released: {full:?} → {after:?}");
+        assert!(process_memory().is_some());
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn malloc_trim_hands_freed_heap_back() {
+        let blocks: Vec<Vec<u8>> = (0..256).map(|_| vec![1u8; 100 << 10]).collect();
+        let full = process_memory().expect("process memory");
+        drop(blocks);
+        release_free_memory();
+        let after = process_memory().expect("process memory");
+        assert!(after.footprint + (150 << 20) <= full.footprint, "{full:?} → {after:?}");
+    }
+
+    #[test]
+    fn the_space_efficient_mode_follows_the_environment() {
+        let set = std::env::var_os("MallocSpaceEfficient").is_some_and(|v| v != "0" && !v.is_empty());
+        assert_eq!(space_efficient_malloc(), set && cfg!(target_os = "macos"));
     }
 
     #[cfg(target_os = "linux")]

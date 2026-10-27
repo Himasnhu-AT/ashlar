@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Fixed
+
+- `ashlar-native`: `memory` is listed as an FFI module (the deny-panics check refused it); it no
+  longer calls macOS's `malloc_zone_pressure_relief`, which released next to nothing on macOS 26, so
+  `release_free_memory` is a no-op there; `memory::space_efficient_malloc()` tells whether the
+  process runs with `MallocSpaceEfficient=1`, which hands freed memory back at once.
+
 ### Added
 
 - `ashlar-assistant`: `Conversation::memory()`: the bytes a chat holds (pictures dominate) and how
