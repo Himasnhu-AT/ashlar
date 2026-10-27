@@ -36,7 +36,7 @@ ashlar-fs = { workspace = true }
 ashlar-ui = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
-ashlar-native = { workspace = true, features = ["dialogs"] }
+ashlar-native = { workspace = true, features = ["dialogs", "display"] }
 png = "0.18"
 thiserror = { workspace = true }
 ashlar-telemetry = { workspace = true, optional = true }

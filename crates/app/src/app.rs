@@ -24,6 +24,10 @@ pub type SetupFn = Box<dyn FnOnce(&egui::Context)>;
 pub enum Error {
     #[error("could not open the window: {0}")]
     Window(String),
+    /// This process cannot show windows at all (`ashlar_native::display::check`): started by a
+    /// service or as SYSTEM on Windows. Nothing was opened; say so and exit.
+    #[error("no window can be shown here: {0}")]
+    NoDesktop(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
