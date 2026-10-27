@@ -37,6 +37,7 @@ const FFI_MODULES: &[&str] = &[
     "crates/native/src/menu/native.rs",
     "crates/native/src/terminate.rs",
     "crates/native/src/memory.rs",
+    "crates/native/src/display.rs",
 ];
 
 /// What the FFI crate's own `[lints]` tables must contain instead of the workspace lints.
