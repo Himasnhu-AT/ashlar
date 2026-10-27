@@ -26,6 +26,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   memory (older ones stay in its history folder as file references, which saving keeps, loading
   reads back and requests leave out); `HistoryStore::read_image` and `Image::is_offloaded` for
   showing them.
+- `ashlar-telemetry`: `TelemetryConfig::build`: a build identifier (such as the commit a release was
+  packaged from) sent with every report, so a server can tell release sessions from developer ones.
 - `ashlar-assistant`: `Conversation::memory()`: the bytes a chat holds (pictures dominate) and how
   many pictures, for memory readouts.
 - `ashlar-ui`: `idle`: `IdleTrim` fires once per quiet spell (30 s idle, 10 s in the background)

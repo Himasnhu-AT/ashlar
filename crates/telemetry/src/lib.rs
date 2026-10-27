@@ -87,6 +87,9 @@ pub struct TelemetryConfig {
     /// The app's name on the server (lower case).
     pub app_id: String,
     pub version: String,
+    /// The build identifier, such as the commit a packaged release was built from. `None` for a
+    /// developer's own build; the server tells release sessions from test ones by it.
+    pub build: Option<String>,
     /// The server's base URL (no path): `https://…`, or `http://` to a loopback address. `None`:
     /// no telemetry at all.
     pub endpoint: Option<String>,
@@ -105,6 +108,7 @@ impl TelemetryConfig {
         Self {
             app_id: app_id.into(),
             version: version.into(),
+            build: None,
             endpoint: None,
             write_key: String::new(),
             url_env: None,
@@ -112,6 +116,13 @@ impl TelemetryConfig {
             process: ProcessKind::Gui,
             save_commands: Vec::new(),
         }
+    }
+
+    /// The build identifier sent with every report, such as a commit hash baked in by the release
+    /// packaging (`option_env!`). Blank counts as none.
+    pub fn build(mut self, build: Option<&str>) -> Self {
+        self.build = build.map(str::trim).filter(|b| !b.is_empty()).map(str::to_string);
+        self
     }
 
     /// The server and its write key; `endpoint = None` means no telemetry.
@@ -136,6 +147,15 @@ impl TelemetryConfig {
     pub fn save_commands(mut self, ids: &[&'static str]) -> Self {
         self.save_commands = ids.to_vec();
         self
+    }
+}
+
+/// The SDK builder for `cfg` and its server: key, app, version, build, folder, endpoint, process.
+fn builder(cfg: &TelemetryConfig, target: &Target, data_dir: &Path) -> ashlar_trace::Builder {
+    let builder = Tracer::builder(&target.key, &cfg.app_id, &cfg.version).data_dir(data_dir).endpoint(&target.endpoint).process(cfg.process);
+    match &cfg.build {
+        Some(build) => builder.build(build),
+        None => builder,
     }
 }
 
@@ -295,10 +315,7 @@ impl Telemetry {
         transport: impl ashlar_trace::transport::Transport,
         configure: impl FnOnce(&mut ashlar_trace::Config),
     ) -> Telemetry {
-        let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
-            .data_dir(data_dir)
-            .endpoint(&target.endpoint)
-            .process(cfg.process)
+        let tracer = builder(cfg, target, data_dir)
             .listen_all::<AppEvent>()
             // not optional: every category on, no notice, DO_NOT_TRACK ignored
             .force_consent(true)
@@ -622,10 +639,7 @@ fn run_courier<T: ashlar_trace::transport::Transport>(
         if lock.try_lock().is_err() {
             return clean;
         }
-        let tracer = Tracer::builder(&target.key, &cfg.app_id, &cfg.version)
-            .data_dir(data_dir)
-            .endpoint(&target.endpoint)
-            .process(cfg.process)
+        let tracer = builder(cfg, target, data_dir)
             .catalog::<AppEvent>()
             .courier(true)
             .force_consent(true)
@@ -684,6 +698,36 @@ mod tests {
         let t = Telemetry::start(&TelemetryConfig::new("demo", "1"), Some(Path::new("/nonexistent")));
         assert!(!t.is_enabled() && t.command_observer().is_none() && !t.status().active);
         assert_eq!(t.status().off, Some(Off::NoEndpoint));
+    }
+
+    #[test]
+    fn a_build_is_kept_trimmed_and_blank_means_none() {
+        assert_eq!(cfg().build, None);
+        assert_eq!(cfg().build(Some(" 0123abc\n")).build.as_deref(), Some("0123abc"));
+        for blank in [None, Some(""), Some("  ")] {
+            assert_eq!(cfg().build(Some("x")).build(blank).build, None, "{blank:?}");
+        }
+    }
+
+    /// The build goes out with every envelope (the server files the session under it); a
+    /// developer's build sends none.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn every_envelope_carries_the_build_and_none_without_one() {
+        for build in [Some("0123abc"), None] {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = crate::testing::Recorder::default();
+            let t = crate::testing::client(&cfg().process(ProcessKind::Cli).build(build), dir.path(), &fake, Duration::from_secs(2));
+            t.command("doc.edit", true, Duration::from_millis(1));
+            assert!(t.end(Duration::from_secs(5)));
+            let envelopes = fake.envelopes();
+            assert!(!envelopes.is_empty());
+            assert!(
+                envelopes.iter().all(|e| e.app.build.as_deref() == build),
+                "{build:?}: {:?}",
+                envelopes.iter().map(|e| &e.app).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
