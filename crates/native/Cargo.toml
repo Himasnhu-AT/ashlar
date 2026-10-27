@@ -30,12 +30,14 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
 [features]
-default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool"]
+default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory"]
 full = ["default", "notify", "progress", "secrets"]
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd"]
 # A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
 menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
+# This process's memory footprint, and returning freed allocator pages to the system.
+memory = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
 # Put a bundled command-line tool on PATH (a link in /usr/local/bin, admin prompt, ~/.local/bin
 # fallback), with its commands.
 cli-tool = []
