@@ -34,7 +34,7 @@ fn a_newer_release_is_available_with_its_fields() {
     let urls = Arc::new(Mutex::new(Vec::new()));
     let mut fetch = answering(200, "latest.json", Arc::clone(&urls));
     let Outcome::Available(release) = check(&mut fetch, "https://api.example.com/", APP, "1.3.2").unwrap() else { panic!("expected an update") };
-    assert_eq!(*urls.lock().unwrap(), ["https://api.example.com/v1/releases/my-app/latest"]);
+    assert_eq!(*urls.lock().unwrap(), [ashlar_update::latest_url_for("https://api.example.com", "my-app", ashlar_update::PLATFORM)]);
     assert_eq!(release.version, "1.4.0");
     assert_eq!(release.size, 123_456_789);
     assert!(release.notes.contains("Faster export"));

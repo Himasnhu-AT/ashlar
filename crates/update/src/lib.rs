@@ -26,7 +26,7 @@ mod version;
 
 #[cfg(all(feature = "https", not(target_arch = "wasm32")))]
 pub use fetch::HttpsFetch;
-pub use fetch::{Fetch, Response, app_id_ok, base_allowed, check, latest_url};
+pub use fetch::{Fetch, PLATFORM, Response, app_id_ok, base_allowed, check, latest_url, latest_url_for};
 pub use release::{MAX_BODY, MAX_NOTES, MAX_URL, Outcome, Release, is_safe_url};
 pub use saved::Saved;
 pub use updater::{FIRST_DELAY, Finished, INTERVAL, RETRY, Status, UpdateConfig, Updater, next_due};

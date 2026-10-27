@@ -8,6 +8,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Changed
+
+- `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
+  `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
+
 ### Fixed
 
 - `ashlar-assistant`: OpenAI-format requests carry at most `anthropic::MAX_IMAGES` pictures (the

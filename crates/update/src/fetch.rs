@@ -43,9 +43,33 @@ pub fn base_allowed(base: &str) -> bool {
     matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]")
 }
 
-/// `{base}/v1/releases/{app}/latest`, with the base's trailing slashes dropped.
+/// The platform this build runs on, as the releases API names it: `macos`, `windows-x64`,
+/// `linux-x86_64`, `linux-aarch64`, or `None` where no release is published.
+pub const PLATFORM: Option<&str> = if cfg!(target_os = "macos") {
+    Some("macos")
+} else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    Some("windows-x64")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    Some("linux-x86_64")
+} else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+    Some("linux-aarch64")
+} else {
+    None
+};
+
+/// `{base}/v1/releases/{app}/latest?platform={PLATFORM}`, with the base's trailing slashes dropped,
+/// so each platform is offered its own build. Without a known platform the query is left out.
 pub fn latest_url(base: &str, app: &str) -> String {
-    format!("{}/v1/releases/{app}/latest", base.trim_end_matches('/'))
+    latest_url_for(base, app, PLATFORM)
+}
+
+/// [`latest_url`] for a given platform.
+pub fn latest_url_for(base: &str, app: &str, platform: Option<&str>) -> String {
+    let base = base.trim_end_matches('/');
+    match platform {
+        Some(p) => format!("{base}/v1/releases/{app}/latest?platform={p}"),
+        None => format!("{base}/v1/releases/{app}/latest"),
+    }
 }
 
 /// `true` for an app id the releases API accepts: 1–64 of `a-z`, `0-9`, `-`, starting with a letter.
@@ -154,7 +178,14 @@ mod tests {
 
     #[test]
     fn latest_url_joins_cleanly() {
-        assert_eq!(latest_url("https://api.example.com/", "my-app"), "https://api.example.com/v1/releases/my-app/latest");
+        assert_eq!(latest_url_for("https://api.example.com/", "my-app", None), "https://api.example.com/v1/releases/my-app/latest");
+        assert_eq!(
+            latest_url_for("https://api.example.com", "my-app", Some("windows-x64")),
+            "https://api.example.com/v1/releases/my-app/latest?platform=windows-x64"
+        );
+        assert!(latest_url("https://api.example.com", "my-app").starts_with("https://api.example.com/v1/releases/my-app/latest"));
+        #[cfg(target_os = "macos")]
+        assert_eq!(PLATFORM, Some("macos"));
     }
 
     #[test]
