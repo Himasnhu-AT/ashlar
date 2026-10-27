@@ -201,6 +201,11 @@ impl MemoryReport {
         self
     }
 
+    /// Add several parts (`(name, bytes)`, e.g. an engine's cache list).
+    pub fn parts<'a>(self, parts: impl IntoIterator<Item = (&'a str, u64)>) -> Self {
+        parts.into_iter().fold(self, |r, (name, bytes)| r.part(name, bytes))
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or_default()
     }
@@ -299,7 +304,7 @@ mod tests {
 
     #[test]
     fn reports_sum_their_parts() {
-        let r = MemoryReport::new(Some(100), None).part("a", 3).part("b", 4);
+        let r = MemoryReport::new(Some(100), None).part("a", 3).parts([("b", 4)]);
         assert_eq!(r.accounted, 7);
         let j = r.to_json();
         assert_eq!(j["parts"]["b"], 4);
