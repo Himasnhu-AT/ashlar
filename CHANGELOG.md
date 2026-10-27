@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-ui`: `idle`: `IdleTrim` fires once per quiet spell (30 s idle, 10 s in the background)
+  so an app can trim its caches, `MemoryReport` (named cache sizes plus the process footprint for
+  `perf.stats`), `texture_memory`, and `FrameRate`, a frame rate that reads 0 while no frames run;
+  `wake::Reason::IDLE`.
 - `ashlar-native`: `memory` (feature, on by default): `process_memory()` reads the process's
   footprint and resident size the way the OS's tools do; `release_free_memory()` returns the
   allocator's free pages to the system (macOS keeps freed regions dirty otherwise).

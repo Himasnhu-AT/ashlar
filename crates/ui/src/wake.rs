@@ -64,8 +64,11 @@ impl Reason {
     /// An animation or fade the app runs itself.
     pub const ANIMATION: Reason = Reason("animation");
 
+    /// An idle or background deadline ([`crate::idle::IdleTrim`]): one frame to give memory back.
+    pub const IDLE: Reason = Reason("idle");
+
     /// The standard reasons.
-    pub const STANDARD: [Reason; 11] = [
+    pub const STANDARD: [Reason; 12] = [
         Reason::INPUT,
         Reason::STARTUP,
         Reason::CONTROL,
@@ -77,6 +80,7 @@ impl Reason {
         Reason::SETTINGS,
         Reason::TIMER,
         Reason::ANIMATION,
+        Reason::IDLE,
     ];
 
     pub fn name(self) -> &'static str {
