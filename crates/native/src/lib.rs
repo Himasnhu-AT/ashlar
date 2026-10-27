@@ -1,6 +1,6 @@
 //! Native OS features behind one small, safe API: file dialogs, the menu bar, the clipboard,
 //! keep-awake, files opened from the file manager, single instance, notifications, dock / taskbar
-//! progress, the OS keychain and system preferences.
+//! progress, the OS keychain, system preferences and the process's memory footprint.
 //!
 //! Every feature is behind a cargo feature and degrades cleanly: on a platform where it is not
 //! implemented (or on the web) a call returns [`NativeError::Unsupported`]; nothing panics. The
@@ -21,6 +21,7 @@
 //! | [`secrets`] | Keychain | Credential Manager | Secret Service | – |
 //! | [`system`] | AppKit | registry / SPI | portal settings | media queries |
 //! | [`cli_tool`] | link + admin prompt | – | link (no prompt) | – |
+//! | [`memory`] | phys_footprint, malloc pressure relief | private commit | /proc status, malloc_trim | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
 //! [`terminate`] (always compiled) runs a hook when the process is asked to stop (SIGINT, SIGTERM,
@@ -40,6 +41,8 @@ pub mod cli_tool;
 pub mod clipboard;
 #[cfg(feature = "dialogs")]
 pub mod dialogs;
+#[cfg(feature = "memory")]
+pub mod memory;
 #[cfg(feature = "menu")]
 pub mod menu;
 #[cfg(feature = "notify")]

@@ -13,7 +13,8 @@
 //! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`devtools`]
 //!   (the UI debugger: element tree with refs, injected input, waits, screenshots, inspector), [`cache`]
 //!   (revision-keyed galleys and meshes), [`wake`] (frame requests with a reason, per-reason
-//!   frame counts).
+//!   frame counts), [`idle`] (trim caches when idle or in the background; memory and frame-rate
+//!   readouts).
 //!
 //! Apps own their data, selection, assets and command handling: components take state by
 //! reference and report what the user asked for. Domain widgets (timelines, canvases) stay in the
@@ -29,6 +30,7 @@ pub mod docking;
 pub mod edit;
 pub mod fonts;
 pub mod icons;
+pub mod idle;
 pub mod layout;
 pub mod markdown;
 pub mod printing;
