@@ -537,7 +537,12 @@ pub fn new_id() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
-    let salt = std::process::id().wrapping_mul(2_654_435_761) ^ n.wrapping_mul(40_503);
+    // no process ids on wasm32 (asking panics there)
+    #[cfg(not(target_arch = "wasm32"))]
+    let pid = std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    let pid = 0u32;
+    let salt = pid.wrapping_mul(2_654_435_761) ^ n.wrapping_mul(40_503);
     format!("{:011x}-{:04x}", now_ms(), salt & 0xffff)
 }
 
