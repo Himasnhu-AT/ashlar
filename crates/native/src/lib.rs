@@ -21,6 +21,7 @@
 //! | [`secrets`] | Keychain | Credential Manager | Secret Service | – |
 //! | [`system`] | AppKit | registry / SPI | portal settings | media queries |
 //! | [`cli_tool`] | link + admin prompt | – | link (no prompt) | – |
+//! | [`display`] | always | window station check | always | – |
 //! | [`memory`] | phys_footprint, malloc pressure relief | private commit | /proc status, malloc_trim | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
@@ -41,6 +42,8 @@ pub mod cli_tool;
 pub mod clipboard;
 #[cfg(feature = "dialogs")]
 pub mod dialogs;
+#[cfg(feature = "display")]
+pub mod display;
 #[cfg(feature = "memory")]
 pub mod memory;
 #[cfg(feature = "menu")]

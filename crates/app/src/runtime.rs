@@ -1306,6 +1306,12 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     // after the tracer's hook: ours runs first, then chains to it
     crash::install(logs.as_deref(), &shared.name, &shared.version);
     log::info!("{} {} starting", shared.name, shared.version);
+    // before the window: in a window station Windows never shows, wgpu panics configuring the
+    // window's surface (ashlar_native::display)
+    if let Err(e) = ashlar_native::display::check() {
+        log::error!("{} cannot open its window: {e}", shared.name);
+        return Err(Error::NoDesktop(e.0));
+    }
 
     let (guard, previous) = match &shared.dirs {
         Some(d) => {
