@@ -42,7 +42,16 @@ impl Image {
         Self { media_type: media_type.into(), data: base64::engine::general_purpose::STANDARD.encode(bytes) }
     }
 
-    /// The file bytes (`None` when `data` isn't base64), for a thumbnail.
+    /// The picture lives only in the chat's history folder (`data` names its file, see
+    /// [`crate::history::HistoryStore::offload_images`]): requests leave it out like any picture
+    /// past [`crate::anthropic::MAX_IMAGES`], and [`crate::history::HistoryStore::read_image`]
+    /// reads it back for display.
+    pub fn is_offloaded(&self) -> bool {
+        self.data.starts_with(crate::history::FILE_REF)
+    }
+
+    /// The file bytes (`None` when `data` isn't base64, or the picture is offloaded), for a
+    /// thumbnail.
     pub fn decode(&self) -> Option<Vec<u8>> {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.decode(self.data.as_bytes()).ok()

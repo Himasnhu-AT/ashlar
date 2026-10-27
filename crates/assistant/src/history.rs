@@ -37,8 +37,9 @@ pub const IMAGES_DIR: &str = "images";
 pub const NEW_TITLE: &str = "New chat";
 /// What a tool call open when the app stopped is answered with on load.
 pub const INTERRUPTED: &str = "Not run: the app closed before this call finished.";
-/// How a picture kept in its own file is named in `chat.json` (`data`: `file:images/<name>`).
-const FILE_REF: &str = "file:";
+/// How a picture kept in its own file is named in `chat.json` (`data`: `file:images/<name>`), and
+/// in memory once offloaded ([`HistoryStore::offload_images`]).
+pub const FILE_REF: &str = "file:";
 
 /// What went wrong with the history, in words for the person.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -408,6 +409,66 @@ impl HistoryStore {
         }
     }
 
+    /// Keep only the newest `keep` pictures of `chat` in memory. Older ones are written to the
+    /// chat's folder (if they are not there yet) and their data replaced by the file's name:
+    /// saving keeps the reference, [`Self::load`] reads the picture back, requests leave it out
+    /// (with `keep` at least [`crate::anthropic::MAX_IMAGES`] they were left out anyway) and
+    /// [`Self::read_image`] fetches it for display. A picture that can't be written stays in
+    /// memory. Returns the bytes of base64 freed.
+    pub fn offload_images(&self, chat: &mut Chat, keep: usize) -> Result<usize, HistoryError> {
+        let total: usize = chat
+            .conversation
+            .messages()
+            .iter()
+            .flat_map(|m| m.tool_results_iter())
+            .map(|r| r.images.iter().filter(|i| !i.is_offloaded()).count())
+            .sum();
+        if total <= keep || chat.is_empty() {
+            return Ok(0);
+        }
+        let dir = self.dir(&chat.meta.id)?;
+        let mut older = total - keep;
+        let mut freed = 0usize;
+        let mut messages = std::mem::take(&mut chat.conversation).into_messages();
+        let mut result = Ok(());
+        // oldest first
+        'all: for m in &mut messages {
+            for b in &mut m.blocks {
+                let Block::ToolResult(r) = b else { continue };
+                for img in &mut r.images {
+                    if older == 0 {
+                        break 'all;
+                    }
+                    if img.is_offloaded() {
+                        continue;
+                    }
+                    older -= 1;
+                    match write_image(&dir, img) {
+                        Ok(Some(name)) => {
+                            freed = freed.saturating_add(img.data.len());
+                            img.data = format!("{FILE_REF}{name}");
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            result = Err(e);
+                            break 'all;
+                        }
+                    }
+                }
+            }
+        }
+        chat.conversation = Conversation::from_messages(messages);
+        result.map(|()| freed)
+    }
+
+    /// An offloaded picture of chat `id` with its data read back from the folder (`None` when it
+    /// isn't offloaded or its file is gone).
+    pub fn read_image(&self, id: &str, img: &Image) -> Option<Image> {
+        let name = img.data.strip_prefix(FILE_REF)?;
+        let dir = self.dir(id).ok()?;
+        read_image(&dir, name).map(|data| Image { media_type: img.media_type.clone(), data })
+    }
+
     /// Give a chat a name of the person's (it is never replaced by an automatic one).
     pub fn rename(&self, id: &str, title: &str) -> Result<ChatMeta, HistoryError> {
         let title = title.trim();
@@ -703,6 +764,52 @@ mod tests {
         let mut again = back.clone();
         store.save(&mut again).unwrap();
         assert_eq!(store.load(c.id()).unwrap().conversation.messages()[2].tool_results_iter().next().unwrap().images.len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn old_pictures_leave_memory_and_come_back_from_the_folder() {
+        let root = temp("offload");
+        let store = HistoryStore::new(&root);
+        let mut c = Chat::new();
+        c.conversation.push_user_text("render five frames");
+        let pic = |k: u8| Image::from_bytes("image/png", &[k; 600]);
+        for k in 0..5u8 {
+            let id = format!("t{k}");
+            c.conversation.push(Message {
+                role: Role::Assistant,
+                blocks: vec![Block::ToolCall(ToolCall { id: id.clone(), name: "shot".into(), input: serde_json::json!({}), invalid_input: None })],
+                native: None,
+            });
+            c.conversation.push(Message::tool_results(vec![ToolResult { call_id: id, content: "ok".into(), is_error: false, images: vec![pic(k)] }]));
+        }
+        let before = c.conversation.memory().0;
+        let freed = store.offload_images(&mut c, 2).unwrap();
+        assert_eq!(freed, 3 * 800, "three 600-byte pictures in base64");
+        assert!(c.conversation.memory().0 + 2000 < before);
+        let imgs: Vec<&Image> = c.conversation.messages().iter().flat_map(|m| m.tool_results_iter()).flat_map(|r| r.images.iter()).collect();
+        assert_eq!(imgs.iter().map(|i| i.is_offloaded()).collect::<Vec<_>>(), vec![true, true, true, false, false], "the newest two stay");
+        // shown again from the folder
+        assert_eq!(store.read_image(c.id(), imgs[0]).and_then(|i| i.decode()), Some(vec![0u8; 600]));
+        // requests leave them out
+        let sent = serde_json::to_string(&crate::anthropic::messages(c.conversation.messages())).unwrap();
+        assert_eq!(sent.matches("\"type\":\"image\"").count(), 2);
+        let sent = serde_json::to_string(&crate::openai::messages("", c.conversation.messages())).unwrap();
+        assert_eq!(sent.matches("image_url\":{").count(), 2);
+        // saved and reopened: every picture is back
+        store.save(&mut c).unwrap();
+        let back = store.load(c.id()).unwrap();
+        let n = back
+            .conversation
+            .messages()
+            .iter()
+            .flat_map(|m| m.tool_results_iter())
+            .flat_map(|r| r.images.iter())
+            .filter(|i| !i.is_offloaded() && i.decode().is_some())
+            .count();
+        assert_eq!(n, 5);
+        // nothing more to do
+        assert_eq!(store.offload_images(&mut c, 2).unwrap(), 0);
         let _ = std::fs::remove_dir_all(&root);
     }
 
