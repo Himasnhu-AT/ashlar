@@ -179,6 +179,8 @@ fn bundle_zip(dir: &Path, version: u32) -> Vec<u8> {
                     "urls": ["https://cdn.example.com/missing", "https://hub.example.com/weights.bin"]}]
     });
     fs::write(folder.join("integration.json"), manifest.to_string()).unwrap();
+    fs::create_dir_all(folder.join("skills/levels")).unwrap();
+    fs::write(folder.join("skills/levels/SKILL.md"), "---\nname: levels\ndescription: Use when checking loudness.\n---\nMeasure first.").unwrap();
     let zip = dir.join(format!("fake-{version}.zip"));
     let ok = Command::new("/usr/bin/ditto").args(["-c", "-k", "--keepParent"]).arg(&folder).arg(&zip).status().unwrap().success();
     assert!(ok);
@@ -260,6 +262,22 @@ fn install_run_call_update_rollback_remove() {
     assert!(ix.call("fake__secret", &json!({}), None).is_error);
     assert!(ix.call("other__echo", &json!({}), None).is_error);
     assert!(ix.owns("fake__echo") && !ix.owns("echo"));
+
+    // Prompts as commands, skill resources, and the bundle's skill folders.
+    let prompts: Vec<String> = ix.prompts().into_iter().map(|p| p.name).collect();
+    assert_eq!(prompts, ["fake:summarise"]);
+    assert_eq!(ix.get_prompt("fake:summarise", "the meeting").unwrap(), "Summarise the meeting in three lines.");
+    assert!(ix.get_prompt("fake:summarise", "").unwrap_err().contains("needs topic"));
+    assert!(ix.get_prompt("fake:nope", "x").is_err() && ix.get_prompt("nope", "x").is_err());
+    let skills = ix.skill_resources();
+    assert_eq!(skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["fake:mixing"]);
+    assert_eq!(skills[0].resource.description, "Use when balancing levels.");
+    assert!(ix.read_resource("fake", "skill://mixing").unwrap().contains("Keep peaks under -1 dB."));
+    assert!(ix.read_resource("fake", "skill://other").is_err());
+    let dirs = ix.skill_dirs();
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(dirs[0].0, "fake");
+    assert!(dirs[0].1.join("levels/SKILL.md").is_file(), "{:?}", dirs[0].1);
 
     // Disabled: no tools, server stopped; enabled again: back.
     ix.set_enabled("fake", false).unwrap();

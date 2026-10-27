@@ -55,6 +55,170 @@ impl Tool {
     }
 }
 
+/// One argument of a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PromptArg {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+}
+
+/// One prompt of a server (`prompts/list`): a saved request the person can run as a command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Prompt {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub arguments: Vec<PromptArg>,
+}
+
+/// The most arguments read for one prompt.
+const MAX_PROMPT_ARGS: usize = 16;
+
+impl Prompt {
+    /// One entry of `prompts/list`; `None` without a usable name.
+    pub fn from_mcp(v: &Value) -> Option<Prompt> {
+        let name = v.get("name").and_then(Value::as_str)?.trim();
+        if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+            return None;
+        }
+        let text = |v: &Value, k: &str, max: usize| v.get(k).and_then(Value::as_str).map(|s| s.chars().take(max).collect::<String>());
+        let arguments = v
+            .get("arguments")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .take(MAX_PROMPT_ARGS)
+                    .filter_map(|x| {
+                        let n = text(x, "name", 64).filter(|n| !n.trim().is_empty())?;
+                        Some(PromptArg {
+                            name: n,
+                            description: text(x, "description", 500).unwrap_or_default(),
+                            required: x.get("required").and_then(Value::as_bool).unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(Prompt {
+            name: name.to_string(),
+            title: text(v, "title", 200),
+            description: text(v, "description", 2_000).unwrap_or_default(),
+            arguments,
+        })
+    }
+
+    /// The arguments as `prompts/get` takes them from what the person typed after the command:
+    /// one argument takes all of it; several take one word each in order, the last the rest.
+    pub fn arguments_from(&self, typed: &str) -> serde_json::Map<String, Value> {
+        let mut out = serde_json::Map::new();
+        let typed = typed.trim();
+        match self.arguments.len() {
+            0 => {}
+            1 => {
+                if let Some(a) = self.arguments.first()
+                    && !typed.is_empty()
+                {
+                    out.insert(a.name.clone(), json!(typed));
+                }
+            }
+            n => {
+                let mut rest = typed;
+                for (i, a) in self.arguments.iter().enumerate() {
+                    let rest_trim = rest.trim_start();
+                    if rest_trim.is_empty() {
+                        break;
+                    }
+                    let value = if i + 1 == n {
+                        rest = "";
+                        rest_trim
+                    } else {
+                        let end = rest_trim.find(char::is_whitespace).unwrap_or(rest_trim.len());
+                        let (w, r) = rest_trim.split_at(end);
+                        rest = r;
+                        w
+                    };
+                    out.insert(a.name.clone(), json!(value));
+                }
+            }
+        }
+        out
+    }
+
+    /// `[a] [b]` for a command list.
+    pub fn args_hint(&self) -> Option<String> {
+        (!self.arguments.is_empty()).then(|| {
+            self.arguments.iter().map(|a| if a.required { format!("<{}>", a.name) } else { format!("[{}]", a.name) }).collect::<Vec<_>>().join(" ")
+        })
+    }
+}
+
+/// The text of a `prompts/get` result: each message's text, the assistant's marked as such.
+pub fn prompt_text(result: &Value) -> Option<String> {
+    let messages = result.get("messages").and_then(Value::as_array)?;
+    let mut parts: Vec<String> = Vec::new();
+    for m in messages.iter().take(50) {
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("user");
+        let c = m.get("content");
+        let text = match c {
+            Some(Value::Array(blocks)) => blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+            Some(b) => b
+                .get("text")
+                .and_then(Value::as_str)
+                .or_else(|| b.get("resource").and_then(|r| r.get("text")).and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string(),
+            None => String::new(),
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        parts.push(if role == "assistant" { format!("(assistant) {text}") } else { text });
+    }
+    let all = parts.join("\n\n");
+    (!all.trim().is_empty()).then(|| all.chars().take(MAX_RESULT_TEXT).collect())
+}
+
+/// One resource of a server (`resources/list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Resource {
+    pub uri: String,
+    pub name: String,
+    pub description: String,
+    pub mime_type: Option<String>,
+}
+
+/// Resources whose URI starts with this are skills (`skill://<name>`).
+pub const SKILL_SCHEME: &str = "skill://";
+
+impl Resource {
+    pub fn from_mcp(v: &Value) -> Option<Resource> {
+        let uri = v.get("uri").and_then(Value::as_str)?.trim();
+        if uri.is_empty() || uri.len() > 1_000 {
+            return None;
+        }
+        let text = |k: &str, max: usize| v.get(k).and_then(Value::as_str).map(|s| s.chars().take(max).collect::<String>());
+        Some(Resource {
+            uri: uri.to_string(),
+            name: text("name", 200).unwrap_or_default(),
+            description: text("description", 2_000).unwrap_or_default(),
+            mime_type: text("mimeType", 100),
+        })
+    }
+
+    /// The skill's name when this resource is one (`skill://<name>`).
+    pub fn skill_name(&self) -> Option<&str> {
+        self.uri.strip_prefix(SKILL_SCHEME).map(|n| n.trim_matches('/')).filter(|n| !n.is_empty() && !n.contains('/'))
+    }
+}
+
+/// The text of a `resources/read` result (its text contents joined).
+pub fn resource_text(result: &Value) -> Option<String> {
+    let contents = result.get("contents").and_then(Value::as_array)?;
+    let all: Vec<&str> = contents.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect();
+    (!all.is_empty()).then(|| all.join("\n\n").chars().take(MAX_RESULT_TEXT).collect())
+}
+
 /// One block of a tool result.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -151,6 +315,27 @@ pub fn integration_of(qualified: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompts_and_resources_from_mcp() {
+        let p = Prompt::from_mcp(&json!({"name": "transcribe", "description": "Transcribe a file", "arguments": [{"name": "file", "required": true}, {"name": "language"}]})).unwrap();
+        assert_eq!(p.args_hint().as_deref(), Some("<file> [language]"));
+        let a = p.arguments_from("/a/b.wav  en gb");
+        assert_eq!(a.get("file"), Some(&json!("/a/b.wav")));
+        assert_eq!(a.get("language"), Some(&json!("en gb")));
+        let one = Prompt::from_mcp(&json!({"name": "ask", "arguments": [{"name": "q"}]})).unwrap();
+        assert_eq!(one.arguments_from(" what is this "), serde_json::Map::from_iter([("q".to_string(), json!("what is this"))]));
+        assert!(Prompt::from_mcp(&json!({"name": "bad name"})).is_none());
+        let text = prompt_text(
+            &json!({"messages": [{"role": "user", "content": {"type": "text", "text": "Listen to it"}}, {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}]}),
+        );
+        assert_eq!(text.as_deref(), Some("Listen to it\n\n(assistant) ok"));
+        let r =
+            Resource::from_mcp(&json!({"uri": "skill://mixing", "name": "Mixing", "description": "Levels", "mimeType": "text/markdown"})).unwrap();
+        assert_eq!(r.skill_name(), Some("mixing"));
+        assert_eq!(Resource::from_mcp(&json!({"uri": "file:///x"})).and_then(|r| r.skill_name().map(str::to_string)), None);
+        assert_eq!(resource_text(&json!({"contents": [{"uri": "skill://mixing", "text": "# Mixing"}]})).as_deref(), Some("# Mixing"));
+    }
 
     #[test]
     fn tools_parse_with_their_hints() {

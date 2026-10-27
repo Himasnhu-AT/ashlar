@@ -15,8 +15,13 @@
 //! | [`download`] | resumable, verified downloads over an [`Http`] trait ([`HttpsClient`] with feature `https`) |
 //! | [`links`] | download links asked for at install time, signed for the signed-in account ([`SignedLinks`], [`Integrations::set_links`]) |
 //! | [`verify`] | the code-signature check ([`Codesign`]) |
-//! | [`mcp`] | the MCP stdio client: handshake, `tools/list`, `tools/call`, timeouts, cancellation |
+//! | [`mcp`] | the MCP stdio client: handshake, `tools/list`, `tools/call`, `prompts/*`, `resources/*`, timeouts, cancellation |
 //! | [`server`] | one supervised server: start, restart after a crash, cached tool list |
+//!
+//! Besides tools, an integration can bring the assistant skills and commands: its MCP prompts become
+//! `/<id>:<prompt>` commands ([`Integrations::prompts`], [`Integrations::get_prompt`]), resources at
+//! `skill://<name>` and the skill folders in its bundle (the manifest's `skills`, or `skills/`) become
+//! skills named `<id>:<name>` ([`Integrations::skill_resources`], [`Integrations::skill_dirs`]).
 //!
 //! The assistant sees each tool as `<id>__<tool>` ([`qualified_name`]): provider-safe (`[A-Za-z0-9_-]`,
 //! at most 64 characters) and routed by its prefix. A tool needs approval unless its server marks it
@@ -44,9 +49,10 @@ pub use download::{Http, HttpResponse};
 pub use links::{Link, LinkError, Links, SignedLinks, Tokens};
 pub use server::ServerStatus;
 pub use service::{
-    CatalogState, Config, DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, HostTool, Integrations, Item, Job, Refused, Snapshot, version_at_least,
+    CatalogState, Config, DEFAULT_CALL_TIMEOUT, DEFAULT_SKILLS_DIR, DEFAULT_STARTUP_TIMEOUT, HostPrompt, HostSkillResource, HostTool, Integrations,
+    Item, Job, PROMPT_SEPARATOR, Refused, Snapshot, version_at_least,
 };
-pub use tool::{CallOutput, Content, Tool, integration_of, qualified_name};
+pub use tool::{CallOutput, Content, Prompt, PromptArg, Resource, SKILL_SCHEME, Tool, integration_of, qualified_name};
 #[cfg(any(test, feature = "fake-server"))]
 pub use verify::AcceptAll;
 pub use verify::{Codesign, Verify};

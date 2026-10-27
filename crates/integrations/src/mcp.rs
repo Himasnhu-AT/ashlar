@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use crate::tool::{CallOutput, Tool};
+use crate::tool::{CallOutput, Prompt, Resource, Tool};
 
 /// The protocol revision the client asks for.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -77,6 +77,10 @@ pub struct ServerInfo {
     pub version: String,
     pub protocol_version: String,
     pub instructions: Option<String>,
+    /// The server offers prompts (`capabilities.prompts`).
+    pub prompts: bool,
+    /// The server offers resources (`capabilities.resources`).
+    pub resources: bool,
 }
 
 type Reply = Result<Value, (i64, String)>;
@@ -205,6 +209,56 @@ impl McpClient {
         Ok(out)
     }
 
+    /// Every item of a paged list (`prompts/list`, `resources/list`).
+    fn list_all<T>(&self, method: &str, key: &str, timeout: Duration, parse: impl Fn(&Value) -> Option<T>) -> Result<Vec<T>, McpError> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let params = match &cursor {
+                Some(c) => json!({"cursor": c}),
+                None => json!({}),
+            };
+            let result = self.request(method, params, timeout, None)?;
+            let Some(items) = result.get(key).and_then(Value::as_array) else {
+                return Err(McpError::Protocol { method: method.into(), detail: format!("no {key} array") });
+            };
+            out.extend(items.iter().filter_map(&parse));
+            cursor = result.get("nextCursor").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every prompt (empty when the server offers none).
+    pub fn list_prompts(&self, timeout: Duration) -> Result<Vec<Prompt>, McpError> {
+        if !self.info.prompts {
+            return Ok(Vec::new());
+        }
+        self.list_all("prompts/list", "prompts", timeout, Prompt::from_mcp)
+    }
+
+    /// A prompt's messages as one text, with its arguments filled in.
+    pub fn get_prompt(&self, name: &str, arguments: &serde_json::Map<String, Value>, timeout: Duration) -> Result<String, McpError> {
+        let result = self.request("prompts/get", json!({"name": name, "arguments": arguments}), timeout, None)?;
+        crate::tool::prompt_text(&result).ok_or_else(|| McpError::Protocol { method: "prompts/get".into(), detail: "no text in the messages".into() })
+    }
+
+    /// Every resource (empty when the server offers none).
+    pub fn list_resources(&self, timeout: Duration) -> Result<Vec<Resource>, McpError> {
+        if !self.info.resources {
+            return Ok(Vec::new());
+        }
+        self.list_all("resources/list", "resources", timeout, Resource::from_mcp)
+    }
+
+    /// A resource's text.
+    pub fn read_resource(&self, uri: &str, timeout: Duration) -> Result<String, McpError> {
+        let result = self.request("resources/read", json!({"uri": uri}), timeout, None)?;
+        crate::tool::resource_text(&result).ok_or_else(|| McpError::Protocol { method: "resources/read".into(), detail: "no text contents".into() })
+    }
+
     /// Call a tool. A tool's own failure is `Ok` with `is_error`; `Err` is the transport or the protocol.
     pub fn call_tool(&self, name: &str, arguments: &Value, timeout: Duration, cancel: Option<&AtomicBool>) -> Result<CallOutput, McpError> {
         let args = if arguments.is_object() { arguments.clone() } else { json!({}) };
@@ -318,6 +372,8 @@ fn parse_initialize(result: &Value) -> Result<ServerInfo, McpError> {
         version: field("version"),
         protocol_version: version.to_string(),
         instructions: result.get("instructions").and_then(Value::as_str).map(|s| s.chars().take(20_000).collect()),
+        prompts: result.get("capabilities").and_then(|c| c.get("prompts")).is_some_and(Value::is_object),
+        resources: result.get("capabilities").and_then(|c| c.get("resources")).is_some_and(Value::is_object),
     })
 }
 
