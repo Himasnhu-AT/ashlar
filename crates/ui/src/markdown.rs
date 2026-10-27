@@ -627,7 +627,7 @@ fn code_block(ui: &mut Ui, id: &str, n: usize, lang: &str, text: &str, style: &M
                         ui.ctx().copy_text(text.to_string());
                         let now = ui.input(|i| i.time);
                         ui.ctx().data_mut(|d| d.insert_temp(key, now));
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(1600));
+                        crate::wake::wake_after(ui.ctx(), crate::wake::Reason::TIMER, std::time::Duration::from_millis(1600));
                         copied = true;
                     }
                 });

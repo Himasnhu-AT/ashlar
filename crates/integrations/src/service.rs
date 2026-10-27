@@ -611,9 +611,27 @@ impl Integrations {
         out
     }
 
-    /// The prompts of every running integration as commands, sorted by name.
+    /// Servers that said their prompts or resources changed list them again in the background
+    /// (the snapshot's waker runs when they have).
+    fn refresh_changed_extras(&self, servers: &BTreeMap<String, Arc<Server>>) {
+        for (id, s) in servers {
+            if s.take_extras_changed() {
+                let (me, s) = (self.clone(), Arc::clone(s));
+                spawn(&format!("integrations-extras-{id}"), move || {
+                    if let Err(e) = s.refresh_extras() {
+                        log::warn!(target: "integrations", "[{}] listing prompts and resources again: {e}", s.id());
+                    }
+                    me.wake();
+                });
+            }
+        }
+    }
+
+    /// The prompts of every running integration as commands, sorted by name. A server that said
+    /// they changed lists them again in the background.
     pub fn prompts(&self) -> Vec<HostPrompt> {
         let servers = self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        self.refresh_changed_extras(&servers);
         let mut out: Vec<HostPrompt> = servers
             .iter()
             .flat_map(|(id, s)| {
@@ -665,9 +683,11 @@ impl Integrations {
         out
     }
 
-    /// The resources running integrations offer as skills, sorted by name.
+    /// The resources running integrations offer as skills, sorted by name (refreshed like
+    /// [`Self::prompts`]).
     pub fn skill_resources(&self) -> Vec<HostSkillResource> {
         let servers = self.shared.servers.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        self.refresh_changed_extras(&servers);
         let mut out: Vec<HostSkillResource> = servers
             .iter()
             .flat_map(|(id, s)| {

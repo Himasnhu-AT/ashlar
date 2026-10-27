@@ -40,7 +40,7 @@ fn the_client_talks_to_a_server() {
     assert_eq!(client.info().instructions.as_deref(), Some("a fake"));
     let tools = client.list_tools(T).unwrap();
     let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["echo", "env", "slow", "crash", "write", "secret"]); // both pages
+    assert_eq!(names, ["echo", "env", "slow", "crash", "write", "change", "secret"]); // both pages
     let out = client.call_tool("echo", &json!({"text": "hi"}), T, None).unwrap();
     assert_eq!((out.text().as_str(), out.is_error), ("hi", false));
     // The child gets only the environment it is given.
@@ -114,7 +114,7 @@ fn the_supervisor_restarts_after_a_crash_but_not_forever() {
     let server = Server::new(server_config(&log));
     assert_eq!(server.status(), ServerStatus::Stopped);
     server.start().unwrap();
-    assert!(matches!(server.status(), ServerStatus::Running { tools: 5, .. }));
+    assert!(matches!(server.status(), ServerStatus::Running { tools: 6, .. }));
     assert!(!server.tools().iter().any(|t| t.name == "secret"));
     assert!(server.call("secret", &json!({}), None).is_error);
 
@@ -253,7 +253,7 @@ fn install_run_call_update_rollback_remove() {
 
     // Tools, prefixed and sorted, without the hidden one.
     let names: Vec<String> = ix.tools().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, ["fake__crash", "fake__echo", "fake__env", "fake__slow", "fake__write"]);
+    assert_eq!(names, ["fake__change", "fake__crash", "fake__echo", "fake__env", "fake__slow", "fake__write"]);
     assert_eq!(ix.call("fake__echo", &json!({"text": "hello"}), None).text(), "hello");
     let asset = ix.call("fake__env", &json!({"name": "FAKE_ASSET"}), None).text();
     assert_eq!(asset, root.join("fake/data/models/weights.bin").to_string_lossy());
@@ -274,6 +274,13 @@ fn install_run_call_update_rollback_remove() {
     assert_eq!(skills[0].resource.description, "Use when balancing levels.");
     assert!(ix.read_resource("fake", "skill://mixing").unwrap().contains("Keep peaks under -1 dB."));
     assert!(ix.read_resource("fake", "skill://other").is_err());
+    // the server says its prompts changed: they are listed again
+    assert_eq!(ix.call("fake__change", &json!({}), None).text(), "changed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ix.prompts().iter().any(|p| p.name == "fake:extra") {
+        assert!(Instant::now() < deadline, "the new prompt never showed: {:?}", ix.prompts());
+        std::thread::sleep(Duration::from_millis(20));
+    }
     let dirs = ix.skill_dirs();
     assert_eq!(dirs.len(), 1);
     assert_eq!(dirs[0].0, "fake");

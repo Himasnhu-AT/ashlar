@@ -91,6 +91,8 @@ struct Shared {
     alive: AtomicBool,
     exit_reason: Mutex<Option<String>>,
     tools_changed: AtomicBool,
+    /// `notifications/prompts/list_changed` or `notifications/resources/list_changed` came.
+    extras_changed: AtomicBool,
 }
 
 impl Shared {
@@ -185,6 +187,11 @@ impl McpClient {
     /// True once after the server sent `notifications/tools/list_changed`.
     pub fn take_tools_changed(&self) -> bool {
         self.shared.tools_changed.swap(false, Ordering::SeqCst)
+    }
+
+    /// True once after the server said its prompts or resources changed.
+    pub fn take_extras_changed(&self) -> bool {
+        self.shared.extras_changed.swap(false, Ordering::SeqCst)
     }
 
     /// Every tool (following `nextCursor`).
@@ -451,6 +458,9 @@ fn handle(label: &str, msg: &Value, shared: &Shared, stdin: &Mutex<Option<ChildS
             let _ = write_line(stdin, &answer);
         }
         (Some("notifications/tools/list_changed"), None) => shared.tools_changed.store(true, Ordering::SeqCst),
+        (Some("notifications/prompts/list_changed" | "notifications/resources/list_changed"), None) => {
+            shared.extras_changed.store(true, Ordering::SeqCst)
+        }
         (Some("notifications/message"), None) => {
             let params = msg.get("params");
             let level = params.and_then(|p| p.get("level")).and_then(Value::as_str).unwrap_or("info");

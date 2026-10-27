@@ -222,6 +222,28 @@ impl Server {
         }
     }
 
+    /// True once after the running server said its prompts or resources changed.
+    pub fn take_extras_changed(&self) -> bool {
+        match &*self.state.lock().unwrap_or_else(PoisonError::into_inner) {
+            State::Running { client, .. } if client.is_alive() => client.take_extras_changed(),
+            _ => false,
+        }
+    }
+
+    /// List the prompts and resources again (blocks: call it off the UI thread).
+    pub fn refresh_extras(&self) -> Result<(), String> {
+        let (client, _) = self.client()?;
+        let prompts = client.list_prompts(self.config.startup_timeout).map_err(|e| e.to_string())?;
+        let resources = client.list_resources(self.config.startup_timeout).map_err(|e| e.to_string())?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let State::Running { client: c, extras, .. } = &mut *state
+            && Arc::ptr_eq(c, &client)
+        {
+            *extras = Arc::new(Extras { prompts, resources });
+        }
+        Ok(())
+    }
+
     /// The prompts of the running server (none when it isn't running).
     pub fn prompts(&self) -> Vec<Prompt> {
         self.extras().map(|e| e.prompts.clone()).unwrap_or_default()

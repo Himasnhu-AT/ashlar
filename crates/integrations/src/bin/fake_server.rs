@@ -2,7 +2,8 @@
 //!
 //! Tools: `echo` (read-only, returns its `text`), `env` (returns the variable `name`), `slow` (sleeps
 //! `ms`, then answers), `crash` (exits at once), `write` (not read-only), `secret` (hidden by tests).
-//! Prompts: `summarise` (argument `topic`). Resources: `skill://mixing` (a skill) and
+//! Prompts: `summarise` (argument `topic`); after the tool `change`, also `extra` (and the server
+//! sends `notifications/prompts/list_changed`). Resources: `skill://mixing` (a skill) and
 //! `file:///notes.txt`.
 //! `--fail-init` answers `initialize` with an error; `--bad-version` with an unknown protocol version;
 //! `--silent` never answers. Each start appends a line to the file named by `FAKE_STARTS`, when set.
@@ -23,6 +24,7 @@ fn main() {
     eprintln!("fake server: started with {args:?}");
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
+    let mut changed = false;
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
@@ -54,6 +56,7 @@ fn main() {
                     json!([
                         {"name": "crash", "description": "Exits", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
                         {"name": "write", "description": "Writes a file", "inputSchema": {"type": "object"}},
+                        {"name": "change", "description": "Adds a prompt", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
                         {"name": "secret", "description": "Hidden", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true, "openWorldHint": true}}
                     ])
                 };
@@ -75,6 +78,11 @@ fn main() {
                     }
                     "crash" => std::process::exit(3),
                     "write" => "wrote".into(),
+                    "change" => {
+                        changed = true;
+                        let _ = writeln!(out, "{}", json!({"jsonrpc": "2.0", "method": "notifications/prompts/list_changed"}));
+                        "changed".into()
+                    }
                     _ => {
                         let reply =
                             json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": "unknown tool"}], "isError": true}});
@@ -85,9 +93,14 @@ fn main() {
                 };
                 json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": text}], "isError": false}})
             }
-            "prompts/list" => json!({"jsonrpc": "2.0", "id": id, "result": {"prompts": [
-                {"name": "summarise", "description": "Summarise a topic", "arguments": [{"name": "topic", "required": true}]}
-            ]}}),
+            "prompts/list" => {
+                let mut prompts =
+                    vec![json!({"name": "summarise", "description": "Summarise a topic", "arguments": [{"name": "topic", "required": true}]})];
+                if changed {
+                    prompts.push(json!({"name": "extra", "description": "Added later"}));
+                }
+                json!({"jsonrpc": "2.0", "id": id, "result": {"prompts": prompts}})
+            }
             "prompts/get" => {
                 let topic = params.get("arguments").and_then(|a| a.get("topic")).and_then(Value::as_str).unwrap_or_default();
                 json!({"jsonrpc": "2.0", "id": id, "result": {"messages": [{"role": "user", "content": {"type": "text", "text": format!("Summarise {topic} in three lines.")}}]}})
