@@ -29,7 +29,7 @@ thiserror.workspace = true
 flate2 = "1"
 getrandom = "0.4"
 ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "gzip"] }
-sysinfo = { version = "0.38", optional = true, default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", optional = true, default-features = false, features = ["system"] }
 
 [dev-dependencies]
 trybuild = "1"
