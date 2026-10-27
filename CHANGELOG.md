@@ -8,6 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+
+- `ashlar-assistant`: saved chats (`history`: `HistoryStore`, `HistorySaver`; versioned, crash-safe,
+  pictures in their own files), `@` mentions (`mention`, `Block::Mention`), `/` commands with saved
+  prompts (`slash`), and `/compact` summaries and chat titles (`compact`).
+
 ## [0.1.0] - 2026-10-27
 
 First public release, on crates.io.

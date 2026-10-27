@@ -53,6 +53,7 @@ fn user_content(m: &Message, skip_images: &mut usize) -> Vec<Value> {
         .iter()
         .filter_map(|b| match b {
             Block::Text { text } if !text.is_empty() => Some(json!({"type": "text", "text": text})),
+            Block::Mention(m) => Some(json!({"type": "text", "text": m.prompt_text()})),
             Block::ToolResult(r) => {
                 let text = if r.content.is_empty() { "(no output)" } else { r.content.as_str() };
                 let content = if r.images.is_empty() {

@@ -61,6 +61,10 @@ pub enum Block {
     },
     ToolCall(ToolCall),
     ToolResult(ToolResult),
+    /// Something the person pointed at with `@` (a layer, a file, a docs page): sent to the model
+    /// as text ([`crate::mention::Mention::prompt_text`]), shown as a chip, left out of
+    /// [`Message::text`].
+    Mention(crate::mention::Mention),
 }
 
 /// A message exactly as one provider's wire format returned it, replayed unchanged to providers
@@ -87,6 +91,29 @@ pub struct Message {
 impl Message {
     pub fn user_text(text: impl Into<String>) -> Self {
         Self { role: Role::User, blocks: vec![Block::Text { text: text.into() }], native: None }
+    }
+
+    /// The person's message: what they typed, then the things they mentioned (once each).
+    pub fn user_with_mentions(text: impl Into<String>, mentions: &[crate::mention::Mention]) -> Self {
+        let mut blocks = vec![Block::Text { text: text.into() }];
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for m in mentions {
+            if !seen.contains(&(m.kind.as_str(), m.id.as_str())) {
+                seen.push((m.kind.as_str(), m.id.as_str()));
+                blocks.push(Block::Mention(m.clone()));
+            }
+        }
+        Self { role: Role::User, blocks, native: None }
+    }
+
+    /// The things mentioned in this message.
+    pub fn mentions(&self) -> impl Iterator<Item = &crate::mention::Mention> {
+        self.blocks.iter().filter_map(|b| if let Block::Mention(m) = b { Some(m) } else { None })
+    }
+
+    /// A message the person wrote (text), not one that only carries tool results.
+    pub fn is_person(&self) -> bool {
+        self.role == Role::User && self.blocks.iter().any(|b| !matches!(b, Block::ToolResult(_)))
     }
 
     pub fn tool_results(results: Vec<ToolResult>) -> Self {
@@ -124,6 +151,41 @@ pub struct Conversation {
 impl Conversation {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A conversation from saved messages (a chat reopened from history).
+    pub fn from_messages(messages: Vec<Message>) -> Self {
+        Self { messages }
+    }
+
+    pub fn into_messages(self) -> Vec<Message> {
+        self.messages
+    }
+
+    /// A new conversation with the first `len` messages of this one (retry, edit and resend).
+    /// This one is not changed.
+    pub fn truncated(&self, len: usize) -> Self {
+        Self { messages: self.messages.get(..len.min(self.messages.len())).unwrap_or_default().to_vec() }
+    }
+
+    /// The index of the person's last message ([`Message::is_person`]).
+    pub fn last_person_index(&self) -> Option<usize> {
+        self.messages.iter().rposition(Message::is_person)
+    }
+
+    /// Answer every open tool call of the last reply with an error `reason` (a turn that was
+    /// cut short by a crash or a stop), so the conversation is valid for the next request.
+    /// Returns how many calls were closed.
+    pub fn close_open_calls(&mut self, reason: &str) -> usize {
+        let open: Vec<String> = self.unanswered_calls().into_iter().map(|c| c.id.clone()).collect();
+        if open.is_empty() {
+            return 0;
+        }
+        let n = open.len();
+        let results =
+            open.into_iter().map(|call_id| ToolResult { call_id, content: reason.to_string(), is_error: true, images: Vec::new() }).collect();
+        self.push(Message::tool_results(results));
+        n
     }
 
     pub fn messages(&self) -> &[Message] {

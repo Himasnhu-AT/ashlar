@@ -310,8 +310,10 @@ version = "0.1.0"
 dependencies = [
  "ashlar-assistant",
  "ashlar-command",
+ "ashlar-fs",
  "ashlar-mcp",
  "ashlar-native",
+ "base64 0.22.1",
  "log",
  "rustls",
  "serde",

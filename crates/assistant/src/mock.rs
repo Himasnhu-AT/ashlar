@@ -146,7 +146,7 @@ impl Provider for MockProvider {
                             events(StreamEvent::ToolCallEnd { id: c.id.clone() });
                             pause(self.delay);
                         }
-                        Block::ToolResult(_) => {}
+                        Block::ToolResult(_) | Block::Mention(_) => {}
                     }
                 }
                 events(StreamEvent::Usage(usage));
