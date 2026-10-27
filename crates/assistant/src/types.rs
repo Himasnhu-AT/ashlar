@@ -206,6 +206,31 @@ impl Conversation {
         &self.messages
     }
 
+    /// Bytes the messages hold (text, call arguments, pictures, native replays) and how many
+    /// pictures there are, for memory readouts. Pictures dominate: a chat that looked at many
+    /// rendered frames holds megabytes of base64.
+    pub fn memory(&self) -> (usize, usize) {
+        let mut bytes = 0usize;
+        let mut images = 0usize;
+        for m in &self.messages {
+            for b in &m.blocks {
+                bytes = bytes.saturating_add(match b {
+                    Block::Text { text } | Block::Thinking { text } => text.len(),
+                    Block::ToolCall(c) => c.id.len() + c.name.len() + c.input.to_string().len(),
+                    Block::ToolResult(r) => {
+                        images += r.images.len();
+                        r.content.len() + r.images.iter().map(|i| i.data.len()).sum::<usize>()
+                    }
+                    Block::Mention(_) => std::mem::size_of::<crate::mention::Mention>(),
+                });
+            }
+            if let Some(n) = &m.native {
+                bytes = bytes.saturating_add(n.content.to_string().len());
+            }
+        }
+        (bytes, images)
+    }
+
     pub fn len(&self) -> usize {
         self.messages.len()
     }
@@ -409,6 +434,27 @@ pub enum StreamEvent {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn memory_counts_text_and_pictures() {
+        let mut c = Conversation::new();
+        c.push_user_text("hello");
+        let pic = Image::from_bytes("image/png", &[7u8; 300]);
+        let n = pic.data.len();
+        c.push(Message {
+            role: Role::User,
+            blocks: vec![Block::ToolResult(ToolResult {
+                call_id: "a".into(),
+                content: "ok".into(),
+                is_error: false,
+                images: vec![pic.clone(), pic],
+            })],
+            native: None,
+        });
+        assert_eq!(c.memory(), (5 + 2 + 2 * n, 2));
+        assert_eq!(Conversation::new().memory(), (0, 0));
+    }
+
     use super::*;
     use serde_json::json;
 
