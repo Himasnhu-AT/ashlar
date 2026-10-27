@@ -33,8 +33,12 @@ Before anything is uploaded, the workflow refuses to go on unless:
 | `CHANGELOG.md` has a `## [x.y.z] - YYYY-MM-DD` section | every release is documented |
 | that version of `ashlar-rs` is not on crates.io yet | no accidental re-release |
 
-Then it runs `cargo publish --workspace --locked` (every crate in dependency order) and creates
-the GitHub release with that version's changelog section as the text.
+Then it runs `cargo publish --workspace --locked` (every crate in dependency order), skipping the
+crates that already have this version on crates.io, and creates the GitHub release with that
+version's changelog section as the text. crates.io lets an account create only a few new crates at
+once and then about one every 10 minutes, so a release that adds new crates (the first one adds
+all of them) waits and tries again until every crate is there; that can take a few hours. Any
+other publish error stops the job.
 
 ## Cutting a release
 
@@ -53,10 +57,12 @@ the GitHub release with that version's changelog section as the text.
 7. Watch the `release` workflow. If a guard fails, nothing was published: fix the cause, delete
    the tag (`git push origin :refs/tags/v0.2.0`, `git tag -d v0.2.0`) and tag again.
 
-If publishing stops halfway (a network error, a rate limit), crates.io already holds the crates
-that made it and refuses to take them again. Publish the rest by hand with
-`cargo publish -p <crate> --locked`, lowest rank first (the ranks are in
-[architecture.md](architecture.md)), then create the GitHub release with `gh release create`.
+If publishing stops halfway (a network error, a timeout), crates.io keeps the crates that made it.
+Fix the cause and run the failed `publish` job again from the workflow run: it publishes only what
+is missing. If the fix changes the workflow itself, a re-run still uses the old one; push the fix
+to `main` and move the tag to that commit (`git tag -fa vX.Y.Z -m "ashlar X.Y.Z"`,
+`git push -f origin vX.Y.Z`). That is safe only while the crates' own files are unchanged, since
+the published crates came from the old commit.
 
 ## Versioning
 

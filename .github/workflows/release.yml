@@ -88,7 +88,8 @@ jobs:
   publish:
     needs: [checks, gate]
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # A first release of many crates waits out the crates.io limit on new crates (see below).
+    timeout-minutes: 330
     permissions:
       contents: write # the GitHub release
     steps:
@@ -111,12 +112,44 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.checks.outputs.version }}
         run: |
           if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
             echo "::error::the repository secret CARGO_REGISTRY_TOKEN is not set"
             exit 1
           fi
-          cargo publish --workspace --locked
+          # crates.io refuses a version that already exists, and lets an account create only a few
+          # new crates at once (then about one every 10 minutes). So: publish what is still missing,
+          # wait out a rate limit, repeat. Any other error stops the job.
+          crates=$(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.publish == null) | .name')
+          for attempt in $(seq 1 40); do
+            exclude=()
+            missing=0
+            for crate in $crates; do
+              found=$(curl -s --retry 3 -o /dev/null -w '%{http_code}' -A 'ashlar-release (github.com/Himasnhu-AT/ashlar)' "https://crates.io/api/v1/crates/$crate/$VERSION")
+              if [ "$found" = 200 ]; then exclude+=(--exclude "$crate"); else missing=$((missing + 1)); fi
+            done
+            if [ "$missing" = 0 ]; then
+              echo "all crates are on crates.io at $VERSION"
+              exit 0
+            fi
+            echo "attempt $attempt: $missing crate(s) to publish"
+            set +e
+            cargo publish --workspace --locked "${exclude[@]}" 2>&1 | tee publish.log
+            code=${PIPESTATUS[0]}
+            set -e
+            if [ "$code" = 0 ]; then
+              continue # the next pass confirms every crate is there
+            fi
+            if ! grep -q '429 Too Many Requests' publish.log; then
+              echo "::error::cargo publish failed for a reason other than the crates.io rate limit"
+              exit 1
+            fi
+            echo "rate limited by crates.io; waiting 10 minutes"
+            sleep 610
+          done
+          echo "::error::crates still missing after 40 attempts"
+          exit 1
       - name: Create the GitHub release
         if: github.ref_type == 'tag'
         env:
