@@ -32,6 +32,9 @@ pub fn messages(system: &str, list: &[Message]) -> Vec<Value> {
     if !system.is_empty() {
         out.push(json!({"role": "system", "content": system}));
     }
+    // the newest pictures only, as the other providers send them (offloaded ones never)
+    let total: usize = list.iter().flat_map(|m| m.tool_results_iter()).map(|r| r.images.len()).sum();
+    let mut skip = total.saturating_sub(crate::anthropic::MAX_IMAGES);
     for m in list {
         match m.role {
             Role::User => {
@@ -42,11 +45,13 @@ pub fn messages(system: &str, list: &[Message]) -> Vec<Value> {
                         Block::ToolResult(r) => {
                             let content = if r.is_error { format!("Error: {}", r.content) } else { r.content.clone() };
                             out.push(json!({"role": "tool", "tool_call_id": r.call_id, "content": content}));
-                            images.extend(
-                                r.images
-                                    .iter()
-                                    .map(|i| json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{}", i.media_type, i.data)}})),
-                            );
+                            for i in &r.images {
+                                if skip > 0 || i.is_offloaded() {
+                                    skip = skip.saturating_sub(1);
+                                    continue;
+                                }
+                                images.push(json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{}", i.media_type, i.data)}}));
+                            }
                         }
                         Block::Text { text: t } => {
                             if !text.is_empty() {

@@ -61,8 +61,9 @@ fn user_content(m: &Message, skip_images: &mut usize) -> Vec<Value> {
                 } else {
                     let mut parts = vec![json!({"type": "text", "text": text})];
                     for img in &r.images {
-                        if *skip_images > 0 {
-                            *skip_images -= 1;
+                        // the oldest go first, offloaded ones (older still) always
+                        if *skip_images > 0 || img.is_offloaded() {
+                            *skip_images = skip_images.saturating_sub(1);
                             parts.push(json!({"type": "text", "text": "[an earlier image, left out to keep the request small]"}));
                         } else {
                             parts.push(json!({"type": "image", "source": {"type": "base64", "media_type": img.media_type, "data": img.data}}));

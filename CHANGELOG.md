@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-assistant`: OpenAI-format requests carry at most `anthropic::MAX_IMAGES` pictures (the
+  newest), like Anthropic ones; they carried every picture of the chat.
 - `ashlar-ui`: `idle::FrameRate::fps` counts the frames of the last second (two frames 11 ms
   apart on an idle app read 91 fps); `idle::Activity::of` documents that an unfocused window is
   the background signal that arrives (winit rarely reports a covered one).
@@ -20,6 +22,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-assistant`: `HistoryStore::offload_images` keeps only a chat's newest pictures in
+  memory (older ones stay in its history folder as file references, which saving keeps, loading
+  reads back and requests leave out); `HistoryStore::read_image` and `Image::is_offloaded` for
+  showing them.
 - `ashlar-assistant`: `Conversation::memory()`: the bytes a chat holds (pictures dominate) and how
   many pictures, for memory readouts.
 - `ashlar-ui`: `idle`: `IdleTrim` fires once per quiet spell (30 s idle, 10 s in the background)
