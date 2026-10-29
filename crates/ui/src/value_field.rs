@@ -35,7 +35,7 @@ use egui::{Align2, Color32, CursorIcon, Key, Response, Sense, Stroke, StrokeKind
 
 use crate::automation::{self, Details, Role};
 use crate::cache;
-use crate::edit::{Bounds, DragMode, Edit, drive_drag, snap};
+use crate::edit::{Bounds, DragMode, Edit, drive_drag, has_keyboard, snap};
 use crate::tokens::{self, Tokens};
 
 /// Turns a value into text and back.
@@ -203,7 +203,7 @@ impl<'a> ValueField<'a> {
         let enabled = response.enabled();
         let mut edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::Relative(|d: Vec2, mult| d.x as f64 * speed * mult));
 
-        if edit.is_none() && response.has_focus() && enabled {
+        if edit.is_none() && has_keyboard(&response) && enabled {
             let (up, down, enter, shift) = ui.input(|i| {
                 (
                     i.key_pressed(Key::ArrowUp) || i.key_pressed(Key::ArrowRight),
@@ -298,6 +298,16 @@ impl<'a> ValueField<'a> {
     ) -> ValueResponse {
         let start = bounds.clamp(*self.value);
         let text_id = id.with("text");
+        let focused_id = focused_flag(editing_id);
+        // The frame the editor opens it takes the keyboard before it is drawn, so keys of this very
+        // frame (a value typed straight after the click) reach it; its text is selected, so typing
+        // replaces the value.
+        let opening = !ui.data(|d| d.get_temp::<bool>(focused_id).unwrap_or(false));
+        if opening {
+            select_all(ui.ctx(), text_id, &buffer);
+            ui.memory_mut(|m| m.request_focus(text_id));
+            ui.data_mut(|d| d.insert_temp(focused_id, true));
+        }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("ashlar_value_editor"));
         let response = child.add(
             egui::TextEdit::singleline(&mut buffer)
@@ -307,11 +317,17 @@ impl<'a> ValueField<'a> {
                 .margin(egui::Margin::symmetric(t.space.sm as i8, 3)),
         );
         let mut edit = None;
-        if response.lost_focus() {
-            ui.data_mut(|d| d.remove::<String>(editing_id));
+        // the keyboard went elsewhere (Enter, Escape, a click outside), or another widget took it
+        // the frame the editor opened
+        let lost = response.lost_focus();
+        if lost || !has_keyboard(&response) {
+            ui.data_mut(|d| {
+                d.remove::<String>(editing_id);
+                d.remove::<bool>(focused_id);
+            });
             let escaped = ui.input(|i| i.key_pressed(Key::Escape));
             edit = Some(match self.format.parse(&buffer) {
-                Some(v) if !escaped => {
+                Some(v) if lost && !escaped => {
                     let v = bounds.clamp(snap(v, self.step));
                     *self.value = v;
                     Edit::commit(start, v)
@@ -319,10 +335,6 @@ impl<'a> ValueField<'a> {
                 _ => Edit::cancel(start),
             });
         } else {
-            if !response.has_focus() {
-                select_all(ui.ctx(), text_id, &buffer);
-                response.request_focus();
-            }
             ui.data_mut(|d| d.insert_temp(editing_id, buffer));
         }
         automation::register(ui, &response, self.id, self.label, Role::Field);
@@ -334,10 +346,18 @@ fn valid_positive(v: Option<f64>) -> Option<f64> {
     v.filter(|s| s.is_finite() && *s > 0.0)
 }
 
+/// Set once an open editor has been given the keyboard.
+fn focused_flag(editing_id: egui::Id) -> egui::Id {
+    editing_id.with("focused")
+}
+
 fn open_editor(ui: &Ui, editing_id: egui::Id, format: &dyn ValueFormat, value: f64) -> Edit {
     let mut text = String::new();
     format.format(value, &mut text);
-    ui.data_mut(|d| d.insert_temp(editing_id, text));
+    ui.data_mut(|d| {
+        d.insert_temp(editing_id, text);
+        d.remove::<bool>(focused_flag(editing_id));
+    });
     crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
     Edit::begin(value)
 }
@@ -493,6 +513,32 @@ mod tests {
         h.run_steps(2);
         assert_eq!(phases(h.state()), [EditPhase::Begin, EditPhase::Commit]);
         assert_eq!(h.state().value, 100.0);
+    }
+
+    /// A window driven from outside without being activated (an agent, a script): a value typed
+    /// in the frame straight after the click lands, and each entry adds to the text instead of
+    /// replacing it.
+    #[test]
+    fn typing_straight_after_the_click_lands_and_adds_up_in_a_background_window() {
+        let mut h = harness(10.0, 0.0..=1000.0);
+        h.input_mut().focused = false;
+        h.step();
+        let c = h.state().rect.center();
+        h.hover_at(c);
+        h.step();
+        h.drag_at(c);
+        h.step();
+        h.drop_at(c);
+        h.step();
+        assert_eq!(phases(h.state()), [EditPhase::Begin]);
+        for typed in ["1", "2", "0"] {
+            h.event(egui::Event::Text(typed.into()));
+            h.step();
+        }
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(phases(h.state()), [EditPhase::Begin, EditPhase::Commit]);
+        assert_eq!(h.state().value, 120.0);
     }
 
     #[test]

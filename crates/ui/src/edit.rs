@@ -13,6 +13,15 @@
 //! - [`EditPhase::Cancel`] abandons the gesture (Escape): `start` is the value to restore; roll the
 //!   group back. The component has already written `start` back into the bound value.
 
+/// Whether `response`'s widget has the keyboard: egui's focus alone, not whether the window has
+/// the operating system's focus too ([`egui::Response::has_focus`] asks for both). Keys reach a
+/// widget only through egui, so this is the test for handling them: a window driven from outside
+/// (an agent, a test) without being activated still gets its input, and a widget does not act as
+/// if it lost the focus while the person is in another window.
+pub fn has_keyboard(response: &egui::Response) -> bool {
+    response.ctx.memory(|m| m.has_focus(response.id))
+}
+
 /// Where in a gesture an edit is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

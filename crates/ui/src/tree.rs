@@ -203,7 +203,7 @@ impl<'a> TreeView<'a> {
 
         // keyboard: Left/Right
         let mut selected = out.select.and_then(|i| state.flat.get(i)).map(|f| f.id);
-        if out.response.has_focus()
+        if crate::edit::has_keyboard(&out.response)
             && let Some(cur) = cursor.and_then(|i| state.flat.get(i)).copied()
         {
             let (left, right) = ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));

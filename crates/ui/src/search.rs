@@ -113,7 +113,7 @@ impl<'a> SearchField<'a> {
         let mut changed = response.changed() || self.text.len() != before;
         let mut cleared = false;
         let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        if response.has_focus() || response.lost_focus() {
+        if crate::edit::has_keyboard(&response) || response.lost_focus() {
             let escape = ui.input(|i| i.key_pressed(Key::Escape));
             if escape && !self.text.is_empty() {
                 self.text.clear();
