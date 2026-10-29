@@ -15,6 +15,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-assistant`: a saved chat reopened after a relaunch could be refused ("Invalid
+  `signature` in `thinking` block … bound to a different conversation"): its thinking blocks were
+  replayed even when the system prompt, the tools or the saved messages (results cut, pictures
+  left out) differed from the request that produced them. Each Anthropic reply now records a
+  fingerprint of its prefix (`Native::binding`, `anthropic::request_parts`, `anthropic::bind`), and
+  thinking goes back only while it matches; chats saved before this replay none. A refusal anyway
+  drops all earlier thinking (`Conversation::forget_thinking`) and the step is asked once more.
 - `ashlar-assistant`: OpenAI-format requests carry at most `anthropic::MAX_IMAGES` pictures (the
   newest), like Anthropic ones; they carried every picture of the chat.
 - `ashlar-ui`: `idle::FrameRate::fps` counts the frames of the last second (two frames 11 ms

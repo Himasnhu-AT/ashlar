@@ -32,7 +32,13 @@ omitted or `{"type": "adaptive", "display": "summarized"}`, never a budget; effo
 no prefill; `tool_choice: auto`; every tool with `eager_input_streaming`; the system prompt as one
 block with `cache_control: ephemeral` (keep it and the tool order stable for caching). Each
 assistant turn goes back exactly as it came (thinking blocks with signatures, redacted thinking,
-fallback markers), and the conversation is never edited.
+fallback markers), and the conversation is never edited. Thinking blocks are bound to the prefix
+that produced them (system prompt, tools, earlier messages): each reply records a fingerprint of
+that prefix (`Native::binding`), and a later request replays a turn's thinking only while the same
+prefix still has that fingerprint. A reopened chat whose system prompt or tools changed (a new app
+version), or whose saved results were cut, leaves the stale reasoning out instead of being
+refused; a refusal the client did not foresee drops all earlier reasoning and asks once more
+(`Conversation::forget_thinking`).
 
 ## The loop
 

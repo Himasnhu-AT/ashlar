@@ -255,7 +255,7 @@ impl Assembler {
             Some(other) => StopReason::Other { reason: other.to_string() },
         };
         events(StreamEvent::Stop(stop.clone()));
-        let native = Native { format: FORMAT.into(), model: model.clone(), content: Value::Null };
+        let native = Native { format: FORMAT.into(), model: model.clone(), content: Value::Null, binding: None };
         Ok(Response {
             message: Message { role: Role::Assistant, blocks, native: Some(native) },
             stop,

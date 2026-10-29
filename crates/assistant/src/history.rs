@@ -743,6 +743,78 @@ mod tests {
     }
 
     #[test]
+    fn a_reopened_chat_replays_reasoning_only_where_the_saved_prefix_is_unchanged() {
+        use crate::anthropic::{BodyOptions, bind, request_parts};
+        use crate::provider::{Request, Response};
+        use crate::types::{Native, StopReason, Thinking};
+        // a turn: reasoning, a tool call, a long result (cut when saved), reasoning, an answer
+        let reply = |c: &Chat, content: Value, blocks: Vec<Block>| {
+            let r = Request {
+                model: "claude-opus-5-5",
+                system: "sys",
+                tools: &[],
+                messages: c.conversation.messages(),
+                max_tokens: 1000,
+                effort: None,
+                thinking: Thinking::Default,
+            };
+            let (_, binding) = request_parts(&r, BodyOptions::default());
+            let message = Message {
+                role: Role::Assistant,
+                blocks,
+                native: Some(Native { format: "anthropic".into(), model: r.model.into(), content, binding: None }),
+            };
+            bind(Response { message, stop: StopReason::EndTurn, usage: Usage::default(), model: r.model.into(), max_tokens_cap: None }, binding)
+                .message
+        };
+        let mut c = Chat::new();
+        c.conversation.push_user_text("look");
+        let call = ToolCall { id: "a".into(), name: "inspect".into(), input: json!({}), invalid_input: None };
+        let m = reply(
+            &c,
+            json!([{"type": "thinking", "thinking": "", "signature": "s1"}, {"type": "tool_use", "id": "a", "name": "inspect", "input": {}}]),
+            vec![Block::ToolCall(call)],
+        );
+        c.conversation.push(m);
+        c.conversation.push(Message::tool_results(vec![ToolResult {
+            call_id: "a".into(),
+            content: "x".repeat(5_000),
+            is_error: false,
+            images: Vec::new(),
+        }]));
+        let m = reply(
+            &c,
+            json!([{"type": "thinking", "thinking": "", "signature": "s2"}, {"type": "text", "text": "Seen."}]),
+            vec![Block::Text { text: "Seen.".into() }],
+        );
+        c.conversation.push(m);
+        let root = temp("binding");
+        let store = HistoryStore::new(&root).with_limits(HistoryLimits { max_result_bytes: 1_000, ..HistoryLimits::default() });
+        store.save(&mut c).unwrap();
+        let mut back = store.load(c.id()).unwrap();
+        back.conversation.push_user_text("and?");
+        let r = Request {
+            model: "claude-opus-5-5",
+            system: "sys",
+            tools: &[],
+            messages: back.conversation.messages(),
+            max_tokens: 1000,
+            effort: None,
+            thinking: Thinking::Default,
+        };
+        let (body, _) = request_parts(&r, BodyOptions::default());
+        let sigs: Vec<&str> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m["content"].as_array().into_iter().flatten())
+            .filter_map(|b| b["signature"].as_str())
+            .collect();
+        assert_eq!(sigs, vec!["s1"], "the reasoning after the cut result is left out: {body}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_chat_round_trips_with_its_tools_and_pictures_in_files() {
         let root = temp("roundtrip");
         let store = HistoryStore::new(&root);
