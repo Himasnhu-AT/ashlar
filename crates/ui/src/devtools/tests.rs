@@ -251,6 +251,17 @@ fn fill_submit_press_and_get() {
 }
 
 #[test]
+fn typing_into_a_target_twice_adds_to_the_text() {
+    let mut app = App::new();
+    app.settle();
+    // the first request clicks the field to give it the keyboard; the second finds it focused
+    // and does not click again (two clicks this close would select a word to replace)
+    app.ok("ui.type", json!({"target": {"id": "form.name"}, "text": "ab"}));
+    app.ok("ui.type", json!({"target": {"id": "form.name"}, "text": "cd"}));
+    assert_eq!(app.name, "oldabcd");
+}
+
+#[test]
 fn waits_finish_on_a_later_frame_or_time_out() {
     let mut app = App::new();
     app.settle();
