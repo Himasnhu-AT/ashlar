@@ -15,6 +15,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui`: a value field's typed entry lost what was typed in the frame its editor opened (a
+  value typed straight after the click, as the control channel does), and while its window
+  did not have the operating system's focus (an app driven without being activated) the editor
+  selected all its text again every frame, so each entry replaced the last. The editor takes the
+  keyboard before it is drawn, and keyboard handling here asks egui's focus alone
+  (`edit::has_keyboard`): value fields, sliders, trees, swatches, resize handles, virtual lists and
+  the search field. A person typing in a focused window was not affected, except that an editor
+  left open while they switched windows had its text selected again when they came back.
+- `ashlar-ui`: `ui.type` / `ui.fill` with a target no longer click a text field that has the
+  keyboard already: two requests in a row made a double click, which selected a word for the
+  next text to replace.
+- `ashlar-assistant`: a saved chat reopened after a relaunch could be refused ("Invalid
+  `signature` in `thinking` block … bound to a different conversation"): its thinking blocks were
+  replayed even when the system prompt, the tools or the saved messages (results cut, pictures
+  left out) differed from the request that produced them. Each Anthropic reply now records a
+  fingerprint of its prefix (`Native::binding`, `anthropic::request_parts`, `anthropic::bind`), and
+  thinking goes back only while it matches; chats saved before this replay none. A refusal anyway
+  drops all earlier thinking (`Conversation::forget_thinking`) and the step is asked once more.
 - `ashlar-assistant`: OpenAI-format requests carry at most `anthropic::MAX_IMAGES` pictures (the
   newest), like Anthropic ones; they carried every picture of the chat.
 - `ashlar-ui`: `idle::FrameRate::fps` counts the frames of the last second (two frames 11 ms

@@ -275,7 +275,7 @@ pub(crate) fn show_rows(
     let height = list.max_height.filter(|h| h.is_finite() && *h > 0.0).map_or(avail.height(), |h| h.min(avail.height().max(h.min(40.0))));
     let outer = Rect::from_min_size(avail.min, vec2(avail.width(), height.max(t.control_height)));
     let response = ui.interact(outer, base, Sense::focusable_noninteractive());
-    let focused = response.has_focus();
+    let focused = crate::edit::has_keyboard(&response);
     if focused {
         // arrows move the selection, not the focus
         let filter = egui::EventFilter { tab: false, horizontal_arrows: true, vertical_arrows: true, escape: false };

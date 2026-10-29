@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::error::{Error, from_stream_error};
 use crate::provider::{Cancel, Request, Response};
 use crate::sse;
-use crate::types::{Block, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, Usage};
+use crate::types::{Block, Message, Native, Role, StopReason, StreamEvent, Thinking, ToolCall, Usage, is_thinking_block};
 
 /// [`Native::format`] of this wire format.
 pub const FORMAT: &str = "anthropic";
@@ -82,11 +82,18 @@ fn user_content(m: &Message, skip_images: &mut usize) -> Vec<Value> {
         .collect()
 }
 
-fn assistant_content(m: &Message) -> Vec<Value> {
+/// An assistant message as sent. Its native content is replayed as it came; with `binding`, its
+/// thinking blocks only while the message was produced after the same prefix (the API refuses
+/// thinking whose system prompt, tools or earlier messages changed since), else they are left out.
+fn assistant_content(m: &Message, binding: Option<&str>) -> Vec<Value> {
     if let Some(n) = m.native.as_ref().filter(|n| n.format == FORMAT)
         && let Some(a) = n.content.as_array()
     {
-        return a.clone();
+        let keep = binding.is_none_or(|b| n.binding.as_deref() == Some(b));
+        let content: Vec<Value> = if keep { a.clone() } else { a.iter().filter(|b| !is_thinking_block(b)).cloned().collect() };
+        if !content.is_empty() {
+            return content;
+        }
     }
     m.blocks
         .iter()
@@ -101,45 +108,116 @@ fn assistant_content(m: &Message) -> Vec<Value> {
         .collect()
 }
 
-/// The `messages` array.
+/// The `messages` array, every native turn replayed as it came.
 pub fn messages(list: &[Message]) -> Vec<Value> {
+    render(list, None)
+}
+
+/// The `messages` array; with a fingerprint of the system prompt and tools, thinking blocks whose
+/// binding no longer matches are left out (see [`assistant_content`]).
+fn render(list: &[Message], mut fp: Option<&mut Fingerprint>) -> Vec<Value> {
     let total: usize = list.iter().flat_map(|m| m.tool_results_iter()).map(|r| r.images.len()).sum();
     let mut skip = total.saturating_sub(MAX_IMAGES);
-    list.iter()
-        .filter_map(|m| {
-            let (role, content) = match m.role {
-                Role::User => ("user", user_content(m, &mut skip)),
-                Role::Assistant => ("assistant", assistant_content(m)),
-            };
-            (!content.is_empty()).then(|| json!({"role": role, "content": content}))
-        })
-        .collect()
+    let mut out = Vec::with_capacity(list.len());
+    for m in list {
+        let (role, content) = match m.role {
+            Role::User => ("user", user_content(m, &mut skip)),
+            Role::Assistant => ("assistant", assistant_content(m, fp.as_deref().map(Fingerprint::hex).as_deref())),
+        };
+        if content.is_empty() {
+            continue;
+        }
+        if let Some(f) = fp.as_deref_mut() {
+            f.message(role, &content);
+        }
+        out.push(json!({"role": role, "content": content}));
+    }
+    out
+}
+
+/// A running FNV-1a hash of a request prefix as sent, thinking blocks left out (earlier thinking
+/// is not part of the prefix a thinking block is bound to).
+struct Fingerprint(u64);
+
+impl Fingerprint {
+    fn new(system: &str, tools: &[Value]) -> Self {
+        let mut f = Fingerprint(0xcbf2_9ce4_8422_2325);
+        f.value(&json!(system));
+        f.value(&Value::Array(tools.to_vec()));
+        f
+    }
+
+    fn bytes(&mut self, b: &[u8]) {
+        for x in b {
+            self.0 ^= u64::from(*x);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn value(&mut self, v: &Value) {
+        // writing into the hash cannot fail
+        let _ = serde_json::to_writer(&mut *self, v);
+        self.bytes(&[0]);
+    }
+
+    fn message(&mut self, role: &str, content: &[Value]) {
+        self.bytes(role.as_bytes());
+        self.bytes(&[0]);
+        for b in content.iter().filter(|b| !is_thinking_block(b)) {
+            self.value(b);
+        }
+        self.bytes(&[1]);
+    }
+
+    fn hex(&self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
+impl std::io::Write for Fingerprint {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.bytes(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The request body (always streamed).
 pub fn request_body(r: &Request<'_>, opts: BodyOptions) -> Value {
+    request_parts(r, opts).0
+}
+
+/// The request body and the binding of the reply's thinking blocks ([`Native::binding`]): a
+/// fingerprint of the prefix the reply follows. Thinking blocks of earlier turns go in only while
+/// their binding still matches, so a reopened chat whose system prompt, tools or saved messages
+/// changed loses that reasoning instead of being refused.
+pub fn request_parts(r: &Request<'_>, opts: BodyOptions) -> (Value, String) {
     let mut body = Map::new();
     body.insert("model".into(), json!(r.model));
     body.insert("max_tokens".into(), json!(r.max_tokens.max(1)));
     if !r.system.is_empty() {
         body.insert("system".into(), json!([{"type": "text", "text": r.system, "cache_control": {"type": "ephemeral"}}]));
     }
-    body.insert("messages".into(), Value::Array(messages(r.messages)));
+    let tools: Vec<Value> = r
+        .tools
+        .iter()
+        .map(|t| {
+            let mut v = json!({"name": t.name, "description": t.description, "input_schema": t.input_schema, "eager_input_streaming": true});
+            if t.strict {
+                v["strict"] = json!(true);
+            }
+            v
+        })
+        .collect();
+    let mut fp = Fingerprint::new(r.system, &tools);
+    body.insert("messages".into(), Value::Array(render(r.messages, Some(&mut fp))));
     // Cache the conversation so far, not only the system prompt: every step of a tool loop re-sends
     // all earlier tool results, and this puts the cache breakpoint on the last block each time.
     body.insert("cache_control".into(), json!({"type": "ephemeral"}));
-    if !r.tools.is_empty() {
-        let tools: Vec<Value> = r
-            .tools
-            .iter()
-            .map(|t| {
-                let mut v = json!({"name": t.name, "description": t.description, "input_schema": t.input_schema, "eager_input_streaming": true});
-                if t.strict {
-                    v["strict"] = json!(true);
-                }
-                v
-            })
-            .collect();
+    if !tools.is_empty() {
         body.insert("tools".into(), Value::Array(tools));
         body.insert("tool_choice".into(), json!({"type": "auto"}));
     }
@@ -153,7 +231,15 @@ pub fn request_body(r: &Request<'_>, opts: BodyOptions) -> Value {
     if opts.fallbacks {
         body.insert("fallbacks".into(), json!("default"));
     }
-    Value::Object(body)
+    (Value::Object(body), fp.hex())
+}
+
+/// Mark a reply's thinking with the binding [`request_parts`] returned.
+pub fn bind(mut r: Response, binding: String) -> Response {
+    if let Some(n) = r.message.native.as_mut().filter(|n| n.format == FORMAT) {
+        n.binding = Some(binding);
+    }
+    r
 }
 
 fn usage_from(v: &Value, u: &mut Usage) {
@@ -358,7 +444,7 @@ impl Assembler {
         let message = Message {
             role: Role::Assistant,
             blocks,
-            native: Some(Native { format: FORMAT.into(), model: model.clone(), content: Value::Array(native) }),
+            native: Some(Native { format: FORMAT.into(), model: model.clone(), content: Value::Array(native), binding: None }),
         };
         Ok(Response { message, stop, usage: self.usage, model, max_tokens_cap: None })
     }
@@ -442,7 +528,8 @@ mod api {
             let url = format!("{}/v1/messages", self.base_url);
             check_url(&url, true)?;
             let fallbacks = self.fallbacks && supports_fallbacks(request.model);
-            let body = serde_json::to_vec(&request_body(request, BodyOptions { fallbacks })).map_err(|e| Error::Other(e.to_string()))?;
+            let (body, binding) = request_parts(request, BodyOptions { fallbacks });
+            let body = serde_json::to_vec(&body).map_err(|e| Error::Other(e.to_string()))?;
             let mut headers = vec![("x-api-key", self.key.expose()), ("anthropic-version", VERSION), ("accept", "text/event-stream")];
             if fallbacks {
                 headers.push(("anthropic-beta", FALLBACK_BETA));
@@ -457,7 +544,7 @@ mod api {
                 return Err(reply.detail(e));
             }
             let id = reply.request_id.clone();
-            read_stream(reply.body, request.model, events, cancel, "Anthropic").map_err(|e| match &id {
+            read_stream(reply.body, request.model, events, cancel, "Anthropic").map(|r| bind(r, binding)).map_err(|e| match &id {
                 Some(id) if !matches!(e, Error::Cancelled) => e.with_detail(&format!("Request ID: {id}")),
                 _ => e,
             })
@@ -468,6 +555,7 @@ mod api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::Response;
     use crate::types::{Effort, ToolResult, ToolSpec};
 
     #[test]
@@ -497,6 +585,59 @@ mod tests {
         assert_eq!(b["thinking"], json!({"type": "adaptive", "display": "summarized"}));
         assert_eq!(b["fallbacks"], "default");
         assert!(b.get("tools").is_none() && b.get("tool_choice").is_none());
+    }
+
+    /// A reply with a thinking block, bound to the request it answered.
+    fn bound_reply(r: &Request<'_>) -> Message {
+        let (_, binding) = request_parts(r, BodyOptions::default());
+        let content = json!([{"type": "thinking", "thinking": "", "signature": "s1"}, {"type": "text", "text": "Red."}]);
+        let message = Message {
+            role: Role::Assistant,
+            blocks: vec![Block::Text { text: "Red.".into() }],
+            native: Some(Native { format: FORMAT.into(), model: r.model.into(), content, binding: None }),
+        };
+        bind(Response { message, stop: StopReason::EndTurn, usage: Usage::default(), model: r.model.into(), max_tokens_cap: None }, binding).message
+    }
+
+    #[test]
+    fn thinking_is_replayed_only_after_the_prefix_it_was_bound_to() {
+        let tools = [ToolSpec { name: "execute".into(), description: "Run".into(), input_schema: json!({"type": "object"}), strict: false }];
+        let first = [Message::user_text("what colour?")];
+        let r = Request {
+            model: "claude-opus-5-5",
+            system: "sys",
+            tools: &tools,
+            messages: &first,
+            max_tokens: 16000,
+            effort: None,
+            thinking: Thinking::Default,
+        };
+        let reply = bound_reply(&r);
+        let next = vec![first[0].clone(), reply.clone(), Message::user_text("why?")];
+        let thinking = |b: &Value| b["messages"][1]["content"].as_array().unwrap().iter().any(is_thinking_block);
+        // the same conversation: the reasoning goes back, and the next reply's binding follows on
+        let (b, next_binding) = request_parts(&Request { messages: &next, ..r }, BodyOptions::default());
+        assert!(thinking(&b), "{b}");
+        assert_ne!(Some(next_binding.as_str()), reply.native.as_ref().unwrap().binding.as_deref());
+        // a new system prompt, other tools, an earlier message changed (a result cut on save): left out
+        assert!(!thinking(&request_body(&Request { system: "sys v2", messages: &next, ..r }, BodyOptions::default())));
+        assert!(!thinking(&request_body(&Request { tools: &[], messages: &next, ..r }, BodyOptions::default())));
+        let mut edited = next.clone();
+        edited[0] = Message::user_text("what colour is it?");
+        let b = request_body(&Request { messages: &edited, ..r }, BodyOptions::default());
+        assert!(!thinking(&b));
+        assert_eq!(b["messages"][1]["content"], json!([{"type": "text", "text": "Red."}]), "the text stays");
+        // a message saved before bindings existed
+        let mut legacy = next.clone();
+        if let Some(n) = legacy[1].native.as_mut() {
+            n.binding = None;
+        }
+        assert!(!thinking(&request_body(&Request { messages: &legacy, ..r }, BodyOptions::default())));
+        // the binding survives a save and load
+        let back: Message = serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap();
+        assert!(thinking(&request_body(&Request { messages: &[first[0].clone(), back, Message::user_text("why?")], ..r }, BodyOptions::default())));
+        // the plain renderer replays as it came
+        assert!(messages(&legacy)[1]["content"].as_array().unwrap().iter().any(is_thinking_block));
     }
 
     #[test]

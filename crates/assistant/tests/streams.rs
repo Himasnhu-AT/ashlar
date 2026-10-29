@@ -40,10 +40,22 @@ fn anthropic_tool_use_with_thinking_is_replayed_verbatim() {
     assert!(events.contains(&StreamEvent::ToolCallEnd { id: "toolu_01A".into() }));
     assert_eq!(r.usage.cache_read_tokens, 1800);
 
-    // the next request carries the assistant turn exactly as it came, signature included
+    // the next request carries the assistant turn exactly as it came, signature included, bound
+    // (as `send` does) to the request it answered
     let native = r.message.native.clone().unwrap().content;
     let mut c = Conversation::new();
     c.push_user_text("make a sequence");
+    let asked = Request {
+        model: "claude-opus-5-5",
+        system: "s",
+        tools: &[],
+        messages: c.messages(),
+        max_tokens: 100,
+        effort: None,
+        thinking: Thinking::Summarized,
+    };
+    let (_, binding) = anthropic::request_parts(&asked, BodyOptions::default());
+    let r = anthropic::bind(r, binding);
     c.push(r.message);
     c.push(Message::tool_results(vec![ToolResult {
         call_id: "toolu_01A".into(),

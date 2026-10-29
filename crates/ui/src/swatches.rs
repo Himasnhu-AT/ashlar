@@ -79,7 +79,7 @@ impl<'a> SwatchGrid<'a> {
             if resp.hovered() {
                 hovered = Some(i);
             }
-            if resp.has_focus() {
+            if crate::edit::has_keyboard(&resp) {
                 let (dx, dy) = ui.input(|inp| {
                     (
                         inp.key_pressed(Key::ArrowRight) as i64 - inp.key_pressed(Key::ArrowLeft) as i64,

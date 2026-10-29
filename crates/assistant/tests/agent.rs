@@ -222,3 +222,37 @@ fn a_reply_the_server_cut_short_says_why() {
     assert_eq!(o.end, TurnEnd::MaxTokens { capped_by_server: Some(1024) });
     assert!(o.end.message().unwrap_or_default().contains("AI allowance is nearly used up"));
 }
+
+#[test]
+fn reasoning_refused_as_from_another_conversation_is_left_out_and_asked_again() {
+    let reply = Message {
+        role: Role::Assistant,
+        blocks: vec![Block::Text { text: "Hi.".into() }],
+        native: Some(Native {
+            format: "anthropic".into(),
+            model: "claude-opus-5-5".into(),
+            content: json!([{"type": "thinking", "thinking": "", "signature": "sig"}, {"type": "text", "text": "Hi."}]),
+            binding: Some("old".into()),
+        }),
+    };
+    let mut c = Conversation::new();
+    c.push_user_text("hello");
+    c.push(reply);
+    c.push_user_text("and now?");
+    let refusal = "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.";
+    let mut p = MockProvider::new([MockReply::Fail(Error::BadRequest(refusal.into())), MockReply::text("Now this.")]);
+    let mut obs = Recorder::default();
+    let o = run(&mut p, &mut c, &mut obs, Arc::default());
+    assert_eq!(o.end, TurnEnd::Done);
+    let sent = p.requests();
+    assert_eq!(sent.len(), 2, "asked once more");
+    let native = sent[1].messages[1].native.as_ref().unwrap();
+    assert_eq!(native.content, json!([{"type": "text", "text": "Hi."}]), "without the reasoning");
+    assert_eq!(c.messages()[1].native.as_ref().unwrap().content, native.content, "and it stays out");
+    // another refusal is not retried forever
+    c.push_user_text("again");
+    let mut p = MockProvider::new([MockReply::Fail(Error::BadRequest(refusal.into())), MockReply::text("never")]);
+    let o = run(&mut p, &mut c, &mut Recorder::default(), Arc::default());
+    assert!(matches!(o.end, TurnEnd::Error(Error::BadRequest(_))), "{:?}", o.end);
+    assert_eq!(p.requests().len(), 1);
+}

@@ -226,6 +226,11 @@ fn answer(call: &ToolCall, specs: &[ToolSpec], tools: &mut dyn ToolHost, observe
     ToolOutput { content: cut(out.content), is_error: out.is_error, images: out.images }
 }
 
+/// A refusal of replayed thinking blocks (an invalid or rebound `signature`).
+fn refuses_thinking(e: &Error) -> bool {
+    matches!(e, Error::BadRequest(m) if m.contains("signature") && m.contains("thinking"))
+}
+
 /// Run one turn on `conversation`, whose last message is the user's. Appends the replies and tool
 /// results to it.
 pub fn run_turn(
@@ -258,10 +263,25 @@ pub fn run_turn(
             effort: config.effort,
             thinking: config.thinking,
         };
-        let reply = {
+        let mut reply = {
             let mut forward = |e: StreamEvent| observer.event(AgentEvent::Stream(e));
             provider.send(&request, &mut forward, cancel)
         };
+        // reasoning the provider no longer accepts (bound to a different conversation): leave
+        // all earlier reasoning out from now on and ask once more
+        if matches!(&reply, Err(e) if refuses_thinking(e)) && conversation.forget_thinking() > 0 {
+            let request = Request {
+                model: &config.model,
+                system: &config.system,
+                tools: &specs,
+                messages: conversation.messages(),
+                max_tokens: config.max_tokens,
+                effort: config.effort,
+                thinking: config.thinking,
+            };
+            let mut forward = |e: StreamEvent| observer.event(AgentEvent::Stream(e));
+            reply = provider.send(&request, &mut forward, cancel);
+        }
         let reply = match reply {
             Ok(r) => r,
             Err(Error::Cancelled) => break TurnEnd::Cancelled,

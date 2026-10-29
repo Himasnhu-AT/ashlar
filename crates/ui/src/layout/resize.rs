@@ -104,7 +104,7 @@ impl<'a> ResizeHandle<'a> {
             if response.dragged() {
                 delta += self.axis.along(response.drag_delta());
             }
-            if response.has_focus() {
+            if crate::edit::has_keyboard(&response) {
                 delta += self.keyboard(ui);
             }
             delta += self.accesskit(ui);

@@ -123,7 +123,7 @@ impl<'a> Slider<'a> {
                 }
             }
             if edit.is_none() {
-                edit = key_edit(ui, response.has_focus() && enabled, value, bounds, self.step, default_key_step(bounds, self.step));
+                edit = key_edit(ui, crate::edit::has_keyboard(&response) && enabled, value, bounds, self.step, default_key_step(bounds, self.step));
             }
         }
         if response.hovered() || response.dragged() {
@@ -218,7 +218,7 @@ impl<'a> Knob<'a> {
                 }
             }
             if edit.is_none() {
-                edit = key_edit(ui, response.has_focus() && enabled, value, bounds, self.step, default_key_step(bounds, self.step));
+                edit = key_edit(ui, crate::edit::has_keyboard(&response) && enabled, value, bounds, self.step, default_key_step(bounds, self.step));
             }
         }
         if response.hovered() || response.dragged() {

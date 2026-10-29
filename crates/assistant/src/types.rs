@@ -101,6 +101,12 @@ pub struct Native {
     pub model: String,
     /// The message's content in that format (for Anthropic, the `content` array).
     pub content: Value,
+    /// What the message's thinking blocks are bound to: a fingerprint of the request that
+    /// produced them (system prompt, tools and the earlier messages as sent, thinking left out).
+    /// A provider that checks the binding replays the blocks only while the fingerprint of the
+    /// same prefix still matches; `None` (a message saved before this existed) never matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,6 +169,12 @@ impl Message {
     }
 }
 
+/// A provider block that carries reasoning bound to its conversation (`thinking`,
+/// `redacted_thinking`).
+pub fn is_thinking_block(b: &Value) -> bool {
+    matches!(b.get("type").and_then(Value::as_str), Some("thinking" | "redacted_thinking"))
+}
+
 /// A conversation: append-only, so a provider that caches the prefix (and checks that earlier
 /// turns were not edited) sees the same bytes every time. There is no way to change or remove a
 /// message once added; start a new conversation instead.
@@ -208,6 +220,21 @@ impl Conversation {
         let results =
             open.into_iter().map(|call_id| ToolResult { call_id, content: reason.to_string(), is_error: true, images: Vec::new() }).collect();
         self.push(Message::tool_results(results));
+        n
+    }
+
+    /// Remove the thinking blocks from every message's native content (the provider refused them
+    /// as bound to a different conversation). Thinking may be removed from the front of a
+    /// conversation, so later turns stay valid. Returns how many blocks were removed.
+    pub fn forget_thinking(&mut self) -> usize {
+        let mut n = 0usize;
+        for m in &mut self.messages {
+            if let Some(Value::Array(a)) = m.native.as_mut().map(|x| &mut x.content) {
+                let before = a.len();
+                a.retain(|b| !is_thinking_block(b));
+                n = n.saturating_add(before.saturating_sub(a.len()));
+            }
+        }
         n
     }
 

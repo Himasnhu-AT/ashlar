@@ -152,8 +152,8 @@ has been processed by a frame.
 | `ui.click` | target, `button?` (`primary`/`secondary`/`middle`), `count?` (1–3), `modifiers?` | `{}` |
 | `ui.hover` / `ui.move` | target (`ui.move`: `{x, y}`) | `{}` |
 | `ui.focus` | target | `{}`: AccessKit focus, or a click for text fields |
-| `ui.fill` | target?, `text`, `submit?` | `{}`: click the target, select all, type `text` (or delete when empty), Enter when `submit`; without a target, the focused field |
-| `ui.type` | target?, `text` | `{}`: typed into the target (clicked first) or the focused widget |
+| `ui.fill` | target?, `text`, `submit?` | `{}`: click the target (not when it is a text field that has the keyboard already), select all, type `text` (or delete when empty), Enter when `submit`; without a target, the focused field |
+| `ui.type` | target?, `text` | `{}`: typed at the caret of the target (clicked first, unless it is a text field that has the keyboard already, so calls in a row add up) or of the focused widget |
 | `ui.press` | `keys` (`"Mod+Shift+S"`, sequences `"G G"`; `ashlar_command::shortcut` syntax; `key` is accepted too) | `{}` |
 | `ui.key` | `{key, modifiers?}` | `{}` (one key; `modifiers`: `{command, shift, alt, ctrl}`, `command` = ⌘ on macOS, Ctrl elsewhere) |
 | `ui.scroll` | target? (default: the window centre), `dx`, `dy` in points; `dy > 0` scrolls down (towards the end), `dx > 0` right | `{}` |

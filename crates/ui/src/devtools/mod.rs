@@ -813,11 +813,16 @@ impl State {
     }
 
     /// Give the target the keyboard: AccessKit focus for an egui widget that takes it, otherwise
-    /// a click on it.
+    /// a click on it. A text field that has the keyboard already is left as it is: clicking it
+    /// again would move the caret, and two requests in a row would make a double click that
+    /// selects a word for the next text to replace.
     fn focus_frames(&self, p: &Value, method: &str) -> Result<Vec<InputFrame>, Reply> {
         let (_, h) = self.target(p, method)?;
         let node = h.node.and_then(|i| self.model.get(i));
         let text_field = node.is_some_and(|n| matches!(n.role, "textbox" | "searchbox"));
+        if text_field && method != "ui.focus" && node.is_some_and(|n| n.focused) {
+            return Ok(Vec::new());
+        }
         match node.and_then(|n| n.egui) {
             // a click puts the caret in a text field the way a user would
             Some(id) if !text_field && method == "ui.focus" => Ok(vec![input::action_frame(id, Action::Focus)]),

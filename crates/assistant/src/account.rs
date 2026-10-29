@@ -129,7 +129,7 @@ mod client {
     use std::sync::Arc;
 
     use super::*;
-    use crate::anthropic::{BodyOptions, VERSION, read_stream, request_body};
+    use crate::anthropic::{BodyOptions, VERSION, bind, read_stream, request_parts};
     use crate::error::{Error, from_http};
     use crate::http::{Http, check_url};
     use crate::provider::{Cancel, Provider, Request, Response};
@@ -224,7 +224,8 @@ mod client {
             let url = format!("{}/v1/ai/messages", self.base_url);
             check_url(&url, true)?;
             // the backend adds refusal fallbacks itself
-            let body = serde_json::to_vec(&request_body(request, BodyOptions::default())).map_err(|e| Error::Other(e.to_string()))?;
+            let (body, binding) = request_parts(request, BodyOptions::default());
+            let body = serde_json::to_vec(&body).map_err(|e| Error::Other(e.to_string()))?;
             let token = self.tokens.token()?;
             let post = |token: &str, body: Vec<u8>| {
                 let auth = format!("Bearer {token}");
@@ -266,7 +267,7 @@ mod client {
                 _ => e,
             })?;
             r.max_tokens_cap = cap;
-            Ok(r)
+            Ok(bind(r, binding))
         }
     }
 }
