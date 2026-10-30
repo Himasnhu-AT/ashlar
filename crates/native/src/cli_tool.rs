@@ -518,14 +518,20 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The shell line that puts `dir` on `PATH`, using `$HOME` when `dir` is inside it.
+/// The shell line that puts `dir` on `PATH`, using `$HOME` when `dir` is inside it. The folder
+/// is single-quoted with [`sh_quote`], so `$`, backquotes and quotes in it are taken literally
+/// when the line is pasted into a shell.
 fn path_hint(dir: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let shown = match home.as_deref().and_then(|h| dir.strip_prefix(h).ok()) {
-        Some(rest) => format!("$HOME/{}", rest.display()),
-        None => dir.display().to_string(),
+        Some(rest) if rest.as_os_str().is_empty() => Ok("\"$HOME\"".to_string()),
+        Some(rest) => sh_quote(rest).map(|q| format!("\"$HOME\"/{q}")),
+        None => sh_quote(dir),
     };
-    format!("export PATH=\"{}:$PATH\"", shown.replace(['"', '\\', '`'], ""))
+    // A folder `sh_quote` refuses (control characters, not UTF-8): show it with the shell's
+    // special characters removed, as a hint only.
+    let shown = shown.unwrap_or_else(|_| format!("'{}'", dir.display().to_string().replace(|c: char| c == '\'' || c.is_control(), "")));
+    format!("export PATH={shown}:\"$PATH\"")
 }
 
 /// `p` as one single-quoted `/bin/sh` word. Refuses non-UTF-8 and control characters.
@@ -909,7 +915,7 @@ mod tests {
         assert!(out.fallback && !out.elevated);
         assert_eq!(out.link, f.fallback.join("tool"));
         let hint = out.path_hint.clone().unwrap();
-        assert!(hint.starts_with("export PATH=\"") && hint.ends_with(":$PATH\""), "{hint}");
+        assert!(hint.starts_with("export PATH=") && hint.ends_with(":\"$PATH\""), "{hint}");
         assert!(out.message("tool").contains("~/.zshrc"));
         let st = t.status();
         assert!(st.fallback && st.is_installed(), "{st:?}");
@@ -918,6 +924,15 @@ mod tests {
         assert_eq!(r.removed, vec![f.fallback.join("tool")]);
         assert_eq!(*asked.lock().unwrap(), 1);
         writable(&f.bin);
+    }
+
+    #[test]
+    fn path_hint_quotes_shell_characters() {
+        let h = path_hint(Path::new("/opt/a $b `c` 'd\"/bin"));
+        assert_eq!(h, r#"export PATH='/opt/a $b `c` '\''d"/bin':"$PATH""#);
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_absolute()) {
+            assert_eq!(path_hint(&home.join("x$y/bin")), r#"export PATH="$HOME"/'x$y/bin':"$PATH""#);
+        }
     }
 
     #[test]
