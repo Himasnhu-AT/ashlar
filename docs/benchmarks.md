@@ -45,7 +45,7 @@ egui.
 | Launch → window, warm median of 8 | 106.5 ms | 98 ms | other, ~8 % |
 | Launch → window, cold first run | 111 ms | 1,360 ms | ashlar |
 | Idle CPU over 10 s | 0 % | 0 % | tie |
-| Idle footprint / peak footprint | 40 MB / 94 MB in most runs; 66 MB / 192 MB in some | 29 MB / 176 MB | other at idle |
+| Idle footprint / peak footprint | 40 MB / 94 MB (window never covered); 66 MB / 192 MB after the window was covered | 29 MB / 176 MB | other at idle |
 | Dependencies of hello (unique packages) | 179 | 202 | ashlar |
 
 What each scroll number covers:
@@ -56,8 +56,14 @@ What each scroll number covers:
 Lists should be virtualized (`VirtualList`). Then the cost does not depend on the row count at all:
 0.035 ms at 1k or 100k rows, measured quiet.
 
-**Open item:** ashlar's idle footprint lands at about 40 MB in most runs and about 66 MB in some. The
-cause is being investigated (IMP-2.19 in docs/plan/TODO.md).
+**Idle memory, explained:** ashlar's idle footprint is about 40 MB (94 MB peak) for a window that has
+never been covered, and about 66 MB (about 193 MB peak) once it has been covered, minimized or moved
+to another Space, even briefly right after launch. At that point macOS maps two swapchain images it
+shares with the window server into the process (about 19 MB), and Metal allocates a second set of
+blocks. This happens with any present mode or frame latency, so it is not something ashlar's own
+settings cause. `cargo xtask launch --memory` launches 5 times and reports both groups. The other
+framework's 29 MB was measured the same way. Whether its windows avoid the effect, or were simply
+never covered during the measurement, is not known.
 
 ## Before and after the 2026-11 improvement work
 
