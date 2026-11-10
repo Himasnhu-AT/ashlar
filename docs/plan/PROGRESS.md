@@ -3,6 +3,28 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/a11ygold and wt/motion2 merged (CI green)
+
+- **IMP-5.15:** `examples/gallery/tests/a11y_goldens.rs` covers all 9 pages.
+  - Each page renders headless at a fixed size and scale 1, light theme, reduced motion. Its AccessKit
+    outline (role, name, value, description, states, position in set) is stored in
+    `tests/a11y/<page>.txt`.
+  - Each page is rendered twice for determinism. A mismatch fails with a readable diff;
+    `ASHLAR_BLESS=1` rewrites the files.
+  - A check rejects any node whose name equals an automation id or looks like one (allow list: the tab
+    titles `main.rs` and `lib.rs`).
+  - Findings went to IMP-5.21.
+- **IMP-5.12:** `RollingText`: only changed characters roll (up when rising, down when falling) and
+  the width animates. Reduced motion crossfades instead. The accessible value updates at once.
+- **IMP-3.7:** fling on release for value fields, sliders and knobs (to a projected, snapped and
+  clamped value; one undo step), and opt-in `VirtualList::fling(true)` with rubber banding.
+  - A pause of 40 ms or more, or reduced motion, means no fling.
+  - Fling speed is capped so a fling never overshoots an edge.
+  - **Changed:** fling is on by default for fields, sliders and knobs (`.fling(false)` turns it off).
+- **After merging both:** the Controls golden gained only the new sections (0 removed lines). It was
+  re-recorded in its own commit.
+- Started: wt-a11yfix (IMP-5.21, 5.22).
+
 ## 2026-11-10: wt/i18n merged (CI green)
 
 - **IMP-6.13:** `ashlar-i18n` (rank 0, wasm32; depends on serde_json, log, thiserror).
