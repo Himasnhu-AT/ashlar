@@ -605,6 +605,20 @@ pub fn set_interface_scale(ctx: &egui::Context, scale: f32) {
     }
 }
 
+/// The tokens installed for `theme` (the built-in set when none were).
+pub fn of(ctx: &egui::Context, theme: Theme) -> Tokens {
+    ctx.data(|d| d.get_temp::<Tokens>(tokens_id(theme))).unwrap_or(Tokens::for_theme(theme))
+}
+
+/// Like [`apply`], but writes only egui's `Visuals` (colours, strokes, shadows) and leaves
+/// spacing and text styles alone: for recolouring at run time (an OS accent or contrast change)
+/// without undoing an app's own spacing or font tweaks.
+pub fn apply_colors(ctx: &egui::Context, tokens: &Tokens) {
+    let theme = tokens.theme();
+    ctx.style_mut_of(theme, |style| style.visuals = tokens.visuals());
+    ctx.data_mut(|d| d.insert_temp(tokens_id(theme), *tokens));
+}
+
 /// The tokens of the active theme: those installed with [`apply`], else the built-in set.
 pub fn current(ctx: &egui::Context) -> Tokens {
     let theme = ctx.theme();

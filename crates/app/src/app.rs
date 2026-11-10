@@ -49,6 +49,8 @@ pub(crate) struct Shared<D: Document> {
     pub instructions: String,
     pub window_size: [f32; 2],
     pub control_port: Option<u16>,
+    pub follow_system_accent: bool,
+    pub motion: Option<ashlar_motion::MotionPrefs>,
 }
 
 /// An app: name, document type and format, commands, views. `run()` opens the window; the same
@@ -95,6 +97,8 @@ pub struct App<D: Document> {
     dirs: Option<AppDirs>,
     window_size: [f32; 2],
     control_port: Option<u16>,
+    follow_system_accent: bool,
+    motion: Option<ashlar_motion::MotionPrefs>,
 }
 
 impl<D: Document> App<D> {
@@ -117,6 +121,8 @@ impl<D: Document> App<D> {
             dirs: None,
             window_size: [960.0, 640.0],
             control_port: None,
+            follow_system_accent: true,
+            motion: None,
         }
     }
 
@@ -204,6 +210,20 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Recolour the accent (hover, focus, selection) from the OS accent colour (default on).
+    /// Off pins the built-in accent. Tokens the app installs itself always win over the OS.
+    pub fn follow_system_accent(mut self, follow: bool) -> Self {
+        self.follow_system_accent = follow;
+        self
+    }
+
+    /// Motion settings that win over the OS "reduce motion" setting (an app's own motion
+    /// preference). Without this the app follows the OS, at normal speed.
+    pub fn motion(mut self, prefs: ashlar_motion::MotionPrefs) -> Self {
+        self.motion = Some(prefs);
+        self
+    }
+
     pub(crate) fn split(self) -> (Arc<Shared<D>>, Option<ViewFn<D>>, Option<SetupFn>) {
         let env_prefix: String = self.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
         let format = self.format.unwrap_or_else(|| Format::new(format!("{}.document", self.name), format!("{} {}", self.name, self.version)));
@@ -229,6 +249,8 @@ impl<D: Document> App<D> {
             instructions: self.instructions,
             window_size: self.window_size,
             control_port: self.control_port,
+            follow_system_accent: self.follow_system_accent,
+            motion: self.motion,
         };
         (Arc::new(shared), self.view, self.setup)
     }
@@ -239,14 +261,18 @@ impl<D: Document> App<D> {
         Headless::new(shared)
     }
 
-    /// The runtime without a window, for tests and benches: drive it with [`crate::Driver`].
+    /// The runtime without a window, for tests and benches: drive it with [`crate::Driver`]. It
+    /// ignores the OS preferences (see [`Runtime::set_preferences`]) so runs match on every machine.
     pub fn runtime(self) -> Runtime<D> {
         let (shared, view, setup) = self.split();
         let mut launch = crate::runtime::Launch::default();
         if let (Some(cfg), Some(d)) = (&shared.telemetry, &shared.dirs) {
             launch.telemetry = crate::telemetry::Telemetry::start(cfg, &shared.name, &shared.version, &d.data, true);
         }
-        Runtime::new(shared, view, setup, launch)
+        let mut rt = Runtime::new(shared, view, setup, launch);
+        // tests and benches see the same tokens and motion on every machine
+        rt.set_preferences(crate::runtime::Preferences::default);
+        rt
     }
 
     /// The app's `-cli` binary: `commands`, `exec`, `run`, `mcp`, `serve`, `version`, each on a

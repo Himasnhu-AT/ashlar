@@ -31,6 +31,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   shadows, no longer hard-coded in `visuals()`) and `stroke` (hairline, focus) tokens;
   `Tokens::high_contrast()`; `contrast_ratio`; `TOKEN_SPEC`, the OKLCH source of every built-in
   colour, checked against the hex values by a test.
+- `ashlar-app` follows the OS preferences: reduced motion (through `ashlar_ui::motion::set_prefs`),
+  the accent colour (`Tokens::with_accent`) and increased contrast (`Tokens::high_contrast`), read
+  at startup and again when the window gains focus (on Linux off the UI thread). Tokens an app
+  installs itself win. `App::follow_system_accent(bool)` (default on) and `App::motion(MotionPrefs)`
+  override; `Runtime::set_preferences` injects preferences in tests, and `App::runtime()` ignores
+  the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
 
@@ -38,6 +44,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   lightness steps, capped chroma) instead of sRGB mixing, flips `text.on_accent` dark when white
   falls below 4.5:1 and pushes the focus ring to 3:1 on every surface. The dark theme's accent is
   darker (`#276ee0`, was `#3b82f6`) so white text on it reaches 4.5:1; its derived states follow.
+- The status bar's indeterminate progress holds still (and asks for no frames) under reduced
+  motion, and its sweep follows the motion time scale.
 - `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
   asks for a `document` frame: the frame that ran it already shows the change. The runtime also
   stops copying and comparing the view state and formatting the window title on frames that did
