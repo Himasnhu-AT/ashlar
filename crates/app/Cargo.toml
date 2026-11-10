@@ -42,7 +42,7 @@ ashlar-ui = { workspace = true }
 ashlar-motion = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
-ashlar-native = { workspace = true, features = ["dialogs", "display", "system", "open-files", "single-instance"] }
+ashlar-native = { workspace = true, features = ["dialogs", "display", "system", "open-files", "single-instance", "memory"] }
 png = "0.18"
 thiserror = { workspace = true }
 ashlar-telemetry = { workspace = true, optional = true }

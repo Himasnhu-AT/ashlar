@@ -229,6 +229,8 @@ pub struct Runtime<D: Document> {
     /// Times each pass for the perf warnings (`None`: nothing uses it).
     probe: Option<crate::perf_warn::Probe>,
     probe_installed: bool,
+    /// `app.stats` → `process`.
+    process: crate::stats::ProcessProbe,
     /// The wake counts at the probe's previous frame (their growth is the frame's reasons).
     probe_wakes: ashlar_ui::wake::WakeStats,
     caret: Caret,
@@ -320,6 +322,7 @@ impl<D: Document> Runtime<D> {
             passes: 0,
             probe: crate::perf_warn::Probe::from_env(),
             probe_installed: false,
+            process: crate::stats::ProcessProbe::default(),
             probe_wakes: ashlar_ui::wake::WakeStats::default(),
             caret: Caret::default(),
             clock: crate::clock::Clock::default(),
@@ -773,6 +776,7 @@ impl<D: Document> Runtime<D> {
             self.stats.record(took);
             self.launch.telemetry.frame(took);
         }
+        self.process.tick();
         let ran = self.session.take_ran();
         if let Some(p) = &self.probe {
             p.end_ui(took, ran);
@@ -1404,6 +1408,7 @@ impl<D: Document> Runtime<D> {
                     o.insert("jobs".into(), self.jobs.to_json());
                     o.insert("log_lines_dropped".into(), json!(crate::logging::dropped()));
                     o.insert("wakes".into(), serde_json::to_value(self.wakes.stats()).unwrap_or(Value::Null));
+                    o.insert("process".into(), serde_json::to_value(self.process.read()).unwrap_or(Value::Null));
                 }
                 if p.get("reset").and_then(Value::as_bool) == Some(true) {
                     self.stats.reset_window();

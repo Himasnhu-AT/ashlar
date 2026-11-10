@@ -16,6 +16,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - `ASHLAR_FRAME_LOG=FILE` and `Runtime::log_frames(path)`: one JSON line per frame (wall and
   UI-thread CPU time, phases, wake reasons, commands run, pass number), written by a background
   thread and capped at 64 MiB with a final `"end"` line (`ashlar_app::frame_log`).
+- `app.stats` (and the MCP `app_stats` tool) reports `process`: `footprint_bytes`, `peak_bytes`,
+  `cpu_s` and `threads` (`ProcessStats`; `null` where the platform cannot say).
 - `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
   counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
 - `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
