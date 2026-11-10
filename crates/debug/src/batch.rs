@@ -18,10 +18,10 @@
 //! `visible|hidden|enabled|disabled|focused|checked|unchecked <T>`,
 //! `count <selector…> <op> <n>` (op: `== != >= <= > <`), `exists|missing <selector…>`. A selector is
 //! one or more `role=`, `name=`, `id=`, `value=` filters; `~=` matches a substring. `expect` is
-//! `assert`'s twin; `echo <text>` prints; `sleep <ms>` waits.
+//! `assert`'s twin; `echo <text>` prints; `sleep <ms>` waits (virtual time on an in-process
+//! [`Transport`](crate::Transport) such as an app driver).
 
 use std::io::Read;
-use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -105,7 +105,7 @@ impl Ctx<'_, '_, '_> {
         r
     }
 
-    fn run_script(&mut self, file: &str, text: &str, verbose: bool) -> Res {
+    pub(crate) fn run_script(&mut self, file: &str, text: &str, verbose: bool) -> Res {
         let mut steps = Vec::new();
         let mut passed = 0usize;
         for (i, line) in text.lines().enumerate() {
@@ -176,10 +176,10 @@ impl Ctx<'_, '_, '_> {
             }
             "sleep" => {
                 let ms = rest.first().and_then(|m| m.parse::<u64>().ok()).ok_or_else(|| failed("sleep needs milliseconds".into()))?;
-                std::thread::sleep(Duration::from_millis(ms.min(600_000)));
+                self.pause(ms);
                 Ok(Done::new(json!({"slept_ms": ms}), ""))
             }
-            "open" | "connect" | "close" => {
+            "open" | "connect" | "close" if self.inproc.is_none() => {
                 // A new target for the following lines.
                 let r = self.run_words(words);
                 if verb != "open" && verb != "connect" {

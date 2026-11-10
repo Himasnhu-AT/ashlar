@@ -10,6 +10,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::session::{self, Session, Trace};
+use crate::transport::MAX_PAUSE_MS;
 use crate::words::{Args, quote};
 use crate::{Ctx, Done, Fail, Res, target, usage_of};
 
@@ -18,6 +19,8 @@ const GET_WHAT: &[&str] = &["text", "value", "name", "role", "rect", "enabled", 
 
 /// Verbs that change the UI: a trace records after each.
 const ACTIONS: &[&str] = &["click", "dblclick", "hover", "focus", "fill", "type", "press", "scroll", "scrollintoview", "drag", "exec", "menu"];
+/// Verbs about sessions, processes and traces: nothing to do on an in-process target.
+const INPROC_REFUSED: &[&str] = &["open", "connect", "close", "sessions", "trace", "demo"];
 
 fn unix_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
@@ -113,8 +116,15 @@ impl Ctx<'_, '_, '_> {
     /// Run one verb with its arguments; in a traced session, record after an action. `shown` is
     /// the command as written (for the trace).
     pub(crate) fn run_verb(&mut self, verb: &str, a: Args, shown: &[String]) -> Res {
+        if self.inproc.is_some() && INPROC_REFUSED.contains(&verb) {
+            return Err(Fail::Failed {
+                error: format!("`{verb}` is not available in an in-process script"),
+                detail: None,
+                hint: Some("the script already talks to its app; sessions and traces belong to `ashlar-debug`".into()),
+            });
+        }
         let r = self.dispatch(verb, a);
-        if ACTIONS.contains(&verb) {
+        if ACTIONS.contains(&verb) && self.inproc.is_none() {
             self.record(verb, shown, &r);
         }
         r
@@ -226,11 +236,17 @@ impl Ctx<'_, '_, '_> {
 
     /// Call one method; the app's error becomes a [`Fail`] with a hint.
     pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value, Fail> {
+        if let Some(t) = self.inproc.as_mut() {
+            return t.call(method, params).map_err(|e| Fail::control(method, e));
+        }
         self.client()?.call(method, params).map_err(|e| Fail::control(method, e))
     }
 
     /// Call with a longer reply timeout (waits).
     fn call_for(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, Fail> {
+        if self.inproc.is_some() {
+            return self.call(method, params);
+        }
         let base = self.timeout;
         let c = self.client()?;
         c.set_timeout(timeout.max(base));
@@ -239,6 +255,14 @@ impl Ctx<'_, '_, '_> {
             c.set_timeout(base);
         }
         r
+    }
+
+    /// Let `ms` pass: virtual time on an in-process transport, the wall clock otherwise.
+    pub(crate) fn pause(&mut self, ms: u64) {
+        match self.inproc.as_mut() {
+            Some(t) => t.pause(ms.min(MAX_PAUSE_MS)),
+            None => std::thread::sleep(Duration::from_millis(ms.min(MAX_PAUSE_MS))),
+        }
     }
 
     /// `{}`-returning action with a confirmation line.
@@ -343,13 +367,13 @@ impl Ctx<'_, '_, '_> {
 
     fn status(&mut self, a: Args) -> Res {
         a.finish().map_err(usage("status"))?;
-        let s = session::load(self.env, &self.session).map_err(Fail::msg)?;
+        let s = if self.inproc.is_some() { None } else { session::load(self.env, &self.session).map_err(Fail::msg)? };
         let info = self.call("app.version", json!({}))?;
         let name = info.get("name").and_then(Value::as_str).unwrap_or("app");
         let version = info.get("version").and_then(Value::as_str).unwrap_or("");
         let methods: Vec<&str> =
             info.get("methods").and_then(Value::as_array).map(|m| m.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-        let port = self.conn.as_ref().map(Client::port).unwrap_or(0);
+        let port = self.inproc.as_ref().and_then(|t| t.port()).or_else(|| self.conn.as_ref().map(Client::port)).unwrap_or(0);
         let mut text = format!("{name} {version} on 127.0.0.1:{port}");
         if let Some(s) = &s
             && self.port.is_none()
@@ -579,7 +603,7 @@ impl Ctx<'_, '_, '_> {
             if text.is_some() || gone.is_some() || enabled.is_some() || element.is_some() || idle {
                 return Err(Fail::Usage("wait takes a duration or a condition, not both".into(), usage_of("wait")));
             }
-            std::thread::sleep(Duration::from_millis(ms.min(600_000)));
+            self.pause(ms);
             return Ok(Done::new(json!({"elapsed_ms": ms}), format!("waited {ms} ms")));
         }
         let element = element.or(pos);
@@ -873,7 +897,8 @@ impl Ctx<'_, '_, '_> {
 }
 
 /// Decode a `ui.screenshot` reply's PNG and write it.
-fn save_png(v: &Value, path: &Path) -> Result<(), String> {
+/// Write the PNG in a `ui.screenshot` reply (`{"png": base64}`) to `path`, making its folder.
+pub fn save_png(v: &Value, path: &Path) -> Result<(), String> {
     let b64 = v.get("png").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or("the reply carried no picture")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("the picture is not base64: {e}"))?;
     if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

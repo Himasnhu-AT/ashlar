@@ -90,6 +90,40 @@ let code = ashlar_debug::run(vec!["--port".into(), port.to_string(), "--key-dir"
 so it needs no display. It also has a test that opens a real window, which runs only when
 `ASHLAR_DEBUG_REAL_WINDOW=1` is set.
 
+### Scripts in process, on virtual time
+
+`Driver::run_ui(script)` runs the same script language on a `Driver`, with no port and no thread.
+`sleep N` and `wait N` let virtual time pass instead of the wall clock, and waits such as
+`wait --text` run frames on the virtual clock, so a script gives the same steps on every run and
+takes milliseconds:
+
+```rust
+let mut d = Driver::new(notes::app().runtime());
+let report = d.run_ui("exec note.add '{\"title\": \"x\"}'\nsleep 2000\nassert exists id=notes.add\n")?;
+assert_eq!(report.passed, 3); // report.steps: one {"line", "command", "ok", "result"} per step
+```
+
+A failure is a `ScriptError` naming the line, with the same detail as `batch --json`. Verbs about
+sessions, processes and traces (`open`, `connect`, `close`, `sessions`, `trace`, `demo`) fail in
+process. To run scripts against something else, implement `ashlar_debug::Transport` (`call`, and
+`pause` for time) and call `ashlar_debug::run_script`; the TCP `Client` is one such transport.
+
+### One command: `--headless`
+
+Every binary whose `main` calls `App::run` takes `--headless`: no window, the app on a virtual
+clock in a fresh temporary folder (never your settings or documents), real pixels when there is
+a GPU (grey otherwise, with a note on stderr):
+
+```sh
+notes --headless --size 1024x700 --scale 2 --theme dark --script add.ui --at 1.5 \
+      --snap out.png --tree tree.json
+```
+
+`--size` is in points (default 1280x800) and the PNG is that times `--scale`. `--script` runs a
+`.ui` script first, `--at` lets that many seconds pass before the picture, and `--tree` writes the
+`ui.snapshot` JSON. Exit codes match `ashlar-debug`: 0 done, 1 a step failed, 2 bad arguments.
+`examples/notes/tests/headless.rs` checks the PNG size and the tree.
+
 ### Real pixels with no window
 
 A `Driver` gives flat grey screenshots by default, which keeps tests that need no GPU fast. For
