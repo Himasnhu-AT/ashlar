@@ -9,6 +9,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Web (IMP-6.8): `App::canvas_id`; when a web app cannot start (no such canvas, no WebGL) a
+  visible error (`role="alert"`) appears next to the canvas or at the top of the page;
+  `examples/web-hello` (with an `index.html` for trunk) is checked for wasm32 by `cargo xtask wasm`.
 - i18n follow-ups (IMP-6.19): plural forms for the toast "+N more" line and the keymap editor's
   "N commands share a shortcut" (new key `ui.keymap.shared`), through `labels::Plurals`,
   `labels::install_i18n`, `labels::count_text` and `labels::PLURAL_KEYS` (the label structs are

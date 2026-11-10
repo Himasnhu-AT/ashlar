@@ -1872,8 +1872,9 @@ fn parse_args(env_prefix: &str) -> Args {
     a
 }
 
-/// On the web: run in the `<canvas>` whose id is the app's name (or `ashlar`). Returns at once;
-/// the app runs in the browser's event loop.
+/// On the web: run in the `<canvas>` [`App::canvas_id`] names (default: the app's name, then
+/// `ashlar`). Returns at once; the app runs in the browser's event loop. When it cannot start, a
+/// visible error is put next to the canvas (or at the top of the page) and logged to the console.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     use wasm_bindgen::JsCast;
@@ -1892,19 +1893,58 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     });
     crash::install(None, &shared.name, &shared.version);
     let document = web_sys::window().and_then(|w| w.document()).ok_or_else(|| Error::Window("no document".into()))?;
-    let canvas = document
-        .get_element_by_id(&shared.name)
-        .or_else(|| document.get_element_by_id("ashlar"))
-        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-        .ok_or_else(|| Error::Window(format!("no <canvas id=\"{}\"> in the page", shared.name)))?;
+    let ids: Vec<String> = shared.canvas_id.iter().cloned().chain([shared.name.clone(), "ashlar".to_string()]).collect();
+    let canvas = ids.iter().find_map(|id| document.get_element_by_id(id).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()));
+    let Some(canvas) = canvas else {
+        let wanted = ids.first().map_or("ashlar", String::as_str);
+        let msg = format!("{} could not start: the page has no <canvas id=\"{wanted}\">.", shared.title);
+        show_web_error(&document, None, &msg);
+        return Err(Error::Window(msg));
+    };
+    let title = shared.title.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let creator: eframe::AppCreator<'static> =
             Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()), offscreen: false })));
+        let target = canvas.clone();
         if let Err(e) = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), creator).await {
             log::error!("the app could not start: {e:?}");
+            let detail = e.as_string().unwrap_or_else(|| "the browser may not support WebGL or WebGPU".to_string());
+            show_web_error(&document, Some(&target), &format!("{title} could not start: {detail}"));
         }
     });
     Ok(())
+}
+
+/// Put `msg` in a visible box right after `canvas` (or first in the page's body), replacing an
+/// earlier one; screen readers announce it (`role="alert"`). Errors here are only logged.
+#[cfg(target_arch = "wasm32")]
+fn show_web_error(document: &web_sys::Document, canvas: Option<&web_sys::HtmlCanvasElement>, msg: &str) {
+    const ID: &str = "ashlar-start-error";
+    let shown = (|| -> Result<(), wasm_bindgen::JsValue> {
+        if let Some(old) = document.get_element_by_id(ID) {
+            old.remove();
+        }
+        let div = document.create_element("div")?;
+        div.set_id(ID);
+        div.set_attribute("role", "alert")?;
+        div.set_attribute(
+            "style",
+            "margin:12px;padding:12px 16px;border:1px solid #c62828;border-radius:6px;background:#fdecea;\
+             color:#5f2120;font:14px/1.4 system-ui,sans-serif;max-width:640px",
+        )?;
+        div.set_text_content(Some(msg));
+        match canvas.and_then(|c| c.parent_node().map(|p| (p, c.next_sibling()))) {
+            Some((parent, next)) => drop(parent.insert_before(&div, next.as_ref())?),
+            None => match document.body() {
+                Some(body) => drop(body.insert_before(&div, body.first_child().as_ref())?),
+                None => return Err("no <body>".into()),
+            },
+        }
+        Ok(())
+    })();
+    if let Err(e) = shown {
+        log::error!("could not show the start error in the page: {e:?}");
+    }
 }
 
 /// The window as the app describes it, at the placement it had last time (kept on screen), with

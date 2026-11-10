@@ -451,6 +451,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-example-web-hello"
+version = "0.1.0"
+dependencies = [
+ "ashlar-rs",
+ "serde",
+]
+
+[[package]]
 name = "ashlar-fs"
 version = "0.1.0"
 dependencies = [

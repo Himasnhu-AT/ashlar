@@ -30,6 +30,7 @@ pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LINE: usize = 4 * 1024 * 1024;
 
 /// Lines queued for the writer thread before new ones are dropped (and counted).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const QUEUE: usize = 8192;
 
 /// Appends frames and requests to a recording: lines are built on the UI thread and written by a

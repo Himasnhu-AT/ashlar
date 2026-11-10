@@ -71,6 +71,9 @@ pub(crate) struct Shared<D: Document> {
     pub remember_window: bool,
     /// Named starting states, in declaration order.
     pub scenes: Vec<(String, SceneFn<D>)>,
+    /// The web page's `<canvas>` id (see [`App::canvas_id`]).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub canvas_id: Option<String>,
 }
 
 impl<D: Document> Shared<D> {
@@ -137,6 +140,7 @@ pub struct App<D: Document> {
     remember_window: bool,
     window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
+    canvas_id: Option<String>,
 }
 
 impl<D: Document> App<D> {
@@ -167,6 +171,7 @@ impl<D: Document> App<D> {
             remember_window: true,
             window: WindowSpec::default(),
             scenes: Vec::new(),
+            canvas_id: None,
         }
     }
 
@@ -240,6 +245,15 @@ impl<D: Document> App<D> {
     /// Put config, data, cache and logs here instead of the OS folders (tests, portable).
     pub fn dirs(mut self, dirs: AppDirs) -> Self {
         self.dirs = Some(dirs);
+        self
+    }
+
+    /// On the web, the id of the `<canvas>` the app runs in (default: the app's name, then
+    /// `ashlar`). When the app cannot start (no such canvas, no WebGL), a visible error appears
+    /// next to the canvas (or at the top of the page) as well as in the console. Ignored on the
+    /// desktop.
+    pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
+        self.canvas_id = Some(id.into());
         self
     }
 
@@ -395,6 +409,7 @@ impl<D: Document> App<D> {
             accept_drops,
             remember_window: self.remember_window,
             scenes: self.scenes,
+            canvas_id: self.canvas_id,
         };
         (Arc::new(shared), self.view, self.setup)
     }

@@ -65,7 +65,7 @@ const UI_ONLY: &[&str] = &["egui", "eframe", "winit", "egui-wgpu", "egui_kittest
 /// Crates of this rank or lower must build for `wasm32-unknown-unknown`.
 const WASM_MAX_RANK: u8 = 1;
 /// Higher-rank crates that must also build for `wasm32-unknown-unknown` (the web build path).
-const WASM_EXTRA: &[&str] = &["ashlar-ui", "ashlar-app"];
+const WASM_EXTRA: &[&str] = &["ashlar-ui", "ashlar-app", "ashlar-example-web-hello"];
 
 fn layer(name: &str) -> Option<u8> {
     LAYERS.iter().find(|(n, _)| *n == name).map(|(_, l)| *l)
