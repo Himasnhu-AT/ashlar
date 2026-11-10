@@ -16,12 +16,14 @@
 //! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
+//! | [`caret`] | the text caret's blink, run on the wake scheduler; solid after a while without input |
 //! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
 //! | [`telemetry`] | ashlar-telemetry hook points (feature `telemetry`) |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod app;
 mod builtins;
+pub mod caret;
 mod control;
 pub mod driver;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]

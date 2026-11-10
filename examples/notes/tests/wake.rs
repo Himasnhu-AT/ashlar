@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use ashlar::app::wake::{Reason, WakeStats};
 use ashlar::app::{Driver, Runtime};
+use ashlar::egui;
 use ashlar::fs::AppDirs;
 use ashlar::prelude::*;
 use notes::Notes;
@@ -120,4 +121,134 @@ fn app_stats_reports_frames_and_requests_per_reason() {
     let typed: WakeStats = ashlar::serde_json::from_value(w.clone()).unwrap();
     assert!(typed.frames <= d.runtime.wakes().frames);
     assert!(typed.requests() >= 2);
+}
+
+/// A note is open and its title field has the keyboard (clicked, as a person would), then the
+/// app settles: returns the driver.
+fn focused_title(root: &Path) -> Driver<Notes> {
+    // no autosave falls due during the measurements
+    let mut d = windowed(root, Duration::from_secs(3600));
+    d.call("engine.execute", json!({"command": "note.add", "params": {"title": "focus me"}})).unwrap();
+    let id = d.call("engine.execute", json!({"command": "note.list", "params": {}})).unwrap()["notes"][0]["id"].as_u64().unwrap();
+    d.call("engine.execute", json!({"command": "note.select", "params": {"id": id}})).unwrap();
+    d.settle(20);
+    let ins = d.call("ui.inspect", json!({})).unwrap();
+    let title = ins["elements"].as_array().unwrap().iter().find(|e| e["id"] == "notes.title").unwrap_or_else(|| panic!("no title field: {ins}"));
+    let r: Vec<f32> = title["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+    let at = egui::pos2(r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+    d.push_event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        d.push_event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        d.advance(0.05);
+    }
+    d.settle(20);
+    assert!(d.ctx().egui_wants_keyboard_input(), "the title field has the keyboard");
+    d
+}
+
+/// Frames a focused, untouched text field costs over 30 s of virtual time.
+fn idle_focused_frames(d: &mut Driver<Notes>) -> u64 {
+    d.advance(30.0)
+}
+
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_idle_frames_focused_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = focused_title(dir.path());
+    let before = d.runtime.wakes();
+    let frames = idle_focused_frames(&mut d);
+    println!("bench: idle_frames_focused_field_30s {frames} frames");
+    let after = d.runtime.wakes();
+    println!("wakes over the 30 s: before {before:?} after {after:?}");
+}
+
+/// Mod+Shift+N pressed or released, as the keyboard sends it on this platform.
+fn new_note_chord(pressed: bool) -> egui::Event {
+    let modifiers = if cfg!(target_os = "macos") {
+        egui::Modifiers { shift: true, mac_cmd: true, command: true, ..Default::default() }
+    } else {
+        egui::Modifiers { shift: true, ctrl: true, command: true, ..Default::default() }
+    };
+    egui::Event::Key { key: egui::Key::N, physical_key: None, pressed, repeat: false, modifiers }
+}
+
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_frames_per_command() {
+    const RUNS: u64 = 100;
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = windowed(dir.path(), Duration::from_secs(3600));
+    // through the engine (the control port), one command at a time, each settled
+    let start = d.frames();
+    for i in 0..RUNS {
+        d.call("engine.execute", json!({"command": "note.add", "params": {"title": format!("n{i}")}})).unwrap();
+        d.settle(20);
+    }
+    let per = (d.frames() - start) as f64 / RUNS as f64;
+    println!("bench: frames_per_command {per:.2} frames");
+    // from the keyboard, the way a person runs one
+    let notes = d.runtime.session().doc().notes.len();
+    let start = d.frames();
+    for _ in 0..RUNS {
+        d.push_event(new_note_chord(true));
+        d.push_event(new_note_chord(false));
+        d.settle(20);
+    }
+    assert_eq!(d.runtime.session().doc().notes.len(), notes + RUNS as usize, "each chord ran note.add");
+    let per = (d.frames() - start) as f64 / RUNS as f64;
+    println!("bench: frames_per_key_command {per:.2} frames");
+}
+
+#[test]
+fn a_focused_text_field_blinks_for_a_while_then_goes_idle() {
+    use ashlar::app::caret::{BLINK_FOR, CARET};
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = focused_title(dir.path());
+    let before = d.runtime.wakes();
+    let frames = idle_focused_frames(&mut d);
+    let after = d.runtime.wakes();
+    // one frame per phase change (on, off) while blinking, and the settings write of the selection
+    let bound = 2 * BLINK_FOR as u64 + 2;
+    assert!(frames <= bound, "{frames} frames over 30 s with a focused field (bound {bound}): {after:?}");
+    assert!(after.frames_for(CARET) > before.frames_for(CARET), "the blink frames are the caret's: {after:?}");
+    assert_eq!(after.frames_for(Reason::INPUT), before.frames_for(Reason::INPUT), "no blink frame counts as input: {after:?}");
+    assert_eq!(d.advance(30.0), 0, "idle with a focused field: {:?}", d.runtime.wakes());
+    // the caret is left solid, in the theme's color
+    let caret = d.ctx().global_style().visuals.text_cursor.clone();
+    assert!(!caret.blink && caret.stroke.color != ashlar::egui::Color32::TRANSPARENT, "{caret:?}");
+
+    // typing starts the blink again, and it stops again
+    d.push_event(egui::Event::Text("x".into()));
+    d.settle(20);
+    let caret_frames = d.runtime.wakes().frames_for(CARET);
+    let frames = d.advance(30.0);
+    assert!(frames > 0 && frames <= bound, "{frames} frames after typing: {:?}", d.runtime.wakes());
+    assert!(d.runtime.wakes().frames_for(CARET) > caret_frames, "{:?}", d.runtime.wakes());
+    assert_eq!(d.advance(30.0), 0);
+    let title = d.call("ui.get", json!({"target": {"id": "notes.title"}, "what": "value"})).unwrap();
+    assert_eq!(title["value"], "focus mex", "the typing reached the field");
+}
+
+#[test]
+fn a_document_frame_only_for_changes_made_while_drawing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = focused_title(dir.path());
+    // a key command runs before anything is drawn: its frame already shows the change
+    let before = d.runtime.wakes().requests_for(Reason::DOCUMENT);
+    let notes = d.runtime.session().doc().notes.len();
+    d.push_event(new_note_chord(true));
+    d.push_event(new_note_chord(false));
+    d.settle(20);
+    assert_eq!(d.runtime.session().doc().notes.len(), notes + 1);
+    assert_eq!(d.runtime.wakes().requests_for(Reason::DOCUMENT), before, "{:?}", d.runtime.wakes());
+    assert!(d.runtime.title().contains('•'), "the title shows unsaved changes: {}", d.runtime.title());
+
+    // typing changes the document while the view draws: one more frame shows it everywhere
+    drop(d);
+    let mut d = focused_title(dir.path());
+    let before = d.runtime.wakes().requests_for(Reason::DOCUMENT);
+    d.push_event(egui::Event::Text("y".into()));
+    d.settle(20);
+    assert!(d.runtime.wakes().requests_for(Reason::DOCUMENT) > before, "{:?}", d.runtime.wakes());
 }

@@ -17,9 +17,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   colour never overshoot), `MotionPrefs`, motion `tokens` (exits shorter than enters), an
   OKLab/OKLCH `color` module with gamut mapping, premultiplied mixing and WCAG contrast, and
   `gesture` helpers (velocity tracker, fling projection, rubber band).
+- `ashlar-app`: frame stats split the frame into phases: `app.stats` keeps the UI time as
+  `p50_ms`/`p95_ms`/`max_ms` and adds `pass`, `tessellate` and `frame_cpu` (the whole frame on the
+  CPU: eframe's own figure in a window). `Driver` tessellates every frame like a window and
+  takes the display scale (`Driver::pixels_per_point`).
 
 ### Changed
 
+- `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
+  asks for a `document` frame: the frame that ran it already shows the change. The runtime also
+  stops copying and comparing the view state and formatting the window title on frames that did
+  not change them.
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
@@ -31,6 +39,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - `docs/control-protocol.md`: the MCP tools table listed `screenshot {id?}` and left out the
   debugger tools; it now lists every tool with its arguments, and a test keeps it in step with the
   code.
+- `ashlar-app`: a focused text field no longer keeps an idle app drawing: egui's caret blink cost
+  about 6 frames a second for as long as the field had focus. The runtime blinks the caret itself,
+  one frame per phase change credited to the new `caret` wake reason, and leaves it solid after
+  10 s without input (`ashlar_app::caret`); input starts it again. 30 s idle with a focused field:
+  194 frames before, 21 after.
 - `ashlar-ui`: a value field's typed entry lost what was typed in the frame its editor opened (a
   value typed straight after the click, as the control channel does), and while its window
   did not have the operating system's focus (an app driven without being activated) the editor

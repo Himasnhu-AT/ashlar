@@ -2,7 +2,8 @@
 //! dialogs), the repaint policy, and the eframe glue.
 //!
 //! Repaints happen only for: input (egui/eframe), a store revision change made during a frame, a
-//! job's wake, a control request, toasts and egui animations, injected agent input, and pending
+//! job's wake, a control request, toasts and egui animations, injected agent input, the text
+//! caret's blink for a while after input ([`crate::caret`]), and pending
 //! work that asks for its own frame (settings and autosave wake hooks when a save is due, the
 //! autosave writer when a write finished). Every request goes through [`crate::wake`] with a
 //! reason (`app.stats` → `wakes`). An idle app, clean or dirty, requests nothing and draws no
@@ -30,6 +31,7 @@ use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
 use crate::app::{App, Error, SetupFn, Shared, ViewFn};
+use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::session::{Document, Effect, Session, now};
@@ -189,8 +191,13 @@ pub struct Runtime<D: Document> {
     allow_close: bool,
     quit_after_save: bool,
     shown_title: String,
+    /// (dirty, file generation) the title was made for.
+    title_key: Option<(bool, u64)>,
+    /// The view generation last written to the settings.
+    persisted_view: Option<u64>,
     picker: Option<FilePicker>,
     passes: u64,
+    caret: Caret,
     /// Running in a real window (not the headless driver): OS menus may be installed.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
@@ -255,8 +262,11 @@ impl<D: Document> Runtime<D> {
             allow_close: false,
             quit_after_save: false,
             shown_title: String::new(),
+            title_key: None,
+            persisted_view: None,
             picker: None,
             passes: 0,
+            caret: Caret::default(),
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
@@ -493,7 +503,8 @@ impl<D: Document> Runtime<D> {
         self.passes = self.passes.saturating_add(1);
         // timed wakes not yet due when this frame ran (input came first) stay scheduled
         self.wakes.rearm(&ctx);
-        let rev_before = self.session.revision();
+        // before anything consumes this frame's input events
+        self.caret.begin(&ctx);
         let (focused, active) = ctx.input(|i| (i.focused, !i.events.is_empty()));
         self.launch.telemetry.input(focused, active);
 
@@ -502,7 +513,12 @@ impl<D: Document> Runtime<D> {
             && let Some(id) = dispatch(&ctx, &self.keymap)
         {
             self.run_ui_command(&ctx, &id, json!({}));
+            // the command may have changed what the menus show
+            self.refresh_infos();
         }
+        // nothing is drawn yet: changes made so far (control requests, jobs, a key command) show
+        // in this frame; only changes made from here on need another
+        let rev_before = self.session.revision();
         self.update_title(&ctx);
         if !self.native_menu_active() {
             let spec = &self.cache.menu;
@@ -529,6 +545,7 @@ impl<D: Document> Runtime<D> {
         if self.session.revision() != rev_before {
             wake::wake(&ctx, Reason::DOCUMENT);
         }
+        self.caret.end(&ctx);
         if let Some(s) = started {
             let took = s.elapsed();
             self.stats.record(took);
@@ -765,7 +782,14 @@ impl<D: Document> Runtime<D> {
 
     // ------------------------------------------------------------------ storage
 
+    /// Write the view state to the settings when it changed (keyed by its generation: no copy
+    /// or comparison on frames that did not change it).
     fn persist_view(&mut self) {
+        let generation = self.session.view_generation();
+        if self.persisted_view == Some(generation) {
+            return;
+        }
+        self.persisted_view = Some(generation);
         let view = Value::Object(self.session.view_state().clone());
         if self.settings.get_value("view") != Some(&view) {
             self.settings.set_value("view", view);
@@ -813,8 +837,15 @@ impl<D: Document> Runtime<D> {
         }
     }
 
+    /// Set the window title when what it shows changed: the dirty mark, or the file (the
+    /// display name changes only with the file generation).
     fn update_title(&mut self, ctx: &egui::Context) {
-        let dirty = if self.session.is_dirty() { " •" } else { "" };
+        let key = (self.session.is_dirty(), self.session.file_generation());
+        if self.title_key == Some(key) {
+            return;
+        }
+        self.title_key = Some(key);
+        let dirty = if key.0 { " •" } else { "" };
         let title = format!("{}{dirty} — {}", self.session.display_name(), self.shared.title);
         if title != self.shown_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -865,6 +896,7 @@ impl<D: Document> Runtime<D> {
                 }) {
                     Some(DialogOutcome::Button(1)) => {
                         self.settings.remove("view");
+                        self.persisted_view = None;
                         self.settings.remove("theme");
                         ctx.memory_mut(|m| *m = egui::Memory::default());
                         self.wakes.install(ctx);
@@ -1211,6 +1243,10 @@ impl<D: Document> eframe::App for EframeApp<D> {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.install_offscreen(ui.ctx(), frame);
+        // the previous frame's whole CPU time, painting included
+        if let Some(d) = frame.info().cpu_usage.and_then(|s| Duration::try_from_secs_f32(s).ok()) {
+            self.rt.stats.record_frame_cpu(d);
+        }
         self.rt.ui(ui);
     }
 
