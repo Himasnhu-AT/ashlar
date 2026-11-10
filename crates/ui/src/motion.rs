@@ -417,6 +417,21 @@ mod tests {
     }
 
     #[test]
+    fn linear_tween_from_rest_is_linear_over_egui_time() {
+        let ctx = egui::Context::default();
+        let curve = Curve::tween(2.0, ashlar_motion::Easing::LINEAR);
+        pass(&ctx, 0.0, |c| f32(c, id(), 0.0, curve));
+        let t0 = 1.0;
+        for k in 0..=150 {
+            let t = t0 + k as f64 * DT;
+            let x = pass(&ctx, t, |c| f32(c, id(), 100.0, curve));
+            let want = (100.0 * (t - t0) / 2.0).min(100.0) as f32;
+            // one frame of slack for where the clock anchors the start
+            assert!((x - want).abs() <= 100.0 * DT as f32 / 2.0 + 1e-3, "t={t}: {x} vs {want}");
+        }
+    }
+
+    #[test]
     fn first_call_returns_target_and_requests_nothing() {
         let ctx = egui::Context::default();
         let v = pass(&ctx, 0.0, |c| f32(c, id(), 42.0, tokens::SNAP.enter));

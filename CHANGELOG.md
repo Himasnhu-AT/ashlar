@@ -166,6 +166,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `Curve::Tween` started from rest follows its easing exactly: a linear tween is linear (it used to
+  start at zero velocity, so a 2 s linear 0→100 tween read ≈12 at 0.525 s instead of 26.25).
+  Retargets mid-motion still keep velocity continuous.
 - Telemetry: a run whose shutdown wait ran out no longer takes back its own unsent session folder (and
   other leftover ones) as its worker finishes, so a courier delivers them instead of seeing them as in
   use until the process exits.
