@@ -43,8 +43,8 @@ a task's state.
 ## Phase 3: motion and theming
 | Id | Task | Status |
 |---|---|---|
-| IMP-3.1 | `ashlar-motion` crate | doing (wt-motion) |
-| IMP-3.2 | `ashlar_ui::motion` | todo |
+| IMP-3.1 | `ashlar-motion` crate | done (ee02511) |
+| IMP-3.2 | `ashlar_ui::motion` | doing (wt-uimotion) |
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | todo |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | todo |
 | IMP-3.5 | Animated theme switch | todo |

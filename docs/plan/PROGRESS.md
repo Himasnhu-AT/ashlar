@@ -3,6 +3,32 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: IMP-3.1 merged (wt/motion → imp, CI green)
+
+- `crates/motion` (`ashlar-motion`) sits at rank 0, builds for wasm32 and has no dependencies. Tests:
+  - 24 unit tests, 9 property tests and 1 doc test
+  - the closed form matches RK4 within 1e-4 over 1,000 springs
+  - retargets keep position and velocity continuous (|Δx| < 1e-4, |Δv| < 1e-3)
+  - settle times are never early
+  - NaN and infinite inputs are safe
+  - OKLab round-trips within 1/512
+- Perf (release, ±25 % because the machine was shared):
+
+  | Metric | Measured | Target |
+  |---|---|---|
+  | `spring_sample` | 7.9 ns | 4 |
+  | `animated_retarget_rect` | 185 ns (483 before tuning) | 60 |
+  | `oklab_mix` | 36 ns | 25 |
+  | `settle_time` | 145 ns | 150 |
+
+  The next lever is f32 spring maths. Today it uses f64 so near-critical damping stays accurate.
+- Choices:
+  - `Class::Other` jumps under reduced motion.
+  - `INSTANT` exits in 0.08 s.
+  - `Animated` assumes pixels-per-point is 2 until told otherwise.
+  - There is no serde feature yet.
+- wt-uimotion started IMP-3.2.
+
 ## 2026-11-10: wave 1, first merges (wt/tools, wt/notes → imp, CI green)
 
 - IMP-4.1: `trace` with `--port`/`--app` now records inside a batch, and is a usage error outside
