@@ -3,6 +3,38 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/theme and wt/uiscript merged
+
+- **IMP-3.4:** `with_accent` works in OKLCH (same hue, lightness steps, capped chroma).
+  - `on_accent` turns dark below 4.5:1, and the focus ring is pushed to 3:1 against every surface.
+  - New: `motion`, `elevation` and `stroke` tokens, `high_contrast()`, and `TOKEN_SPEC` (the OKLCH
+    source of every built-in hex, tested within 1/255).
+  - New tests: a WCAG gate over both themes and 64 random accents, and hue stability within 2°.
+  - **Accessibility fix:** the old dark accent `#3b82f6` gave 3.68:1 with white text, failing the
+    gate. It is now `#276ee0`, and a few derived state colours moved with it. The visual
+    expectations were updated.
+- **IMP-3.3 / 6.3:** OS preferences (reduced motion, accent, increased contrast).
+  - Read at startup, before the app's setup, so an app's own tokens win. Read again when the window
+    gains focus. On Linux the D-Bus read runs on a background thread.
+  - New: `App::follow_system_accent`, `App::motion`, and the test seam `Runtime::set_preferences`.
+  - The status-bar sweep holds still under reduced motion.
+  - `ashlar-app` now turns on ashlar-native's `system` feature (zbus on Linux): a size item for
+    IMP-2.9.
+- **CI:** the first run on the theme merge failed in `ashlar-telemetry`
+  `a_burst_of_runs_loses_nothing_to_a_courier_that_is_leaving` ("1 of 14 sessions not delivered").
+  No merge touched that crate, it passed 3 of 3 runs alone, and the full rerun was green. It is a
+  race test, so this may be a real rare race; IMP-0.6 investigates it rather than loosening the test.
+- **IMP-4.5:** `ashlar_debug::Transport` and `run_script`; `Driver` implements `Transport`; and
+  `Driver::run_ui(script)`.
+  - `sleep` and `wait` advance virtual time.
+  - The new test `ui_scripts_run_in_process_on_virtual_time` uses no thread and no sleep, and two runs
+    give identical step JSON.
+- **IMP-4.6:** every `App::run` binary takes `--headless --size --scale --theme --script --at --snap
+  --tree`.
+  - It runs in a fresh temporary folder, returns exit codes 0/1/2, and writes real wgpu pixels.
+  - The end-to-end test is `examples/notes/tests/headless.rs`.
+- Started: wt-animate (IMP-3.6), wt-syntax (IMP-5.5), wt-race (IMP-0.6).
+
 ## 2026-11-10: wt/alloc and wt/rows merged
 
 - **IMP-1.2:** a `stats_alloc` 0.1.10 counting allocator (MIT, no dependencies, no `unsafe` in ashlar

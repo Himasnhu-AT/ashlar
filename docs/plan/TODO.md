@@ -11,6 +11,7 @@ a task's state.
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | todo |
+| IMP-0.6 | `ashlar-telemetry` courier test lost 1 of 14 sessions once under load: race or timing? | doing (wt-race) |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
@@ -37,7 +38,7 @@ a task's state.
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | done (bfcafc7) |
-| IMP-2.9 | Binary size | todo |
+| IMP-2.9 | Binary size | todo (note: IMP-3.3 turned on ashlar-native `system`, which pulls zbus on Linux) |
 | IMP-2.10 | Idle memory | todo |
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
@@ -52,10 +53,10 @@ a task's state.
 |---|---|---|
 | IMP-3.1 | `ashlar-motion` crate | done (ee02511) |
 | IMP-3.2 | `ashlar_ui::motion` | done (ce86186) |
-| IMP-3.3 | OS preferences: reduced motion, accent, contrast | doing (wt-theme) |
-| IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | doing (wt-theme) |
-| IMP-3.5 | Animated theme switch | todo |
-| IMP-3.6 | Presence and component adoption | todo |
+| IMP-3.3 | OS preferences: reduced motion, accent, contrast | done (2089b8c) |
+| IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | done (8ec7a04) |
+| IMP-3.5 | Animated theme switch | doing (wt-animate (if time)) |
+| IMP-3.6 | Presence and component adoption | doing (wt-animate) |
 | IMP-3.7 | Gesture handoff | todo |
 | IMP-3.8 | `Cx` API polish | todo |
 
@@ -66,8 +67,8 @@ a task's state.
 | IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (MCP tools done 550ce99; process numbers in `app.stats` still todo) |
 | IMP-4.3 | Control-protocol doc drift | done (1084a69) |
 | IMP-4.4 | Headless wgpu renderer for `Driver` | done (c2d7270) |
-| IMP-4.5 | In-process `.ui` scripts on virtual time | doing (wt-uiscript) |
-| IMP-4.6 | `--headless --snap --tree` flags | doing (wt-uiscript) |
+| IMP-4.5 | In-process `.ui` scripts on virtual time | done (3669d42) |
+| IMP-4.6 | `--headless --snap --tree` flags | done (11a4853) |
 | IMP-4.7 | `app.clock` | todo |
 | IMP-4.8 | App-level golden snapshots | todo |
 | IMP-4.9 | Named scenes | todo |
@@ -81,7 +82,7 @@ a task's state.
 | IMP-5.2 | Toast v2 | done (aaf674c) |
 | IMP-5.3 | List and tree accessibility and selection | todo |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
-| IMP-5.5 | `ashlar-syntax` and `CodeView` | todo |
+| IMP-5.5 | `ashlar-syntax` and `CodeView` | doing (wt-syntax) |
 | IMP-5.6 | Diff view | todo |
 | IMP-5.7 | Chat kit | todo |
 | IMP-5.8 | Settings form pattern | todo |
@@ -103,7 +104,7 @@ a task's state.
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | todo |
-| IMP-6.3 | OS preference watch | todo |
+| IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
 | IMP-6.4 | Window placement and viewport hook | todo |
 | IMP-6.5 | Parented, non-blocking file dialogs | todo |
 | IMP-6.6 | Notifications | todo |
