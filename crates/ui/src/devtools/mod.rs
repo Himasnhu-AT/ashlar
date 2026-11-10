@@ -348,6 +348,9 @@ struct State {
     hotkey: Option<Key>,
     overlay: overlay::Overlay,
     offscreen: Option<Offscreen>,
+    /// AccessKit was off until a request needed the tree: switch it back off when done, so a
+    /// driven app does not build a screen reader's tree on every later frame
+    accesskit_ours: bool,
 }
 
 impl Default for State {
@@ -366,6 +369,7 @@ impl Default for State {
             hotkey: Some(Key::F12),
             overlay: overlay::Overlay::default(),
             offscreen: None,
+            accesskit_ours: false,
         }
     }
 }
@@ -497,6 +501,7 @@ impl State {
             return; // another pass follows
         }
         self.script.settle();
+        self.release_accesskit(ctx);
         let busy_work = !self.inbox.is_empty() || !self.waits.is_empty() || !self.shots.is_empty() || !self.highlights.is_empty();
         if !busy_work && !self.overlay.open && !self.script.is_busy() {
             return;
@@ -516,6 +521,7 @@ impl State {
                 // the tree comes with the next frame
                 None => {
                     ctx.enable_accesskit();
+                    self.accesskit_ours = true;
                     wake::wake(ctx, Reason::CONTROL);
                 }
             }
@@ -526,11 +532,22 @@ impl State {
             }
             let idle = self.is_idle(out);
             self.check_waits(now, idle);
+            self.release_accesskit(ctx);
         }
         self.render_offscreen(ctx, out);
         self.finish_shots(ctx, now);
         self.highlights.retain(|(_, until)| *until > now);
         self.schedule(ctx, now);
+    }
+
+    /// Turn AccessKit off again once nothing needs the tree, if this turned it on (a screen
+    /// reader that had it on keeps it). The next request turns it on for one frame.
+    fn release_accesskit(&mut self, ctx: &egui::Context) {
+        let needed = !self.inbox.is_empty() || !self.waits.is_empty() || self.overlay.open || self.script.is_busy();
+        if self.accesskit_ours && !needed {
+            ctx.disable_accesskit();
+            self.accesskit_ours = false;
+        }
     }
 
     fn is_idle(&self, out: &egui::FullOutput) -> bool {

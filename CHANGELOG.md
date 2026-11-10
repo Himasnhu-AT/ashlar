@@ -140,6 +140,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
+  `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
+  a screen reader's tree on every later frame (a caret-blink frame in the notes app: 272 allocations
+  instead of 652). AccessKit that was already on (a screen reader) stays on.
 - Telemetry: a run whose shutdown wait ran out no longer takes back its own unsent session folder (and
   other leftover ones) as its worker finishes, so a courier delivers them instead of seeing them as in
   use until the process exits.

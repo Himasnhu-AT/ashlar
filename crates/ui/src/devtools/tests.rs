@@ -343,6 +343,31 @@ fn closed_and_idle_asks_for_no_frames() {
 }
 
 #[test]
+fn accesskit_goes_back_off_after_requests_unless_a_screen_reader_had_it_on() {
+    let has_tree = |app: &App| app.last.as_ref().unwrap().platform_output.accesskit_update.is_some();
+    let mut app = App::new();
+    app.settle();
+    assert!(!has_tree(&app));
+    app.ok("ui.click", json!({"id": "toolbar.save"}));
+    app.settle();
+    app.frame();
+    assert!(!has_tree(&app), "a driven app builds no AccessKit tree once the request is answered");
+    // the next request turns it on again and is still answered
+    let saves = app.saves;
+    app.ok("ui.click", json!({"id": "toolbar.save"}));
+    app.settle();
+    assert_eq!(app.saves, saves + 1);
+
+    let mut app = App::new();
+    app.ctx.enable_accesskit(); // a screen reader
+    app.settle();
+    app.ok("ui.click", json!({"id": "toolbar.save"}));
+    app.settle();
+    app.frame();
+    assert!(has_tree(&app), "AccessKit that was on before stays on");
+}
+
+#[test]
 fn foreign_methods_are_handed_back() {
     let ctx = egui::Context::default();
     let (req, _rx) = Request::new("app.frobnicate", json!({}));
