@@ -39,6 +39,7 @@ ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }
 ashlar-fs = { workspace = true }
 ashlar-ui = { workspace = true }
+ashlar-i18n = { workspace = true }
 ashlar-motion = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }

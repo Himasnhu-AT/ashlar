@@ -38,6 +38,7 @@
   "ui.keymap.reset": "Reset",
   "ui.keymap.clear": "Clear",
   "ui.keymap.conflicts_with": "Also used by",
+  "ui.keymap.shared": "{n} commands share a shortcut",
   "ui.keymap.table": "Keyboard shortcuts",
   "ui.keymap.actions": "Actions",
   "ui.search.field": "Search",

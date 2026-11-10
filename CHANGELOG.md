@@ -9,6 +9,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- i18n follow-ups (IMP-6.19): plural forms for the toast "+N more" line and the keymap editor's
+  "N commands share a shortcut" (new key `ui.keymap.shared`), through `labels::Plurals`,
+  `labels::install_i18n`, `labels::count_text` and `labels::PLURAL_KEYS` (the label structs are
+  unchanged); `ashlar_native::system::preferred_languages()` (macOS `NSLocale.preferredLanguages`,
+  Windows `GetUserPreferredUILanguages`), which `ashlar_i18n::system_locales()` now appends after
+  the environment's languages in apps (`set_native_languages`, `with_native`).
 - Record and replay (IMP-4.11): `ASHLAR_RECORD=path` (or `Runtime::record_to`) records each
   frame's time, screen and input events plus the control requests served to a JSONL ring of at
   most 64 MiB (written off the UI thread), and `Driver::replay(path)` plays it into a fresh driver;

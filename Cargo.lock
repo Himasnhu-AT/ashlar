@@ -286,6 +286,7 @@ dependencies = [
  "ashlar-control",
  "ashlar-debug",
  "ashlar-fs",
+ "ashlar-i18n",
  "ashlar-jobs",
  "ashlar-log",
  "ashlar-motion",

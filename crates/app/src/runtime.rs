@@ -319,6 +319,8 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl<D: Document> Runtime<D> {
     pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, mut launch: Launch) -> Self {
+        // `system_locales()` also reads the OS's language list (desktop launches have no `LANG`)
+        ashlar_i18n::set_native_languages(ashlar_native::system::preferred_languages);
         let inbox = launch.inbox.take().unwrap_or_default();
         let mut session = Session::new(Arc::clone(&shared.format));
         session.set_windowed(true);
