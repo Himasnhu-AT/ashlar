@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar_ui::tokens::set_mode_animated`: switches theme with an OKLab crossfade, surfaces over
+  0.4 s and text leading at half that; primary and secondary text keep 3:1 on the panel at every
+  frame, and once settled the theme's own visuals are back and nothing more runs. `Tokens::mix`
+  blends two token sets.
 - `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
   by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
 - `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
