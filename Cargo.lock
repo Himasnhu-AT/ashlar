@@ -396,6 +396,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-example-hello"
+version = "0.1.0"
+dependencies = [
+ "ashlar-rs",
+ "serde",
+]
+
+[[package]]
 name = "ashlar-example-notes"
 version = "0.1.0"
 dependencies = [

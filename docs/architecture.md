@@ -39,7 +39,7 @@ layers` and `cargo xtask wasm` enforce this; the table below must match
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | yes |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | yes |
 | 7 | `ashlar-rs` | Umbrella crate (imported as `ashlar`): re-exports the others behind features | no | – |
-| 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
+| 8 | `ashlar-example-gallery`, `ashlar-example-hello`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
 
 Adding a crate: give it the lowest rank its dependencies allow, add it to `LAYERS` and to this
@@ -82,6 +82,10 @@ bench: <metric> <value> <unit>        e.g. bench: edit_100k 812 ns
 
 Units ending in `/s` are higher-is-better; all others lower-is-better. A test that prints no
 `bench:` line is measured by wall time, which is noisy, so prefer explicit metrics.
+
+One step is not a test: `perf_hello_size` builds `examples/hello` (an empty document, a heading
+and a checkbox) in release, strips a copy and reports `hello_stripped_bytes`, the size the
+framework adds to every app.
 
 ```sh
 cargo xtask bench                             # writes target/bench/bench.{json,md}

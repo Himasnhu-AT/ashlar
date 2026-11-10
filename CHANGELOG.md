@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `examples/hello`, the smallest ashlar app, and a `cargo xtask bench` step that reports its
+  stripped release size as `hello_stripped_bytes`.
 - `ashlar-ui`: screen readers see every visible row of `VirtualList`, `VirtualTable` and
   `TreeView`: list items, table rows and tree items named by `row_label` (the tree's labels),
   with selected state, position and set size, and level and expanded state for tree items. Only

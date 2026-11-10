@@ -50,6 +50,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-app", 6),
     ("ashlar-rs", 7),
     ("ashlar-example-gallery", 8),
+    ("ashlar-example-hello", 8),
     ("ashlar-example-notes", 8),
     ("ashlar-example-trace-demo-cli", 8),
     ("ashlar-example-trace-loadgen", 8),
