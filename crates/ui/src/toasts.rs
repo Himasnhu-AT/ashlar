@@ -9,6 +9,11 @@
 //! Each toast is an AccessKit live region (polite, or assertive for errors), so screen readers
 //! announce it. An empty queue costs nothing per frame; a visible timed toast schedules exactly
 //! one repaint at its expiry, and a stack of sticky toasts requests no frames at all.
+//!
+//! A new toast fades and slides 8 pt in; a dismissed one slides back out over the exit spring
+//! and is painted until that settles, while the toasts behind it glide into the gap. Toasts
+//! already queued when the stack is first shown appear without animation. Hit testing and
+//! automation rects always use the resting layout; under reduced motion only the fade remains.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -18,6 +23,7 @@ use egui::{Align2, Id, Key, Modifiers, Order, Rect, Sense, Stroke, StrokeKind, U
 
 use crate::automation::{self, Details, Role};
 use crate::tokens::{self, Tokens};
+use ashlar_motion::tokens as tokens_motion;
 
 /// How important a toast is (sets its accent colour).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -137,7 +143,14 @@ struct Entry {
     remaining: Option<f64>,
     /// Bumped when the toast is replaced in place (keys its cached text layout).
     rev: u64,
+    /// Where it was drawn last frame (signed offset from the corner); `None` if it was not drawn.
+    drawn: Option<f32>,
 }
+
+/// The most dismissed toasts kept painting their exit at once.
+const MAX_LEAVING: usize = 16;
+/// How far (points) a toast slides as it enters and leaves.
+const SLIDE: f32 = 8.0;
 
 /// Which corner toasts stack from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -165,6 +178,10 @@ pub struct Toasts {
     escape_ready: bool,
     /// The toast that held keyboard focus at the end of the last frame.
     focused: Option<u64>,
+    /// Dismissed toasts still painting their exit.
+    leaving: Vec<Entry>,
+    /// `show` has run: toasts pushed from now on animate in.
+    seen: bool,
 }
 
 impl Default for Toasts {
@@ -225,6 +242,8 @@ impl Toasts {
             activated: Vec::new(),
             escape_ready: true,
             focused: None,
+            leaving: Vec::new(),
+            seen: false,
         }
     }
     /// Keep at most `capacity` toasts (the oldest are dropped first).
@@ -274,11 +293,13 @@ impl Toasts {
             return e.id;
         }
         while self.entries.len() >= self.capacity {
-            self.entries.pop_front();
+            if let Some(e) = self.entries.pop_front() {
+                self.retire(e);
+            }
         }
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
-        self.entries.push_back(Entry { id, toast, remaining, rev: 0 });
+        self.entries.push_back(Entry { id, toast, remaining, rev: 0, drawn: None });
         id
     }
     pub fn info(&mut self, text: impl Into<String>) -> u64 {
@@ -302,18 +323,42 @@ impl Toasts {
         self.push(toast)
     }
     pub fn dismiss(&mut self, id: u64) -> bool {
-        let before = self.entries.len();
-        self.entries.retain(|e| e.id != id);
-        before != self.entries.len()
+        self.remove_where(|e| e.id == id)
     }
     /// Dismiss the toast with this key.
     pub fn dismiss_key(&mut self, key: &str) -> bool {
-        let before = self.entries.len();
-        self.entries.retain(|e| e.toast.key.as_deref() != Some(key));
-        before != self.entries.len()
+        self.remove_where(|e| e.toast.key.as_deref() == Some(key))
     }
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.remove_where(|_| true);
+    }
+
+    /// Take the matching toasts out of the queue (they leave with an exit animation); whether any
+    /// matched.
+    fn remove_where(&mut self, mut gone: impl FnMut(&Entry) -> bool) -> bool {
+        if !self.entries.iter().any(&mut gone) {
+            return false;
+        }
+        for e in std::mem::take(&mut self.entries) {
+            if gone(&e) {
+                self.retire(e);
+            } else {
+                self.entries.push_back(e);
+            }
+        }
+        true
+    }
+
+    /// A toast leaving the queue: one that was on screen keeps painting its exit.
+    fn retire(&mut self, mut e: Entry) {
+        if e.drawn.is_none() {
+            return;
+        }
+        if self.leaving.len() >= MAX_LEAVING {
+            self.leaving.remove(0);
+        }
+        e.remaining = None;
+        self.leaving.push(e);
     }
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -346,7 +391,8 @@ impl Toasts {
         let now = ctx.input(|i| i.time);
         let dt = self.last_time.map_or(0.0, |last| (now - last).clamp(0.0, 1.0));
         self.last_time = Some(now);
-        if self.entries.is_empty() {
+        let seen = std::mem::replace(&mut self.seen, true);
+        if self.entries.is_empty() && self.leaving.is_empty() {
             self.last_time = None;
             self.focused = None;
             self.escape_ready = true;
@@ -369,22 +415,53 @@ impl Toasts {
         // Escape dismisses the focused toast, else the newest visible one, unless something else
         // (a popup, a focused field) had a claim on it when the key was pressed.
         let mut dismiss = None;
-        if self.escape_ready && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        if visible > 0 && self.escape_ready && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             let focused = self.focused.filter(|id| self.entries.iter().take(visible).any(|e| e.id == *id));
             dismiss = focused.or_else(|| self.entries.get(visible.saturating_sub(1)).map(|e| e.id));
         }
 
+        // toasts come in from, and leave toward, the edge they stack from
+        let reduced = crate::motion::prefs(ctx).reduced;
+        let slide = |p: f32| if reduced { 0.0 } else { (1.0 - p) * SLIDE * if down { -1.0 } else { 1.0 } };
+
+        // dismissed toasts: painted where they were, sliding and fading out, never interactive
+        self.leaving.retain_mut(|entry| {
+            let area_id = Id::new(("ashlar_ui::toast", entry.id));
+            let Some(p) = crate::motion::presence(ctx, area_id.with("presence"), false, tokens_motion::SNAP) else { return false };
+            let y = entry.drawn.unwrap_or(0.0);
+            let area = egui::Area::new(area_id).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(false).fade_in(false);
+            area.show(ctx, |ui| {
+                ui.set_width(width);
+                paint_toast(ui, &t, &self.labels, entry, Look { live: false, shift: vec2(0.0, slide(p)), alpha: p });
+            });
+            true
+        });
+
         let mut offset = 0.0f32;
         let mut next_expiry: Option<f64> = None;
         let mut focused = None;
-        for entry in self.entries.iter_mut().take(visible) {
+        for (n, entry) in self.entries.iter_mut().enumerate() {
+            if n >= visible {
+                entry.drawn = None;
+                continue;
+            }
             let area_id = Id::new(("ashlar_ui::toast", entry.id));
             let y = if down { offset } else { -offset };
-            let area = egui::Area::new(area_id).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(true);
+            // the toasts behind a dismissed one glide into the gap; the area (hit testing and
+            // automation) sits at the resting place, only the paint moves
+            let drawn = crate::motion::f32(ctx, area_id.with("y"), y, tokens_motion::REFLOW.enter);
+            let presence_id = area_id.with("presence");
+            if entry.drawn.is_none() && seen {
+                crate::motion::set(ctx, presence_id, 0.0_f32);
+            }
+            let p = crate::motion::presence(ctx, presence_id, true, tokens_motion::SNAP).unwrap_or(1.0);
+            entry.drawn = Some(drawn);
+            let look = Look { live: true, shift: vec2(0.0, drawn - y + slide(p)), alpha: p };
+            let area = egui::Area::new(area_id).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(true).fade_in(false);
             let mut hovered = false;
             let inner = area.show(ctx, |ui| {
                 ui.set_width(width);
-                let painted = paint_toast(ui, &t, &self.labels, entry);
+                let painted = paint_toast(ui, &t, &self.labels, entry, look);
                 hovered = ui.rect_contains_pointer(ui.min_rect());
                 painted
             });
@@ -427,7 +504,7 @@ impl Toasts {
             });
         }
 
-        self.entries.retain(|e| Some(e.id) != dismiss && e.remaining.is_none_or(|r| r > 0.0));
+        self.remove_where(|e| Some(e.id) == dismiss || e.remaining.is_some_and(|r| r <= 0.0));
         self.focused = focused.filter(|id| Some(*id) != dismiss);
         let elsewhere = ctx.memory(|m| m.focused().is_some()) && focused.is_none();
         self.escape_ready = !elsewhere && !egui::Popup::is_any_open(ctx);
@@ -449,11 +526,30 @@ struct Painted {
     focused: bool,
 }
 
-fn focus_ring(ui: &Ui, t: &Tokens, rect: Rect) {
-    ui.painter().rect_stroke(rect, t.radius.sm, Stroke::new(2.0, t.focus), StrokeKind::Inside);
+fn focus_ring(painter: &egui::Painter, t: &Tokens, rect: Rect) {
+    painter.rect_stroke(rect, t.radius.sm, Stroke::new(2.0, t.focus), StrokeKind::Inside);
 }
 
-fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry) -> Painted {
+/// The close button's cross.
+fn paint_close(painter: &egui::Painter, rect: Rect, col: egui::Color32) {
+    let c = rect.center();
+    let k = rect.width() * 0.18;
+    painter.line_segment([c - vec2(k, k), c + vec2(k, k)], Stroke::new(1.5, col));
+    painter.line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(1.5, col));
+}
+
+/// How a toast is drawn this frame.
+#[derive(Clone, Copy)]
+struct Look {
+    /// In the queue: interactive and reported to automation and screen readers.
+    live: bool,
+    /// Paint offset from the resting rect (which hit testing keeps using).
+    shift: Vec2,
+    /// Opacity 0..=1.
+    alpha: f32,
+}
+
+fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry, look: Look) -> Painted {
     let toast = &entry.toast;
     let accent = match toast.level {
         ToastLevel::Info => t.status.info,
@@ -498,24 +594,50 @@ fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry) -> 
     let progress_h = if toast.progress.is_some() { gap * 2.0 + 4.0 } else { 0.0 };
     let actions_h = if actions.is_empty() { 0.0 } else { t.space.sm + t.control_height };
     let height = pad + text_h + progress_h + actions_h + pad;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-
-    let painter = ui.painter();
-    painter.add(egui::Shape::Rect(egui::epaint::RectShape::filled(rect, t.radius.lg, t.surface.raised)));
-    painter.rect_stroke(rect, t.radius.lg, Stroke::new(1.0, t.border), StrokeKind::Inside);
-    let bar = Rect::from_min_size(rect.min, vec2(4.0, rect.height()));
+    let rect = if look.live {
+        ui.allocate_exact_size(vec2(width, height), Sense::hover()).0
+    } else {
+        // a leaving toast takes its space but is no widget
+        let r = Rect::from_min_size(ui.cursor().min, vec2(width, height));
+        ui.advance_cursor_after_rect(r);
+        r
+    };
+    // paint at the drawn place; `rect` (hit testing, automation) stays at rest
+    let shift = look.shift;
+    let mut painter = ui.painter().clone();
+    painter.multiply_opacity(look.alpha.clamp(0.0, 1.0));
+    let painter = &painter;
+    let drawn = rect.translate(shift);
+    painter.add(egui::Shape::Rect(egui::epaint::RectShape::filled(drawn, t.radius.lg, t.surface.raised)));
+    painter.rect_stroke(drawn, t.radius.lg, Stroke::new(1.0, t.border), StrokeKind::Inside);
+    let bar = Rect::from_min_size(drawn.min, vec2(4.0, drawn.height()));
     painter.rect_filled(bar, egui::CornerRadius { nw: t.radius.lg, sw: t.radius.lg, ne: 0, se: 0 }, accent);
-    let mut y = rect.top() + pad;
+    let mut y = drawn.top() + pad;
     if let Some(title) = title {
         let h = title.size().y;
-        painter.galley(pos2(rect.left() + text_x, y), title, t.text.primary);
+        painter.galley(pos2(drawn.left() + text_x, y), title, t.text.primary);
         y += h + gap;
     }
-    painter.galley(pos2(rect.left() + text_x, y), body, t.text.primary);
+    painter.galley(pos2(drawn.left() + text_x, y), body, t.text.primary);
     if let Some(fraction) = toast.progress {
-        let track = Rect::from_min_size(pos2(rect.left() + text_x, rect.top() + pad + text_h + gap), vec2(text_w, 4.0));
+        let track = Rect::from_min_size(pos2(drawn.left() + text_x, drawn.top() + pad + text_h + gap), vec2(text_w, 4.0));
         painter.rect_filled(track, 2.0, t.surface.sunken);
         painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * fraction, track.height())), 2.0, accent);
+    }
+    let close_rect = Rect::from_min_size(pos2(rect.right() - pad / 2.0 - close_w, rect.top() + pad / 2.0), Vec2::splat(close_w));
+    if !look.live {
+        paint_close(painter, close_rect.translate(shift), t.text.secondary);
+        let mut right = drawn.right() - pad;
+        let top = drawn.bottom() - pad - t.control_height;
+        for galley in actions {
+            let w = galley.size().x + 2.0 * pad;
+            let r = Rect::from_min_size(pos2(right - w, top), vec2(w, t.control_height));
+            right -= w + gap;
+            painter.rect_filled(r, t.radius.md, t.surface.panel);
+            painter.rect_stroke(r, t.radius.md, Stroke::new(1.0, t.border), StrokeKind::Inside);
+            painter.galley(r.center() - galley.size() / 2.0, galley, t.text.primary);
+        }
+        return Painted { height, closed: false, action: None, focused: false };
     }
 
     // the whole toast: a live region screen readers announce
@@ -538,19 +660,15 @@ fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry) -> 
     automation::register_fmt(ui, rect, format_args!("toast.{id}"), &toast.text, Role::Toast, true, Details { value: Some(level), selected: None });
 
     // close button: a full control-height target in the top right corner
-    let close_rect = Rect::from_min_size(pos2(rect.right() - pad / 2.0 - close_w, rect.top() + pad / 2.0), Vec2::splat(close_w));
     let close = ui.interact(close_rect, base.with("close"), Sense::click());
-    let c = close_rect.center();
-    let k = close_rect.width() * 0.18;
     let col = if close.hovered() || close.has_focus() { t.text.primary } else { t.text.secondary };
     if close.hovered() {
-        ui.painter().rect_filled(close_rect, t.radius.sm, t.surface.hover);
+        painter.rect_filled(close_rect.translate(shift), t.radius.sm, t.surface.hover);
     }
     if close.has_focus() {
-        focus_ring(ui, t, close_rect);
+        focus_ring(painter, t, close_rect.translate(shift));
     }
-    ui.painter().line_segment([c - vec2(k, k), c + vec2(k, k)], Stroke::new(1.5, col));
-    ui.painter().line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(1.5, col));
+    paint_close(painter, close_rect.translate(shift), col);
     automation::register_fmt(ui, close_rect, format_args!("toast.{id}.close"), &labels.dismiss, Role::Button, true, Details::default());
     close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &labels.dismiss));
     let mut focused = close.has_focus();
@@ -572,12 +690,13 @@ fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry) -> 
         } else {
             t.surface.panel
         };
-        ui.painter().rect_filled(r, t.radius.md, fill);
-        ui.painter().rect_stroke(r, t.radius.md, Stroke::new(1.0, t.border), StrokeKind::Inside);
-        let gpos = r.center() - galley.size() / 2.0;
-        ui.painter().galley(gpos, galley, t.text.primary);
+        let d = r.translate(shift);
+        painter.rect_filled(d, t.radius.md, fill);
+        painter.rect_stroke(d, t.radius.md, Stroke::new(1.0, t.border), StrokeKind::Inside);
+        let gpos = d.center() - galley.size() / 2.0;
+        painter.galley(gpos, galley, t.text.primary);
         if resp.has_focus() {
-            focus_ring(ui, t, r);
+            focus_ring(painter, t, d);
             focused = true;
         }
         automation::register_fmt(ui, r, format_args!("toast.{id}.action.{n}"), &a.label, Role::Button, true, Details::default());
@@ -857,5 +976,104 @@ mod tests {
         h.step();
         let delay = h.output().viewport_output.get(&egui::ViewportId::ROOT).map_or(Duration::MAX, |v| v.repaint_delay);
         assert_eq!(delay, Duration::MAX, "a settled stack of sticky toasts schedules nothing");
+    }
+    const DT: f64 = 1.0 / 60.0;
+
+    /// One frame at time `t` on a 600 × 400 screen.
+    fn frame(ctx: &egui::Context, q: &mut Toasts, t: f64) {
+        let input = egui::RawInput {
+            time: Some(t),
+            predicted_dt: DT as f32,
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 400.0))),
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| q.show(ui.ctx())).textures_delta.clear();
+    }
+
+    fn animation_requests(ctx: &egui::Context) -> u64 {
+        crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION)
+    }
+
+    fn drawn(q: &Toasts, id: u64) -> f32 {
+        q.entries.iter().find(|e| e.id == id).and_then(|e| e.drawn).expect("drawn")
+    }
+
+    #[test]
+    fn a_dismissed_toast_leaves_and_the_rest_glide_into_the_gap() {
+        let ctx = egui::Context::default();
+        automation::install(&ctx);
+        let mut q = Toasts::new();
+        let (a, b) = (q.push(Toast::info("first").sticky()), q.push(Toast::info("second").sticky()));
+        let mut t = 0.0;
+        for _ in 0..3 {
+            frame(&ctx, &mut q, t);
+            t += DT;
+        }
+        // nothing animates on first show
+        assert_eq!(crate::motion::active(&ctx), 0);
+        let rest_a = automation::find(&ctx, &format!("toast.{a}")).expect("a").rect;
+        let before = drawn(&q, b);
+        assert!(q.dismiss(a));
+        assert_eq!(q.len(), 1);
+        let mut ys = vec![before];
+        let mut gone_at = None;
+        for k in 1..120 {
+            frame(&ctx, &mut q, t);
+            t += DT;
+            ys.push(drawn(&q, b));
+            if k == 3 {
+                // 50 ms in: still painted, never interactive or reported
+                assert!(q.leaving.iter().any(|e| e.id == a), "the dismissed toast vanished at once");
+                assert!(automation::find(&ctx, &format!("toast.{a}")).is_none());
+                // the survivor reports its resting place, not where it is drawn
+                let rest_b = automation::find(&ctx, &format!("toast.{b}")).expect("b").rect;
+                assert_eq!(rest_b, rest_a);
+                assert_ne!(ys[k], 0.0, "the survivor jumped into the gap");
+            }
+            if q.leaving.is_empty() && gone_at.is_none() {
+                gone_at = Some(k);
+            }
+        }
+        assert!(gone_at.is_some_and(|k| k > 3), "left at {gone_at:?}");
+        // the survivor moves one way only, and lands exactly
+        assert!(ys.windows(2).all(|w| w[1] >= w[0]), "{ys:?}");
+        assert_eq!(*ys.last().unwrap(), 0.0);
+        // settled: no more frames
+        let flat = animation_requests(&ctx);
+        for _ in 0..100 {
+            frame(&ctx, &mut q, t);
+            t += DT;
+        }
+        assert_eq!(animation_requests(&ctx), flat);
+    }
+
+    #[test]
+    fn a_new_toast_fades_in_after_first_show_and_reduced_motion_snaps() {
+        let ctx = egui::Context::default();
+        let mut q = Toasts::new();
+        frame(&ctx, &mut q, 0.0);
+        q.info("hello");
+        frame(&ctx, &mut q, DT);
+        assert_eq!(crate::motion::active(&ctx), 1, "a new toast animates in");
+
+        // reduced motion: the gap closes at once, the leaving toast only fades
+        let ctx = egui::Context::default();
+        crate::motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::REDUCED);
+        let mut q = Toasts::new();
+        let (a, b) = (q.push(Toast::info("first").sticky()), q.push(Toast::info("second").sticky()));
+        let mut t = 0.0;
+        for _ in 0..3 {
+            frame(&ctx, &mut q, t);
+            t += DT;
+        }
+        q.dismiss(a);
+        frame(&ctx, &mut q, t);
+        assert_eq!(drawn(&q, b), 0.0);
+        assert!(q.leaving.iter().any(|e| e.id == a));
+        for _ in 0..30 {
+            t += DT;
+            frame(&ctx, &mut q, t);
+        }
+        assert!(q.leaving.is_empty());
     }
 }

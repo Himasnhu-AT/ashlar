@@ -54,6 +54,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::toasts`: a new toast fades and slides 8 pt in, a dismissed one slides back out and
+  is painted until its exit settles, and the toasts behind it glide into the gap. Toasts queued
+  before the stack is first shown appear at once; hit testing and automation rects use the resting
+  layout; reduced motion keeps only the fade.
 - `Tokens::with_accent` derives hover, focus, selection and selection text in OKLCH (same hue,
   lightness steps, capped chroma) instead of sRGB mixing, flips `text.on_accent` dark when white
   falls below 4.5:1 and pushes the focus ring to 3:1 on every surface. The dark theme's accent is
