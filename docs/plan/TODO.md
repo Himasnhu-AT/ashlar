@@ -16,9 +16,9 @@ a task's state.
 | IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | doing (wt-frame) |
 | IMP-1.2 | Allocation gate in perf tests | todo |
 | IMP-1.3 | `ashlar-ui` perf suite | doing (wt-uiperf) |
-| IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | doing (wt-notes) |
-| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | doing (wt-notes: typing/resize/select; wt-frame: idle field, frames per command) |
-| IMP-1.6 | 120 Hz frame budget in telemetry | todo |
+| IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
+| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | doing (wt-frame: idle field, frames per command; typing/resize/select done 726b637) |
+| IMP-1.6 | 120 Hz frame budget in telemetry | doing (wt-toasts) |
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | todo |
 | IMP-1.8 | Launch to first present | todo |
 | IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
@@ -30,7 +30,7 @@ a task's state.
 | IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | doing (wt-frame) |
 | IMP-2.3 | Markdown cache and off-screen culling | doing (wt-uiperf) |
 | IMP-2.4 | Galley cache hot path | doing (wt-uiperf) |
-| IMP-2.5 | Notes example O(n) paths | doing (wt-notes) |
+| IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
 | IMP-2.6 | Incremental offsets for variable-height lists | doing (wt-uiperf) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | todo |
@@ -55,9 +55,9 @@ a task's state.
 ## Phase 4: agent tooling
 | Id | Task | Status |
 |---|---|---|
-| IMP-4.1 | Fix `trace` with `--port`/`--app` | doing (wt-tools) |
-| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (wt-tools: MCP part; process numbers wait for wave 2) |
-| IMP-4.3 | Control-protocol doc drift | doing (wt-tools) |
+| IMP-4.1 | Fix `trace` with `--port`/`--app` | done (5ef4d81) |
+| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (MCP tools done 550ce99; process numbers in `app.stats` still todo) |
+| IMP-4.3 | Control-protocol doc drift | done (1084a69) |
 | IMP-4.4 | Headless wgpu renderer for `Driver` | todo |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | todo |
 | IMP-4.6 | `--headless --snap --tree` flags | todo |
@@ -70,8 +70,8 @@ a task's state.
 ## Phase 5: components
 | Id | Task | Status |
 |---|---|---|
-| IMP-5.1 | Basic controls kit | todo |
-| IMP-5.2 | Toast v2 | todo |
+| IMP-5.1 | Basic controls kit | doing (wt-controls) |
+| IMP-5.2 | Toast v2 | doing (wt-toasts) |
 | IMP-5.3 | List and tree accessibility and selection | todo |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | todo |
@@ -80,9 +80,9 @@ a task's state.
 | IMP-5.8 | Settings form pattern | todo |
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | todo |
 | IMP-5.10 | Standalone tab strip | todo |
-| IMP-5.11 | Dialog focus | todo |
+| IMP-5.11 | Dialog focus | doing (wt-controls) |
 | IMP-5.12 | Rolling numbers | todo (after IMP-3.2) |
-| IMP-5.13 | Small content components | todo |
+| IMP-5.13 | Small content components | doing (wt-controls) |
 | IMP-5.14 | Sidebar / source list | todo |
 | IMP-5.15 | Accessibility goldens | todo |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
