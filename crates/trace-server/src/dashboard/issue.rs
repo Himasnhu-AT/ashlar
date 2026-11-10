@@ -1,7 +1,7 @@
 //! The page for one crash issue. Everything in a crash record came from a client, so all of it is shown as
 //! escaped text.
 
-use ashlar_trace_proto::{Breadcrumb, Device, Perf};
+use ashlar_trace_proto::{Breadcrumb, Device, IncidentRule, Perf};
 use maud::{Markup, html};
 
 use super::data::IssueDetail;
@@ -75,6 +75,15 @@ fn perf_rows(perf: &Perf) -> Vec<(&'static str, String)> {
     }
     if let Some(peak) = perf.rss_peak_mb {
         rows.push(("Peak memory", format!("{peak} MB")));
+    }
+    for incident in &perf.incidents {
+        let (label, worst) = match incident.rule {
+            IncidentRule::LongFrames => ("Long-frame runs", format!("slowest {}", fmt::us_as_ms(Some(incident.value as f64)))),
+            IncidentRule::Stall => ("Stalls", format!("longest {}", fmt::us_as_ms(Some(incident.value as f64)))),
+            IncidentRule::MemoryGrowth => ("Memory growth", format!("+{} MiB", incident.value)),
+            IncidentRule::Other => continue,
+        };
+        rows.push((label, format!("{} × ({worst})", incident.count)));
     }
     rows
 }

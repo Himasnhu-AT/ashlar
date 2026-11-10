@@ -73,7 +73,14 @@ impl Shared {
         if !self.allowed(Signal::Perf) {
             return;
         }
-        self.frames.record(u32::try_from(duration.as_micros()).unwrap_or(u32::MAX));
+        let us = u32::try_from(duration.as_micros()).unwrap_or(u32::MAX);
+        self.frames.record(us);
+        // frames within budget never touch the lock; a long one that finds it busy is left to the histogram
+        if us > DISPLAY_BUDGET_US
+            && let Some(mut rules) = lock(&self.incidents, false)
+        {
+            rules.frame(Instant::now(), us);
+        }
     }
 
     /// Records the time since start once. Later calls do nothing.
@@ -100,6 +107,9 @@ impl Shared {
             window.last_sample = Some(now);
         }
         if let Some(sample) = self.sampler.sample() {
+            if let Some(mut rules) = lock(&self.incidents, true) {
+                rules.memory(now, sample.rss_bytes);
+            }
             self.fold_sample(sample);
         }
     }
@@ -128,6 +138,7 @@ impl Shared {
             let (counters, gauges) = self.registry.drain();
             window.start = now;
             let frames = self.frames.take();
+            let incidents = lock(&self.incidents, true).map(|mut rules| rules.take()).unwrap_or_default();
             let startup_ms = window.startup_ms.take();
             let cpu_pct = (window.cpu_samples > 0).then(|| (window.cpu_sum / f64::from(window.cpu_samples)) as f32);
             let rss_bytes = window.rss_bytes.take();
@@ -144,13 +155,15 @@ impl Shared {
                 startup_ms,
                 counters,
                 gauges,
+                incidents,
             };
             let has_content = perf.frames.is_some()
                 || perf.cpu_pct.is_some()
                 || perf.rss_mb.is_some()
                 || perf.startup_ms.is_some()
                 || !perf.counters.is_empty()
-                || !perf.gauges.is_empty();
+                || !perf.gauges.is_empty()
+                || !perf.incidents.is_empty();
             if has_content && self.allowed(Signal::Perf) {
                 window.last = Some(perf.clone());
                 Some(perf)
@@ -168,7 +181,7 @@ impl Shared {
 mod tests {
     use std::time::Duration;
 
-    use ashlar_trace_proto::{CrashKind, FRAME_BUCKETS, ItemBody, Perf, Signal};
+    use ashlar_trace_proto::{CrashKind, FRAME_BUCKETS, IncidentRule, ItemBody, Perf, Signal};
 
     use super::*;
     use crate::signals::testutil::Fixture;
@@ -210,6 +223,22 @@ mod tests {
         let sent = fixture.sink.items.lock().expect("lock");
         assert_eq!(sent[0].0, Signal::Perf);
         assert!(!sent[0].2, "perf must not use submit_now");
+    }
+
+    #[test]
+    fn incidents_ride_on_the_window_once_per_rule() {
+        let fixture = Fixture::new(|_| {});
+        for ms in [10, 10, 10, 10, 10, 10, 300, 300] {
+            fixture.signals.frame(Duration::from_millis(ms));
+        }
+        fixture.signals.tick_at(fixture.at(WINDOW));
+        let items = perfs(&fixture);
+        let incidents: Vec<_> = items[0].incidents.iter().map(|i| (i.rule, i.count, i.value)).collect();
+        assert_eq!(incidents, vec![(IncidentRule::LongFrames, 2, 10_000), (IncidentRule::Stall, 2, 300_000)]);
+        // the next window starts with nothing fired
+        fixture.signals.frame(Duration::from_millis(2));
+        fixture.signals.tick_at(fixture.at(WINDOW * 2));
+        assert!(perfs(&fixture)[1].incidents.is_empty());
     }
 
     #[test]

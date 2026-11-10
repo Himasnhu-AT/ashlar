@@ -217,6 +217,9 @@ struct State {
     /// Warning lines printed so far (tests).
     #[cfg(test)]
     emitted: Vec<String>,
+    /// Every pass measured so far (tests).
+    #[cfg(test)]
+    samples: Vec<FrameSample>,
 }
 
 /// Shared between the runtime (frame reasons, commands, its own time) and the egui plugin that
@@ -274,6 +277,12 @@ impl Probe {
     #[cfg(test)]
     pub(crate) fn emitted(&self) -> Vec<String> {
         self.lock().emitted.clone()
+    }
+
+    /// Every pass measured so far.
+    #[cfg(test)]
+    pub(crate) fn samples(&self) -> Vec<FrameSample> {
+        self.lock().samples.clone()
     }
 
     /// The runtime credited a new frame to `reasons` (before egui's pass begins).
@@ -358,6 +367,8 @@ impl Probe {
         if let Some(log) = &mut s.log {
             log.frame(&sample);
         }
+        #[cfg(test)]
+        s.samples.push(sample);
     }
 }
 
@@ -469,43 +480,43 @@ mod tests {
         assert_eq!((w.detect, w.budget), (true, None));
     }
 
-    /// The perf test's scroll scenario: a long list scrolled by wheel and left to settle warns
-    /// about nothing; a view that blocks does.
+    /// The perf test's scroll scenario: a long list scrolled by wheel and left to settle shows no
+    /// identical frames, and every pass is measured, so the stall meter sees it. Whether a real pass
+    /// stalls depends on the machine (a loaded one deschedules the thread mid-frame, which looks like
+    /// waiting), so that half is checked on timings shaped like the scroll's, below.
     #[test]
-    fn scrolling_a_list_emits_no_warnings_and_a_blocking_view_does() {
+    fn scrolling_a_list_repeats_no_frame_and_a_blocking_view_stalls() {
         use crate::{App, Driver};
-        // a loaded machine can deschedule the thread mid-frame, which is a stall too: one clean
-        // run out of three
-        let scroll = || {
-            let app = App::<i64>::new("perfwarntest", "0.0.0").view(|ui, _cx| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for i in 0..300 {
-                        ui.label(format!("row {i}"));
-                    }
-                });
+        let app = App::<i64>::new("perfwarntest", "0.0.0").view(|ui, _cx| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for i in 0..300 {
+                    ui.label(format!("row {i}"));
+                }
             });
-            let mut rt = app.runtime();
-            let probe = rt.watch_frames(PerfWarn::new(true, None));
-            let mut d = Driver::new(rt);
-            d.frame();
-            for _ in 0..60 {
-                d.push_event(egui::Event::PointerMoved(egui::pos2(100.0, 100.0)));
-                d.push_event(egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0.0, -40.0),
-                    phase: egui::TouchPhase::Move,
-                    modifiers: egui::Modifiers::NONE,
-                });
-                d.advance(1.0 / 60.0);
-            }
-            d.settle(600);
-            assert!(d.frames() > 60, "frames ran: {}", d.frames());
-            probe.emitted()
-        };
-        let runs: Vec<Vec<String>> = (0..3).map(|_| scroll()).collect();
-        assert!(runs.iter().all(|w| w.iter().all(|l| !l.contains("identical"))), "{runs:?}");
-        assert!(runs.iter().any(Vec::is_empty), "the scroll scenario warns about nothing: {runs:?}");
+        });
+        let mut rt = app.runtime();
+        let probe = rt.watch_frames(PerfWarn::new(true, None));
+        let mut d = Driver::new(rt);
+        d.frame();
+        for _ in 0..60 {
+            d.push_event(egui::Event::PointerMoved(egui::pos2(100.0, 100.0)));
+            d.push_event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -40.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            d.advance(1.0 / 60.0);
+        }
+        d.settle(600);
+        assert!(d.frames() > 60, "frames ran: {}", d.frames());
+        let emitted = probe.emitted();
+        assert!(emitted.iter().all(|l| !l.contains("identical")), "{emitted:?}");
+        let samples = probe.samples();
+        assert!(samples.len() > 60 && samples.iter().all(|s| s.cpu.is_some()), "every pass has a CPU reading: {} passes", samples.len());
+        assert!(samples.iter().any(|s| s.input), "the wheel events arrived as input passes");
 
+        // load can only make a sleeping view's wall time longer, so this half holds on any machine
         let app = App::<i64>::new("perfwarntest", "0.0.0").view(|ui, _cx| {
             std::thread::sleep(Duration::from_millis(12));
             ui.label("slow");
@@ -517,6 +528,24 @@ mod tests {
         d.frame();
         d.frame();
         assert_eq!(probe.emitted().len(), 1, "a sleeping view stalls, warned once");
+    }
+
+    /// Timings shaped like the scroll scenario: busy passes, where the thread's CPU time is close to
+    /// the wall time (and even a pass that lost a third of its time to the scheduler), never stall;
+    /// only a pass that mostly waits does.
+    #[test]
+    fn a_scroll_whose_cpu_tracks_its_wall_time_is_no_stall() {
+        let mut w = PerfWarn::new(true, None);
+        let scroll = (0..120u32).map(|i| {
+            let wall = 2 + u64::from(i % 7) * 4; // 2..26 ms
+            let cpu = wall * 9 / 10;
+            FrameSample { input: i < 60, ..frame(f64::from(i) / 60.0, wall, cpu, &["input"]) }
+        });
+        assert!(feed(&mut w, scroll).is_empty(), "CPU ≈ wall is work, not waiting");
+        let jittered = frame(3.0, 30, 10, &["input"]);
+        assert!(feed(&mut w, [jittered]).is_empty(), "wall at 3× CPU is under the ratio");
+        let waiting = frame(4.0, 30, 7, &["input"]);
+        assert_eq!(feed(&mut w, [waiting]).len(), 1, "wall at 4× CPU and over 8 ms is a stall");
     }
 
     #[test]
