@@ -3,6 +3,126 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/chat merged
+
+- **IMP-5.7:** `chat::{Transcript, Message, ToolCard, Composer, PopupList}`. It is UI over plain data
+  (the `TranscriptItem` trait or `ChatMessage`); its strings come from `ChatLabels`.
+  - The transcript has its own height index (only visible rows are measured), stays at the bottom
+    unless the user scrolled up (then `<id>.jump` appears), and is a polite AccessKit log.
+  - Typing: Enter is ignored while composing and for one frame after an input-method event.
+  - Performance: `transcript_10k_messages_frame` 0.129 ms (1k: 0.092 ms).
+- **CI after the merge failed** on three direct `request_repaint` calls (the wake scan). The agent
+  hadn't run the full gate. Fixed on `imp`: a new `chat::CHAT_LAYOUT` wake reason and `INPUT` for
+  clicks. Rule from here on: no merge until the agent reports `ci: ok` from a full
+  `cargo xtask ci`.
+- Started: wt-i18n (IMP-6.13).
+
+## 2026-11-10: wt/rowuse and wt/diff merged (CI green)
+
+- **IMP-0.5:** `deny.toml` has a `[licenses]` allow list: MIT, Apache-2.0 (and the LLVM exception),
+  BSD-2/3, BSL-1.0, ISC, MPL-2.0, Unicode-3.0, Zlib, CDLA-Permissive-2.0 (webpki-roots), and OFL-1.1
+  plus Ubuntu-font-1.0 (egui's fonts). No GPL or LGPL. `cargo deny check licenses` passes.
+- **IMP-2.17:** the devtools Elements list was ashlar's only list of selectable labels. It now uses
+  `list::Row` (which gained `indent`, `text_style` and `weak`): 1k rows p50 0.67 → 0.10 ms.
+  - The palette, keymap editor and notes list already draw through `VirtualList`, where `Row` would add
+    a second click target.
+  - `list::checked` wraps the tab strip's overflow menu.
+- **IMP-5.6:** `ashlar-diff` (rank 0, no dependencies, wasm32): Myers with a cost cap, word emphasis,
+  and `parse_patch`/`write_patch`, which round-trip real `git diff` fixtures and never panic on
+  mutated input. `DiffView` adds unified and split modes, a sticky header and hunk navigation.
+  - `myers_10k_lines` 2.08 ms, `diff_50k_lines_frame` 0.41 ms.
+  - **CI after the merge:** `crates/app/tests/wake_scan.rs` (all repaints go through `wake`) caught two
+    direct `request_repaint` calls in `diff_view.rs`. They were fixed on `imp`. Agents now run the
+    full `cargo xtask ci` before reporting, because repo-wide checks live in other crates.
+- New: IMP-1.10 (the allocation counter is per process; it fails when tests run in parallel).
+- Started: wt-window (IMP-6.4, 6.5), wt-notify (IMP-6.6).
+
+## 2026-11-10: wt/launch merged (CI green)
+
+- **IMP-6.9 / 1.8:** `app.stats.launch.{to_window_ms, to_first_frame_ms, launch_to_present_ms}`,
+  measured from the first line of `run_native`. `<PREFIX>_READY_FILE` gets `{pid, ready_ms}` after
+  the first present. `cargo xtask launch [--runs N] [--memory]` is a manual probe that opens windows.
+  - Baseline over 9 launches (heavily loaded machine): p50 144–186 ms, p95 188–516 ms.
+  - Breakdown of one launch:
+
+    | Phase | Time |
+    |---|---|
+    | before eframe | ~8 ms |
+    | window and wgpu setup | 80–150 ms |
+    | `Runtime::new` | ~10 ms |
+    | event loop to first frame | ~37 ms |
+    | first `ui` | ~10 ms |
+    | first paint and present | ~35 ms |
+
+- **IMP-6.10:** a command-line document opens on the frame after the first. A `--scene` waits for that
+  open; no test covers this.
+- **IMP-2.11:** dropped. eframe 0.36 already creates the window hidden and shows it after the first
+  paint.
+- **IMP-2.10:** hello's idle memory falls in one of two groups between runs (cause unknown):
+  - about 40 MB footprint / 94 MB peak
+  - about 75 MB footprint / 203 MB peak
+
+  Contributors: about 54 MB of GPU memory during startup (mostly freed afterwards), swapchain 3 × 9.5
+  MB, heap 21 MB, an 8 MB system image buffer, and the font atlas at about 1 MB.
+  - **Default changed:** windows queue at most one frame ahead (`App::frame_latency`, default 1; it
+    was 2). In the high group, idle went 75.5 → 66 MB and peak 203 → 193 MB; the low group didn't
+    change. This also cuts input latency by a frame. Apps with heavy GPU frames can set 2. Flagged to
+    the owner.
+- Started: wt-perfwarn (IMP-2.7, 2.12, the rest of 4.2).
+
+## 2026-11-10: wt/motiongate and wt/overlays merged (CI green)
+
+- **IMP-4.10:** `ashlar_ui::motion_gate::MotionRecorder` and `Driver::record`.
+  - Checks for: overshoot on opacity and colour, reversal with bounce 0, pops, flicker, and frames
+    requested after everything settled. There is an allow list per id, prefix or wake reason.
+  - Seeded faults give exactly one finding each.
+  - The gallery passes at 120 Hz: dialog, toast, animated theme switch, tab and page switches. The
+    only finding was the gate's own false alarm on values set with `motion::set`, now ignored.
+  - The idle check allows 3 frames after settle, because egui adds a repaint after a request.
+- **IMP-5.9:** `overlay::{Select, Combobox, Popover}`, `ashlar_ui::help` tooltips, and
+  `commands::menu::context`.
+  - The combobox filters with fuzzy matching; composition never commits a choice.
+  - The popover flips at window edges and returns focus when it closes.
+  - Option lists are virtualized.
+  - New: `MotionTokens.tooltip_delay` and new automation roles.
+- **Merge incident:** the overlays merge left conflict markers in `crates/ui/src/lib.rs` (two new
+  `mod` lines), and the format gate caught them. The merge script stopped silently, so merges now go
+  through one script that stops on any non-CHANGELOG conflict and checks for leftover markers.
+- Started: wt-rowuse (IMP-2.17, IMP-0.5), wt-chat (IMP-5.7).
+
+## 2026-11-10: wt/allocreg, wt/tabs, wt/form, wt/snap merged (CI and allocation gate green)
+
+- **IMP-2.18:** the allocation regression was real, and caused by devtools.
+  - Devtools turned AccessKit on to answer a request and never turned it off, so every later frame
+    built the full screen-reader tree. IMP-5.3's richer row nodes made that tree about 100
+    allocations bigger.
+  - Fix: devtools turns AccessKit back off only where no screen reader can exist (`Driver`,
+    `--headless`, or a build without `accesskit`), through `devtools::set_platform_accesskit`. In a
+    real window it stays on once on: eframe enables it once per activation and egui offers no
+    getter, so a screen reader can't be told apart.
+  - Test: "a screen reader activates during a request → stays on".
+  - On merged `imp`: `allocs_per_idle_wake_frame` 272 (gate 578; was 652), `keystroke_allocs` 990
+    (was 2,246), scroll 345.
+  - Frames with AccessKit on are no longer gated.
+- **IMP-5.10:** `TabStrip`, a single implementation that docking also uses.
+  - One Tab stop with arrow keys, close by button, middle-click or ⌘W, an overflow menu, and reorder
+    by drag or ⌘⇧+arrow.
+  - Accessibility: a TabList node and automation ids.
+  - The `tabs::indicator` is animated relative to the strip.
+  - Docking tabs don't have close or automation ids yet.
+- **IMP-5.8:** `form::section`/`row` (`.bind(&mut v, default)` handles modified and reset), `form::filter`
+  with highlights and an empty state, and `Field` with announced errors. Ids are `<section>.<row>`.
+  Gallery Settings page. Merge note: Tabs and Settings both added gallery pages, so `Page::ALL` now
+  has 8 entries.
+- **IMP-4.8:** `crates/debug/src/snapshot.rs` (exact by default, tolerance optional, `-new` and
+  `-diff` PNGs, `ASHLAR_UPDATE_SNAPSHOTS=1`, a skip on another adapter). The egui_kittest snapshot
+  feature was not reused: it would pull the UI toolkit into rank 4, and its compare is perceptual.
+  Notes baselines were recorded on Apple M5 Pro / Metal.
+- **IMP-4.9:** `App::scene`, `--scene`, `--list-scenes`, `ui.scene`, the `ui_scene` MCP tool; the notes
+  app has `empty` and `two-notes`.
+- Started: wt-diff (IMP-5.6), wt-overlays (IMP-5.9), wt-motiongate (IMP-4.10), wt-md2 (IMP-5.4,
+  5.18). wt-launch is running.
+
 ## 2026-11-10: wt/tween, wt/openfiles, wt/size merged
 
 - **IMP-3.9:** a real bug. `tween()` (`crates/motion/src/curve.rs`) applied its velocity-continuity

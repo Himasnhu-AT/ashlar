@@ -58,6 +58,15 @@ pub enum Role {
     Alert,
     /// A hyperlink (`value` is its URL).
     Link,
+    /// A closed list with one chosen value: a select or a combobox (`value` is the chosen
+    /// option's label, `selected` whether its list is open).
+    ComboBox,
+    /// The list of options a select or combobox opens.
+    ListBox,
+    /// One option of a list box (`selected` when it is the chosen one).
+    ListOption,
+    /// Help text shown on hover.
+    Tooltip,
     #[default]
     Other,
 }

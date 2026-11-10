@@ -5,6 +5,7 @@
 use egui::{Color32, Event, FontId, Painter, PointerButton, Pos2, Rect, Stroke, StrokeKind};
 
 use super::State;
+use crate::list::Row;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
@@ -209,14 +210,16 @@ fn elements(ui: &mut egui::Ui, st: &mut State, selected: Option<usize>) {
     egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show_rows(ui, row_h, order.len(), |ui, range| {
         for i in order.get(range).unwrap_or(&[]) {
             let Some(n) = st.model.get(*i) else { continue };
-            ui.horizontal(|ui| {
-                ui.add_space(n.depth.min(40) as f32 * 10.0);
-                let text = egui::RichText::new(describe(n)).monospace();
-                let text = if n.visible { text } else { text.weak() };
-                if ui.selectable_label(selected == Some(*i), text).clicked() {
-                    pick = Some(n.key);
-                }
-            });
+            let text = describe(n);
+            let row = Row::new(n.key, &text)
+                .selected(selected == Some(*i))
+                .height(row_h)
+                .indent(n.depth.min(40) as f32 * 10.0)
+                .text_style(egui::TextStyle::Monospace)
+                .weak(!n.visible);
+            if ui.add(row).clicked() {
+                pick = Some(n.key);
+            }
         }
     });
     if let Some(k) = pick {

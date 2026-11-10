@@ -1,0 +1,19 @@
+diff --git a/main.rs b/main.rs
+index c226300..c878f04 100644
+--- a/main.rs
++++ b/main.rs
+@@ -2,2 +2,2 @@ fn main() {
+-    let x = 1;
+-    println!("{}", x);
++    let y = 2;
++    println!("{}", y);
+diff --git a/numbers.txt b/numbers.txt
+index 1c99002..ba9a42f 100644
+--- a/numbers.txt
++++ b/numbers.txt
+@@ -5 +5 @@
+-5
++five
+@@ -30 +30 @@
+-30
++thirty

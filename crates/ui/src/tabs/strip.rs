@@ -15,6 +15,7 @@ use egui::{
 use super::{Tab, fit, indicator};
 use crate::automation::{self, Details, Role};
 use crate::layout::{EXTENT, usable};
+use crate::list;
 
 /// Tabs beyond this many are ignored (not drawn, not reachable).
 pub const MAX_TABS: usize = 4096;
@@ -571,25 +572,28 @@ impl Strip<'_> {
         let mut picked = None;
         let popup = egui::Popup::menu(&r).show(|ui| {
             ScrollArea::vertical().max_height(MENU_HEIGHT).show(ui, |ui| {
-                for &i in hidden {
-                    let row = menu_item(ui, i);
-                    if let Some(a) = automation {
-                        let label = tabs.get(i).map_or("", |t| t.label);
-                        automation::register_fmt(
-                            ui,
-                            row.rect,
-                            format_args!("{a}.overflow.{i}"),
-                            label,
-                            Role::MenuItem,
-                            row.enabled(),
-                            Details::default(),
-                        );
+                // the hidden tabs are unbounded
+                list::checked(ui, |ui| {
+                    for &i in hidden {
+                        let row = menu_item(ui, i);
+                        if let Some(a) = automation {
+                            let label = tabs.get(i).map_or("", |t| t.label);
+                            automation::register_fmt(
+                                ui,
+                                row.rect,
+                                format_args!("{a}.overflow.{i}"),
+                                label,
+                                Role::MenuItem,
+                                row.enabled(),
+                                Details::default(),
+                            );
+                        }
+                        if row.clicked() {
+                            picked = Some(i);
+                            ui.close();
+                        }
                     }
-                    if row.clicked() {
-                        picked = Some(i);
-                        ui.close();
-                    }
-                }
+                });
             });
         });
         out.overflow_open = popup.is_some();

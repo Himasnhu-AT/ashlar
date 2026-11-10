@@ -53,7 +53,7 @@ pub use driver::Driver;
 pub use renderer::Renderer;
 pub use runtime::{Cx, FilePicker, Pick, Runtime};
 pub use session::{Document, Effect, Session};
-pub use stats::{FrameStats, StatsSummary};
+pub use stats::{FrameStats, LaunchTimes, StatsSummary};
 
 /// Methods the windowed runtime answers on the control port besides the standard ones.
 pub fn control_methods() -> Vec<String> {

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod bench;
+mod launch;
 mod names;
 mod panics;
 mod trace;
@@ -34,6 +35,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-docs", 0),
     ("ashlar-motion", 0),
     ("ashlar-syntax", 0),
+    ("ashlar-diff", 0),
     ("ashlar-store", 1),
     ("ashlar-native", 2),
     ("ashlar-control", 2),
@@ -323,7 +325,7 @@ fn advisories() -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | trace-stress | trace-load | trace-demo>";
+const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | launch [--runs N] [--memory [--settle SECS]] | trace-stress | trace-load | trace-demo>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -340,6 +342,7 @@ fn main() -> ExitCode {
         "msrv" => msrv(),
         "advisories" => advisories(),
         "bench" => bench::bench(&root(), rest),
+        "launch" => launch::launch(&root(), rest),
         "trace-stress" => trace::stress(),
         "trace-load" => trace::load(),
         "trace-demo" => trace::demo(),

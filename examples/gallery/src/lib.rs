@@ -10,12 +10,14 @@ use ashlar::command::CommandInfo;
 use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use ashlar::ui::commands::{CommandPalette, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar::ui::chat::{Approval, ChatMessage, ChatRole, Composer, Message, ToolCard, ToolStatus, Transcript};
+use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
 use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::form::{self, Field};
+use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
 use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
@@ -39,10 +41,12 @@ pub enum Page {
     Commands,
     Tabs,
     Settings,
+    Chat,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings];
+    pub const ALL: [Page; 9] =
+        [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings, Page::Chat];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -53,8 +57,23 @@ impl Page {
             Page::Commands => "Commands",
             Page::Tabs => "Tabs",
             Page::Settings => "Settings",
+            Page::Chat => "Chat",
         }
     }
+}
+
+/// A long demo conversation for the chat page.
+fn demo_chat() -> Vec<ChatMessage> {
+    (0..2_000u64)
+        .map(|i| {
+            let (role, text) = if i.is_multiple_of(2) {
+                (ChatRole::User, format!("Question {i}: how do I split a **long** list?"))
+            } else {
+                (ChatRole::Assistant, format!("Answer {i}: draw only the rows on screen.\n\n- measure what you draw\n- keep the rest as estimates\n\n```rust\nlet first = heights.row_at(top);\n```"))
+            };
+            ChatMessage { id: i, role, text, streaming: false, revision: 0 }
+        })
+        .collect()
 }
 
 /// Rows in the list and table demos.
@@ -174,6 +193,12 @@ pub struct Gallery {
     dialog_opener: Option<egui::Id>,
     pub toasts: Toasts,
     pub last_dialog: Option<DialogOutcome>,
+    pub font_size: usize,
+    pub font: ComboboxState,
+    pub filters_open: bool,
+    pub only_errors: bool,
+    context_spec: MenuSpec,
+    pub last_context: Option<String>,
     // commands
     pub commands: Vec<CommandInfo>,
     pub keymap: Keymap,
@@ -193,6 +218,12 @@ pub struct Gallery {
     doc_selected: usize,
     many_tabs: Vec<String>,
     many_selected: usize,
+    pub chat_messages: Vec<ChatMessage>,
+    chat_revision: u64,
+    pub chat_draft: String,
+    pub chat_pending: bool,
+    pub chat_approval: Option<Approval>,
+    chat_suggestions: Vec<String>,
 }
 
 impl Default for Gallery {
@@ -200,6 +231,10 @@ impl Default for Gallery {
         Self::new()
     }
 }
+
+const FONT_SIZES: [&str; 5] = ["Small", "Medium", "Large", "Larger", "Largest"];
+
+const FONTS: [&str; 8] = ["Inter", "Iosevka", "JetBrains Mono", "Fira Code", "Source Serif", "Source Sans", "IBM Plex Mono", "Atkinson Hyperlegible"];
 
 const SWATCHES: [Color32; 16] = [
     Color32::from_rgb(0xef, 0x44, 0x44),
@@ -261,6 +296,24 @@ impl Gallery {
             dialog_opener: None,
             toasts: Toasts::new(),
             last_dialog: None,
+            font_size: 1,
+            font: ComboboxState::new(),
+            filters_open: false,
+            only_errors: false,
+            context_spec: MenuSpec {
+                menus: vec![Submenu {
+                    label: "Row".into(),
+                    enabled: true,
+                    role: None,
+                    children: vec![
+                        MenuNode::Item(Item::new("row.copy", "Copy").accelerator("Mod+C")),
+                        MenuNode::Item(Item::new("row.rename", "Rename")),
+                        MenuNode::Separator,
+                        MenuNode::Item(Item::new("row.delete", "Delete")),
+                    ],
+                }],
+            },
+            last_context: None,
             commands,
             keymap,
             palette: CommandPalette::new(),
@@ -278,6 +331,12 @@ impl Gallery {
             doc_selected: 0,
             many_tabs: (1..=60).map(|i| format!("Scene {i}")).collect(),
             many_selected: 30,
+            chat_messages: demo_chat(),
+            chat_revision: 1,
+            chat_draft: String::new(),
+            chat_pending: true,
+            chat_approval: None,
+            chat_suggestions: Vec::new(),
         }
     }
 
@@ -407,6 +466,7 @@ impl Gallery {
                 Page::Commands => self.commands_page(ui),
                 Page::Tabs => self.tabs_page(ui),
                 Page::Settings => self.settings(ui),
+                Page::Chat => self.chat(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
@@ -788,6 +848,52 @@ impl Gallery {
         });
     }
 
+    fn chat(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        let avail = ui.available_size();
+        let below = 2.0 * t.control_height + 120.0;
+        ui.allocate_ui(egui::vec2(avail.x, (avail.y - below).max(120.0)), |ui| {
+            Transcript::new("chat.transcript", &self.chat_messages, self.chat_revision).show(ui, |ui, m| {
+                let id = format!("chat.msg.{}", m.id);
+                Message::new(&id, m.role, &m.text).streaming(m.streaming).show(ui);
+            });
+        });
+        ui.add_space(t.space.sm);
+        let status = match self.chat_approval {
+            None if self.chat_pending => ToolStatus::NeedsApproval,
+            Some(Approval::Denied) => ToolStatus::Failed,
+            _ => ToolStatus::Succeeded,
+        };
+        let out = ToolCard::new("chat.tool.read", "Read file notes.md", status)
+            .details(|ui| {
+                ui.monospace("{ \"path\": \"notes.md\", \"lines\": 120 }");
+            })
+            .approval(&mut self.chat_pending)
+            .show(ui);
+        if out.approval.is_some() {
+            self.chat_approval = out.approval;
+        }
+        ui.add_space(t.space.sm);
+        let out = Composer::new("chat.input", &mut self.chat_draft)
+            .placeholder("Message (Enter sends, Shift+Enter for a new line)")
+            .popup(&self.chat_suggestions)
+            .show(ui);
+        self.chat_suggestions = match &out.trigger {
+            Some(tr) => {
+                let pool: &[&str] =
+                    if tr.symbol == '@' { &["notes.md", "readme.md", "src/main.rs", "Cargo.toml"] } else { &["help", "clear", "summarize"] };
+                pool.iter().filter(|s| s.starts_with(tr.query.as_str())).map(|s| (*s).to_owned()).collect()
+            }
+            None => Vec::new(),
+        };
+        if let Some(text) = out.submitted {
+            let id = self.chat_messages.len() as u64;
+            self.chat_messages.push(ChatMessage { id, role: ChatRole::User, text, streaming: false, revision: 0 });
+            self.chat_messages.push(ChatMessage { id: id + 1, role: ChatRole::Assistant, text: "Noted.".into(), streaming: false, revision: 0 });
+            self.chat_revision += 1;
+        }
+    }
+
     fn overlays(&mut self, ui: &mut Ui) {
         let t = tokens::current(ui.ctx());
         section(ui, &t, "Dialog", |ui| {
@@ -800,6 +906,32 @@ impl Gallery {
             if let Some(o) = self.last_dialog {
                 ui.label(format!("Last result: {o:?}"));
             }
+        });
+        section(ui, &t, "Select and combobox", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                Select::new("overlays.size", &FONT_SIZES, &mut self.font_size).label("Size").width(140.0).show(ui);
+                ui.label("Font");
+                Combobox::new("overlays.font", &FONTS, &mut self.font).label("Font").hint("Type to filter").width(200.0).show(ui);
+            });
+        });
+        section(ui, &t, "Popover, tooltip and context menu", |ui| {
+            ui.horizontal(|ui| {
+                let anchor = ashlar::ui::help(ui.button("Filters"), "Narrow the list down");
+                if anchor.clicked() {
+                    self.filters_open = !self.filters_open;
+                }
+                Popover::new("overlays.filters").show(&anchor, &mut self.filters_open, |ui| {
+                    ui.checkbox(&mut self.only_errors, "Only errors");
+                });
+                let row = ui.label("Right-click me");
+                if let Some(id) = menu::context(&row, &self.context_spec) {
+                    self.last_context = Some(id);
+                }
+                if let Some(id) = &self.last_context {
+                    ui.label(format!("Chose {id}"));
+                }
+            });
         });
         section(ui, &t, "Toasts", |ui| {
             ui.horizontal(|ui| {

@@ -23,6 +23,54 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   revision of the text skips hashing it each frame. Inline parsing is linear in the paragraph's
   length (a 50 KB paragraph: `bench: md_long_paragraph_parse`, about 0.4 ms), and a drawing
   snapshot (`tests/markdown_snapshot.rs`) checks what markdown paints (IMP-5.18).
+- `ashlar-native` notifications: stable ids (`Notification::id`; the same id replaces a shown
+  notification), `notify::show` (returns the id), `notify::remove`, `notify::on_click` (a
+  `Receiver<Click>` with the notification's `info` map), `silent`, and `notify::set_app_identity`.
+  Windows now shows toasts (AppUserModelID registered under HKCU for unpackaged apps, escaped XML,
+  tags over 64 characters hashed); macOS installs a notification-center delegate so banners show
+  while the app is frontmost and clicks are reported; Linux sends the `desktop-entry` hint and
+  reports clicks from `ActionInvoked`.
+- `ashlar_ui::chat`: a chat kit over plain data. `Transcript` is a virtualized, variable-height
+  message list (heights kept per message key, revision and width; a frame costs O(visible)) that
+  follows the newest message while it streams, stays put once the user scrolls up and then offers
+  "Jump to latest"; it is a polite AccessKit log. `Message` draws a role and a markdown body with a
+  streaming state, `ToolCard` a tool call with folded details and keyboard-reachable Approve/Deny
+  (`<id>.approve`, `<id>.deny`), and `Composer` a text field where Enter sends, Shift+Enter adds a
+  line, input-method composition never sends, and `@` / `/` open a `PopupList` of suggestions.
+  Strings come from `ChatLabels`. The gallery has a Chat page.
+- `ashlar-diff` (new crate, rank 0, no dependencies, builds for wasm32): line diffs with Myers'
+  algorithm under a cost cap (past the cap, a split at lines unique to both sides, then a coarse
+  delete/insert, flagged `coarse`), word-level emphasis for paired changed lines, hunks with
+  context and the unchanged ranges between them (`FileDiff::gaps`, expandable when the new text is
+  known), and `parse_patch` / `write_patch` for unified and `git diff` patches (renames, copies,
+  modes, binary markers, quoted paths, `\ No newline at end of file`); malformed patches are an
+  error, never a panic. About 2 ms for a 10k-line file.
+- `ashlar_ui::diff_view::DiffView`: unified and split diffs, virtualized (about 0.4 ms per
+  scrolled frame at 50k lines), syntax-coloured per file language, word-level emphasis, "expand N
+  lines" on collapsed ranges, foldable files, a sticky file header, line selection, `N`/`P` (or
+  `F7`) between hunks. Automation `<id>.file.<f>.hunk.<h>` and friends for visible rows; AccessKit
+  document, headings and labelled lines.
+- `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
+  counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
+- `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
+  frame is presented.
+- `cargo xtask launch` measures `examples/hello` launch time over 9 launches (p50/p95), and
+  `cargo xtask launch --memory` its idle RSS and physical footprint (macOS). Manual, opens windows.
+- `App::frame_latency(frames)`: how many frames the GPU may queue ahead of the screen (1 to 3).
+- Motion and jank gate for tests: `ashlar_ui::motion_gate::MotionRecorder` records values
+  animated through `ashlar_ui::motion` and per-frame automation rects (`Driver::record` does both
+  for an app), and `check(&MotionRules)` flags overshoot of opacity and colour, reversals without
+  bounce, pops, flicker and frames requested after everything settled, with a per-id allow-list.
+  The gallery's dialog, toast, theme crossfade and tab switches pass it.
+- `ashlar_ui::overlay`: `Select` (a button with a list of options), `Combobox` (a text field whose
+  options are filtered with the command palette's fuzzy matcher; input-method composition never
+  chooses), and `Popover` (anchored, flips above at the window edge, Escape or an outside click
+  closes, focus moves in and returns). Option lists are virtualized, fade with the `enter_exit`
+  motion token and register `<id>.option.<n>` with ListBox/option roles.
+- `ashlar_ui::help(response, text)`: a tooltip after the new `motion.tooltip_delay` token, also
+  given to screen readers as the control's description.
+- `ashlar_ui::commands::menu::context(response, &spec)`: a context menu built from a `MenuSpec`.
+- Automation roles `ComboBox`, `ListBox`, `ListOption` and `Tooltip`.
 - `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
   modified marker and reset button, a filter that hides non-matching rows and empty sections,
   highlights matches and shows "No settings match", and `Field` with a required marker and an
@@ -145,7 +193,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- `ashlar-native` macOS notifications play the default sound unless `silent` is set, and ask for
+  sound permission only then.
+- A document named on the command line opens on the frame after the first, so the window shows
+  before the load runs (it used to load before the first paint).
+- Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower
+  input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
+  window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
+- `ashlar_ui::list::Row` gains `indent`, `text_style` and `weak`. The devtools Elements list draws
+  its rows with it (about 6.7× cheaper per row than its old selectable labels: 0.10 ms against
+  0.67 ms for 1k rows), and the tab strip's overflow menu runs inside `list::checked`.
 - `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
   arrow keys, an AccessKit tab list, and the animated selection underline.
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
