@@ -19,6 +19,7 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-docs` | Documentation library for agents: folders are categories, markdown files are documents, embedded at build time, a run-time folder on top | yes | yes |
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
 | 0 | `ashlar-obfuscate` | Compile-time string obfuscation: build-time values kept out of a strings dump of the binary | yes | yes |
+| 0 | `ashlar-motion` | Motion maths: closed-form springs, curves, animated values that keep their velocity on retarget, reduced-motion rules per value class, motion tokens, OKLab/OKLCH colour, gesture helpers | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
@@ -63,7 +64,10 @@ with both `path` and `version`.
    revision numbers, not by diffing. Long lists are virtualized. No blocking I/O on the UI thread.
    Edits are copy-on-write with structural sharing. Every hot path has a perf test, and
    `cargo xtask bench --compare` guards it (see below).
-6. **Stable contracts.** Items marked `CONTRACT` in `ashlar-command` are shared across crates
+6. **Motion is a policy.** Nothing animates on first show, the user's own hand is never
+   animated, reduced motion is applied per value class (`ashlar-motion`'s `Class`), and settled
+   animations request no frames.
+7. **Stable contracts.** Items marked `CONTRACT` in `ashlar-command` are shared across crates
    built in parallel and change only additively.
 
 ## Performance gate

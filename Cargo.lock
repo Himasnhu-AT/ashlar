@@ -503,6 +503,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-motion"
+version = "0.1.0"
+
+[[package]]
 name = "ashlar-native"
 version = "0.1.0"
 dependencies = [

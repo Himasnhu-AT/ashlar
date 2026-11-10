@@ -32,6 +32,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-log", 0),
     ("ashlar-obfuscate", 0),
     ("ashlar-docs", 0),
+    ("ashlar-motion", 0),
     ("ashlar-store", 1),
     ("ashlar-native", 2),
     ("ashlar-control", 2),
