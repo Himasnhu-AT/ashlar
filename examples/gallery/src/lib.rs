@@ -15,6 +15,7 @@ use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
+use ashlar::ui::form::{self, Field};
 use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
@@ -37,10 +38,11 @@ pub enum Page {
     Overlays,
     Commands,
     Tabs,
+    Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 7] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands];
+    pub const ALL: [Page; 8] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -50,6 +52,7 @@ impl Page {
             Page::Overlays => "Overlays",
             Page::Commands => "Commands",
             Page::Tabs => "Tabs",
+            Page::Settings => "Settings",
         }
     }
 }
@@ -178,6 +181,13 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    // settings
+    pub settings_query: String,
+    pub launch_at_login: bool,
+    pub auto_update: bool,
+    pub appearance: usize,
+    pub sidebar_icons: bool,
+    pub project_name: String,
     revision: u64,
     doc_tabs: Vec<String>,
     doc_selected: usize,
@@ -257,6 +267,12 @@ impl Gallery {
             keymap_editor: KeymapEditor::new(),
             ran: Vec::new(),
             show_grid: true,
+            settings_query: String::new(),
+            launch_at_login: false,
+            auto_update: true,
+            appearance: 2,
+            sidebar_icons: true,
+            project_name: String::from("Untitled"),
             revision: 1,
             doc_tabs: ["main.rs", "lib.rs", "Cargo.toml", "README.md"].map(String::from).to_vec(),
             doc_selected: 0,
@@ -390,12 +406,54 @@ impl Gallery {
                 Page::Overlays => self.overlays(ui),
                 Page::Commands => self.commands_page(ui),
                 Page::Tabs => self.tabs_page(ui),
+                Page::Settings => self.settings(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
             self.run(&ctx, &id);
         }
         self.toasts.show(&ctx);
+    }
+
+    fn settings(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        SearchField::new("settings.search", &mut self.settings_query).hint("Search settings").width(280.0).show(ui);
+        ui.add_space(t.space.md);
+        let Gallery { settings_query, launch_at_login, auto_update, appearance, sidebar_icons, project_name, reduce_motion, .. } = self;
+        let reduced = *reduce_motion;
+        egui::ScrollArea::vertical().id_salt("gallery.settings").show(ui, |ui| {
+            ui.set_max_width(560.0);
+            form::filter(ui, "settings", settings_query, |f| {
+                f.section("general", "General", |s| {
+                    s.row("launch", "Launch at login")
+                        .description("Starts the app when you sign in.")
+                        .keywords(&["startup", "boot"])
+                        .bind(launch_at_login, false)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                    s.row("updates", "Check for updates")
+                        .description("Looks for a new version once a day.")
+                        .bind(auto_update, true)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                });
+                f.section("appearance", "Appearance", |s| {
+                    s.row("theme", "Theme")
+                        .description("Light, dark, or follow the system.")
+                        .keywords(&["dark mode", "colors"])
+                        .bind(appearance, 2)
+                        .control(|ui, id, v| Segmented::new(id, "Theme", &["Light", "Dark", "System"], v).show(ui));
+                    s.row("icons", "Sidebar icons")
+                        .bind(sidebar_icons, true)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                });
+            });
+            ui.add_space(t.space.md);
+            let error = project_name.trim().is_empty().then_some("A project needs a name.");
+            Field::new("settings.project", "Project name")
+                .required()
+                .description("Shown in the window title.")
+                .error(error)
+                .show(ui, |ui, _id| ui.add(egui::TextEdit::singleline(project_name).desired_width(280.0)));
+        });
     }
 
     fn record(&mut self, edit: Option<Edit>) {
