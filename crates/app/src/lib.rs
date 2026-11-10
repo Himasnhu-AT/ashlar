@@ -16,6 +16,7 @@
 //! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
+//! | [`frame_log`] | `ASHLAR_FRAME_LOG=FILE`: one JSON line per frame, size-bounded |
 //! | [`perf_warn`] | debug-build stall and same-frame warnings, `ASHLAR_FRAME_BUDGET_MS` |
 //! | [`caret`] | the text caret's blink, run on the wake scheduler; solid after a while without input |
 //! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
@@ -28,6 +29,7 @@ pub mod caret;
 mod clock;
 mod control;
 pub mod driver;
+pub mod frame_log;
 #[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
 mod headless_run;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]

@@ -240,6 +240,20 @@ Debug builds watch their own frames and print one line to stderr, once per site,
 reasons, and how many more frames went over since the previous line. `ASHLAR_PERF_WARN=0`
 silences all of these. A release build with neither variable set installs nothing.
 
+`ASHLAR_FRAME_LOG=FILE` (any build; `Runtime::log_frames(path)` in tests) writes one JSON line
+per frame, for comparing runs:
+
+```json
+{"frame":12,"passes":1,"t":0.204,"wall_ms":3.1,"cpu_ms":2.9,"phases":{"pass_ms":3.1,"ui_ms":2.4},
+ "reasons":["animation"],"commands":[],"input":false,"dropped":0}
+```
+
+`passes` is the pass number within the frame (egui sometimes runs a frame twice; each pass gets a
+line). `cpu_ms` is the UI thread's CPU time, `phases.ui_ms` the runtime's own part (menus, view,
+dialogs), `reasons` the wake reasons and `commands` the commands the frame ran. A background
+thread writes the file; it stops at 64 MiB with a last `{"end": "size limit reached", …}` line, and
+`dropped` counts lines lost if the writer falls behind. Not available on the web.
+
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,

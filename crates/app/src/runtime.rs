@@ -411,6 +411,14 @@ impl<D: Document> Runtime<D> {
         &self.toasts
     }
 
+    /// Write one JSON line per frame to `path` (what `ASHLAR_FRAME_LOG=path` does; see
+    /// [`crate::frame_log`]), from the next frame on. Replaces an earlier log.
+    pub fn log_frames(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let log = crate::frame_log::FrameLog::create(path.as_ref(), crate::frame_log::MAX_BYTES)?;
+        self.probe.get_or_insert_with(crate::perf_warn::Probe::default).set_log(log);
+        Ok(())
+    }
+
     /// Watch frames with these warning meters instead of the environment's (tests).
     #[cfg(test)]
     pub(crate) fn watch_frames(&mut self, warn: crate::perf_warn::PerfWarn) -> crate::perf_warn::Probe {
@@ -605,6 +613,11 @@ impl<D: Document> Runtime<D> {
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
         if let Some(p) = &self.probe {
+            // before egui's pass begins, so the plugin times the first frame too
+            if !self.probe_installed {
+                ctx.add_plugin(p.plugin());
+                self.probe_installed = true;
+            }
             let now = self.wakes.stats();
             p.begin_frame(crate::perf_warn::credited(&self.probe_wakes, &now));
             self.probe_wakes = now;
@@ -708,12 +721,6 @@ impl<D: Document> Runtime<D> {
         let started = now();
         self.launch.telemetry.begin_turn();
         self.ensure_started(&ctx);
-        if let Some(p) = &self.probe
-            && !self.probe_installed
-        {
-            ctx.add_plugin(p.plugin());
-            self.probe_installed = true;
-        }
         self.passes = self.passes.saturating_add(1);
         // timed wakes not yet due when this frame ran (input came first) stay scheduled
         self.wakes.rearm(&ctx);

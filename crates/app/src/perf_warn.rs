@@ -1,4 +1,5 @@
-//! Perf warnings for development builds, and the per-frame probe that feeds them.
+//! Perf warnings for development builds, and the per-frame probe that feeds them and the frame
+//! log ([`crate::frame_log`]).
 //!
 //! In debug builds every app watches its own frames and prints one stderr line, once per site, when:
 //!
@@ -20,6 +21,8 @@ use std::time::Duration;
 
 use egui::epaint::ClippedShape;
 
+use crate::frame_log::FrameLog;
+
 /// Wall time from which a waiting frame counts as a stall.
 pub const STALL_WALL: Duration = Duration::from_millis(8);
 /// A stall's wall time is at least this many times its CPU time.
@@ -32,6 +35,8 @@ const MAX_SITES: usize = 1024;
 /// One egui pass, as the probe measured it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameSample {
+    /// The runtime's frame number (passes of one frame share it).
+    pub frame: u64,
     /// Seconds since the probe started (for the budget line's rate limit).
     pub t: f64,
     /// The pass, from egui's input hook to its output hook.
@@ -195,6 +200,8 @@ pub(crate) fn credited(before: &ashlar_ui::wake::WakeStats, after: &ashlar_ui::w
 #[derive(Default)]
 struct State {
     warn: Option<PerfWarn>,
+    log: Option<FrameLog>,
+    frame: u64,
     epoch: Option<std::time::Instant>,
     /// The runtime started a new frame since the last pass.
     new_frame: bool,
@@ -234,9 +241,26 @@ impl Probe {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A probe with the environment's warnings; `None` when nothing would use it.
+    /// A probe with the environment's warnings and `ASHLAR_FRAME_LOG`; `None` when nothing
+    /// would use it.
     pub(crate) fn from_env() -> Option<Probe> {
-        PerfWarn::from_env().map(Probe::with_warn)
+        let p = PerfWarn::from_env().map(Probe::with_warn);
+        let Some(path) = std::env::var_os("ASHLAR_FRAME_LOG").filter(|v| !v.is_empty()) else { return p };
+        match FrameLog::create(std::path::Path::new(&path), crate::frame_log::MAX_BYTES) {
+            Ok(log) => {
+                let p = p.unwrap_or_default();
+                p.set_log(log);
+                Some(p)
+            }
+            Err(e) => {
+                log::warn!("ASHLAR_FRAME_LOG: cannot write {}: {e}", path.to_string_lossy());
+                p
+            }
+        }
+    }
+
+    pub(crate) fn set_log(&self, log: FrameLog) {
+        self.lock().log = Some(log);
     }
 
     pub(crate) fn with_warn(warn: PerfWarn) -> Probe {
@@ -255,6 +279,7 @@ impl Probe {
     pub(crate) fn begin_frame(&self, reasons: Vec<String>) {
         let mut s = self.lock();
         s.new_frame = true;
+        s.frame = s.frame.saturating_add(1);
         s.reasons = reasons;
     }
 
@@ -298,6 +323,7 @@ impl Probe {
             _ => None,
         };
         let mut sample = FrameSample {
+            frame: s.frame,
             t: s.epoch.map_or(0.0, |e| start.duration_since(e).as_secs_f64()),
             wall: now.duration_since(start),
             cpu,
@@ -326,6 +352,9 @@ impl Probe {
                 s.emitted = s.emitted.saturating_add(1);
                 eprintln!("{line}");
             }
+        }
+        if let Some(log) = &mut s.log {
+            log.frame(&sample);
         }
     }
 }
