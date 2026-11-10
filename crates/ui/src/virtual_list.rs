@@ -26,9 +26,11 @@
 
 use std::ops::Range;
 
-use egui::{Id, Key, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::accesskit::Role as NodeRole;
+use egui::{Event, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
 use crate::automation::{self, Details, Role};
+use crate::selection::Selection;
 use crate::tokens::{self, Tokens};
 
 /// Rows beyond this are not shown (an offset table for 10M rows is 80 MB).
@@ -254,8 +256,13 @@ pub struct VirtualList<'a> {
     scroll_to: Option<usize>,
     max_height: Option<f32>,
     row_label: Option<&'a dyn Fn(usize) -> &'a str>,
+    type_ahead: Option<&'a dyn Fn(usize) -> &'a str>,
+    selection: Option<&'a mut Selection>,
     changed_rows: &'a [usize],
 }
+
+/// Typed letters within this many seconds of each other build one type-ahead prefix.
+pub const TYPE_AHEAD_SECS: f64 = 1.0;
 
 impl<'a> VirtualList<'a> {
     pub fn new(id: &'a str, rows: usize, heights: RowHeights<'a>) -> Self {
@@ -270,6 +277,8 @@ impl<'a> VirtualList<'a> {
             scroll_to: None,
             max_height: None,
             row_label: None,
+            type_ahead: None,
+            selection: None,
             changed_rows: &[],
         }
     }
@@ -307,15 +316,29 @@ impl<'a> VirtualList<'a> {
         self.max_height = Some(h);
         self
     }
-    /// Accessible/automation label of a row (visible rows only).
+    /// Accessible/automation label of a row (visible rows only): the screen reader's name for it.
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.row_label = Some(f);
         self
     }
+    /// Type-ahead: letters typed while the list has the focus, within [`TYPE_AHEAD_SECS`] of
+    /// each other, move the cursor to the next row whose text starts with them (ignoring case).
+    /// `text(row)` is called only on a keystroke, from the cursor on.
+    pub fn type_ahead(mut self, text: &'a dyn Fn(usize) -> &'a str) -> Self {
+        self.type_ahead = Some(text);
+        self
+    }
+    /// Multi-selection owned by the app: click, Shift-click and Shift+arrows, ⌘/Ctrl-click and
+    /// ⌘A update it in place. Its cursor replaces [`selected`](Self::selected); rows from
+    /// [`is_selected`](Self::is_selected) still show as selected.
+    pub fn selection(mut self, selection: &'a mut Selection) -> Self {
+        self.selection = Some(selection);
+        self
+    }
 
-    pub fn show(self, ui: &mut Ui, row: impl FnMut(&mut Ui, Row)) -> ListResponse {
+    pub fn show(mut self, ui: &mut Ui, row: impl FnMut(&mut Ui, Row)) -> ListResponse {
         let base = ui.make_persistent_id(self.id);
-        show_rows(ui, base, &self, LIST, None, row)
+        show_rows(ui, base, &mut self, LIST, None, row)
     }
 }
 
@@ -331,14 +354,66 @@ pub(crate) struct Header<'h> {
 pub(crate) struct Kind {
     pub role: Role,
     pub rows: bool,
+    /// AccessKit roles of the container and of each visible row.
+    pub node: NodeRole,
+    pub item: NodeRole,
 }
 
-pub(crate) const LIST: Kind = Kind { role: Role::List, rows: true };
+pub(crate) const LIST: Kind = Kind { role: Role::List, rows: true, node: NodeRole::List, item: NodeRole::ListItem };
+
+/// The widget id of visible row `i` (its AccessKit node id).
+pub(crate) fn row_id(base: Id, i: usize) -> Id {
+    base.with(("row", i))
+}
+
+/// `s` starts with `prefix`, ignoring case.
+fn starts_with_ci(s: &str, prefix: &str) -> bool {
+    let mut s = s.chars().flat_map(char::to_lowercase);
+    prefix.chars().flat_map(char::to_lowercase).all(|p| s.next() == Some(p))
+}
+
+/// Feed this frame's typed text into the type-ahead buffer and find the row it names.
+fn type_ahead<'t>(ui: &Ui, base: Id, rows: usize, cursor: Option<usize>, text: &dyn Fn(usize) -> &'t str) -> Option<usize> {
+    let typed: String = ui.input(|i| {
+        if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
+            return String::new();
+        }
+        i.events.iter().filter_map(|e| if let Event::Text(t) = e { Some(t.as_str()) } else { None }).collect()
+    });
+    if typed.is_empty() || rows == 0 {
+        return None;
+    }
+    let key = base.with("type_ahead");
+    let now = ui.input(|i| i.time);
+    let (mut buf, last): (String, f64) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_default();
+    if !(now - last).is_finite() || now - last > TYPE_AHEAD_SECS || now < last {
+        buf.clear();
+    }
+    let fresh = buf.is_empty();
+    for c in typed.chars().filter(|c| !c.is_control()) {
+        if (c != ' ' || !buf.is_empty()) && buf.len() < 64 {
+            buf.push(c);
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, (buf.clone(), now)));
+    if buf.is_empty() {
+        return None;
+    }
+    let find = |prefix: &str, from: usize| (0..rows).map(|k| from.saturating_add(k) % rows).find(|&r| starts_with_ci(text(r), prefix));
+    // a new prefix starts after the cursor; a longer one may stay on it
+    let from = cursor.map_or(0, |c| if fresh { c.saturating_add(1) } else { c });
+    find(&buf, from).or_else(|| {
+        // "f", "f", "f" cycles through the rows starting with "f"
+        let mut chars = buf.chars();
+        let first = chars.next()?;
+        chars.all(|c| c == first).then(|| find(first.encode_utf8(&mut [0; 4]), cursor.map_or(0, |c| c.saturating_add(1)))).flatten()
+    })
+}
 
 pub(crate) fn show_rows(
     ui: &mut Ui,
     base: Id,
-    list: &VirtualList<'_>,
+    list: &mut VirtualList<'_>,
     kind: Kind,
     header: Option<Header<'_>>,
     mut row_fn: impl FnMut(&mut Ui, Row),
@@ -364,6 +439,18 @@ pub(crate) fn show_rows(
     let height = list.max_height.filter(|h| h.is_finite() && *h > 0.0).map_or(avail.height(), |h| h.min(avail.height().max(h.min(40.0))));
     let outer = Rect::from_min_size(avail.min, vec2(avail.width(), height.max(t.control_height)));
     let response = ui.interact(outer, base, Sense::focusable_noninteractive());
+    let mut sel = list.selection.take();
+    // nodes are built only while a screen reader (or a test) has AccessKit enabled
+    let accesskit = ui
+        .ctx()
+        .accesskit_node_builder(base, |node| {
+            node.set_role(kind.node);
+            node.set_label(list.id);
+            if sel.is_some() {
+                node.set_multiselectable();
+            }
+        })
+        .is_some();
     let focused = crate::edit::has_keyboard(&response);
     if focused {
         // arrows move the selection, not the focus
@@ -374,9 +461,10 @@ pub(crate) fn show_rows(
     let mut select = None;
     let mut activated = None;
     let rows = layout.rows();
-    let page = ((outer.height() as f64 / layout.span(list.selected.unwrap_or(0)).1.max(1.0)) as usize).max(1);
+    let cursor = sel.as_ref().and_then(|s| s.cursor()).or(list.selected);
+    let page = ((outer.height() as f64 / layout.span(cursor.unwrap_or(0)).1.max(1.0)) as usize).max(1);
     if focused && rows > 0 {
-        let cur = list.selected.map(|s| s.min(rows - 1));
+        let cur = cursor.map(|s| s.min(rows - 1));
         let (up, down, home, end, pgup, pgdn, enter) = ui.input(|i| {
             (
                 i.key_pressed(Key::ArrowUp),
@@ -401,8 +489,17 @@ pub(crate) fn show_rows(
         } else if pgdn {
             Some(cur.map_or(0, |c| (c + page).min(rows - 1)))
         } else {
-            None
+            list.type_ahead.and_then(|text| type_ahead(ui, base, rows, cur, text))
         };
+        if let Some(s) = sel.as_deref_mut() {
+            let (shift, all) = ui.input_mut(|i| (i.modifiers.shift, i.consume_key(Modifiers::COMMAND, Key::A)));
+            if let Some(n) = next {
+                if shift { s.extend_to(n) } else { s.select_only(n) }
+            }
+            if all {
+                s.select_all(rows);
+            }
+        }
         if next.is_some() && next != cur {
             select = next;
         }
@@ -440,7 +537,7 @@ pub(crate) fn show_rows(
     let mut double_clicked = None;
     let mut secondary_clicked = None;
     let mut visible = 0..0;
-    let mut body = ui.new_child(UiBuilder::new().max_rect(body_rect).id_salt("ashlar_list_body"));
+    let mut body = ui.new_child(UiBuilder::new().max_rect(body_rect).id_salt("ashlar_list_body").accessibility_parent(base));
     let out = scroll.show_viewport(&mut body, |ui, viewport| {
         let total = layout.total().min(f32::MAX as f64 / 4.0) as f32;
         ui.set_height(total);
@@ -456,17 +553,39 @@ pub(crate) fn show_rows(
             if h <= 0.0 {
                 continue;
             }
-            let resp = ui.interact(rect, base.with(("row", i)), Sense::click());
-            let selected = list.selected == Some(i) || list.is_selected.is_some_and(|f| f(i));
+            let rid = row_id(base, i);
+            let resp = ui.interact(rect, rid, Sense::click());
+            let selected = sel.as_ref().is_some_and(|s| s.contains(i)) || list.selected == Some(i) || list.is_selected.is_some_and(|f| f(i));
             let hovered = resp.hovered();
             if resp.clicked() || resp.secondary_clicked() {
                 ui.memory_mut(|m| m.request_focus(base));
             }
             if resp.clicked() {
                 clicked = Some(i);
-                if list.selected != Some(i) {
+                if let Some(s) = sel.as_deref_mut() {
+                    let m = ui.input(|inp| inp.modifiers);
+                    if m.shift {
+                        s.extend_to(i);
+                    } else if m.command {
+                        s.toggle(i);
+                    } else {
+                        s.select_only(i);
+                    }
+                }
+                if cursor != Some(i) {
                     select = Some(i);
                 }
+            }
+            if accesskit {
+                ui.ctx().accesskit_node_builder(rid, |node| {
+                    node.set_role(kind.item);
+                    if let Some(f) = label_fn {
+                        node.set_label(f(i));
+                    }
+                    node.set_selected(selected);
+                    node.set_position_in_set(i.saturating_add(1));
+                    node.set_size_of_set(rows);
+                });
             }
             if resp.double_clicked() {
                 double_clicked = Some(i);
@@ -476,7 +595,8 @@ pub(crate) fn show_rows(
                 secondary_clicked = Some(i);
             }
             paint_row_background(ui, &t, rect, i, selected, hovered, list.stripes, focused);
-            let mut child = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(t.space.sm, 0.0))).id_salt(("row", i)));
+            let mut child =
+                ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(t.space.sm, 0.0))).id_salt(("row", i)).accessibility_parent(rid));
             child.set_clip_rect(rect.intersect(ui.clip_rect()));
             if selected {
                 child.visuals_mut().override_text_color = Some(t.selection_text);
@@ -606,8 +726,19 @@ impl<'a> VirtualTable<'a> {
         self
     }
 
+    /// See [`VirtualList::type_ahead`].
+    pub fn type_ahead(mut self, text: &'a dyn Fn(usize) -> &'a str) -> Self {
+        self.list = self.list.type_ahead(text);
+        self
+    }
+    /// See [`VirtualList::selection`].
+    pub fn selection(mut self, selection: &'a mut Selection) -> Self {
+        self.list = self.list.selection(selection);
+        self
+    }
+
     /// `cell(ui, row, column)` paints one visible cell.
-    pub fn show(self, ui: &mut Ui, mut cell: impl FnMut(&mut Ui, usize, usize)) -> TableResponse {
+    pub fn show(mut self, ui: &mut Ui, mut cell: impl FnMut(&mut Ui, usize, usize)) -> TableResponse {
         let t = tokens::current(ui.ctx());
         let base = ui.make_persistent_id(self.list.id);
         let widths_id = base.with("widths");
@@ -682,8 +813,8 @@ impl<'a> VirtualTable<'a> {
         let list = show_rows(
             ui,
             base,
-            &self.list,
-            Kind { role: Role::Table, rows: true },
+            &mut self.list,
+            Kind { role: Role::Table, rows: true, node: NodeRole::Table, item: NodeRole::Row },
             Some(Header { height: header_h, paint: &mut paint_header }),
             |ui, row| {
                 let mut x = row.rect.left();

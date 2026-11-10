@@ -40,6 +40,7 @@ pub mod markdown;
 pub mod motion;
 pub mod printing;
 pub mod search;
+pub mod selection;
 pub mod slider;
 pub mod status_bar;
 pub mod swatches;

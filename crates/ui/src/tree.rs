@@ -15,7 +15,7 @@ use egui::{Rect, Sense, Stroke, Ui, pos2, text::LayoutJob, vec2};
 use crate::automation::{self, Details, Role};
 use crate::cache;
 use crate::tokens::{self, Tokens};
-use crate::virtual_list::{Kind, RowHeights, VirtualList, show_rows};
+use crate::virtual_list::{Kind, RowHeights, VirtualList, row_id, show_rows};
 
 /// Deepest level shown (deeper nodes are not listed; cycles in a model end here too).
 pub const MAX_DEPTH: usize = 128;
@@ -38,6 +38,9 @@ struct FlatRow {
     parent: Option<u64>,
     depth: u16,
     has_children: bool,
+    /// 1-based position among its siblings, and how many siblings there are.
+    pos: u32,
+    siblings: u32,
 }
 
 /// Expansion and selection of one tree (keep it in the app's view state).
@@ -98,7 +101,9 @@ impl TreeState {
                 break;
             }
             let has_children = model.has_children(id);
-            self.flat.push(FlatRow { id, parent, depth, has_children });
+            let pos = u32::try_from(*next).unwrap_or(u32::MAX);
+            let siblings = u32::try_from(nodes.len()).unwrap_or(u32::MAX);
+            self.flat.push(FlatRow { id, parent, depth, has_children, pos, siblings });
             if has_children && self.expanded.contains(&id) && (depth as usize) + 1 < MAX_DEPTH {
                 let mut kids = Vec::new();
                 model.children(Some(id), &mut kids);
@@ -168,7 +173,8 @@ impl<'a> TreeView<'a> {
         let revision = self.revision;
         let tree_id = self.id;
         let expanded = &state.expanded;
-        let out = show_rows(ui, base, &list, Kind { role: Role::Tree, rows: false }, None, |ui, row| {
+        let kind = Kind { role: Role::Tree, rows: false, node: egui::accesskit::Role::Tree, item: egui::accesskit::Role::TreeItem };
+        let out = show_rows(ui, base, &mut list, kind, None, |ui, row| {
             let Some(node) = flat.get(row.index) else { return };
             let x0 = row.rect.left() + node.depth as f32 * indent;
             let arrow = Rect::from_min_size(pos2(x0, row.rect.top()), vec2(indent, row.rect.height()));
@@ -189,6 +195,15 @@ impl<'a> TreeView<'a> {
             });
             let text_pos = pos2(arrow.right() + 2.0, row.rect.center().y - galley.size().y / 2.0);
             ui.painter().galley(text_pos, galley, color);
+            ui.ctx().accesskit_node_builder(row_id(base, row.index), |n| {
+                n.set_label(label);
+                n.set_level(usize::from(node.depth).saturating_add(1));
+                n.set_position_in_set(node.pos as usize);
+                n.set_size_of_set(node.siblings as usize);
+                if node.has_children {
+                    n.set_expanded(is_open);
+                }
+            });
             let id = node.id;
             automation::register_fmt(
                 ui,
