@@ -10,6 +10,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
+  with no window, on a wgpu device with no surface, at the driver's display scale. Without an
+  adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
+  used (`"renderer": "wgpu"` or `"none"`), and grey screenshots now have the screen's size in
+  pixels instead of points.
 - `ashlar-motion` (new crate, rank 0, no dependencies, builds for wasm32): closed-form springs set
   by duration and bounce (`Spring`, never early `settle_time`), `Curve` (spring, cubic-bezier
   tween, decay, instant), `Animated<T>` values whose retargets keep position and velocity and that
