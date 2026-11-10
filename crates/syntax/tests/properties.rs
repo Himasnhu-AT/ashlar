@@ -3,7 +3,7 @@
 //! the `Span` rules, line-by-line highlighting matches whole-text highlighting, and time grows
 //! linearly with input size.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ashlar_syntax::{Builtin, Highlighter, Kind, Lang, Span, State, highlight, highlight_into, highlight_line};
 
@@ -234,12 +234,14 @@ fn adversarial(unit: &str, bytes: usize, newline_every: usize) -> String {
     s
 }
 
+/// The best of five runs, in this thread's CPU time: wall-clock time also counts the time other
+/// processes hold the core, so a loaded machine made a linear lexer look quadratic (IMP-0.8).
 fn time(lang: Lang, text: &str) -> Duration {
     let mut out = Vec::new();
     let mut best = Duration::MAX;
-    for _ in 0..3 {
+    for _ in 0..5 {
         out.clear();
-        let t = Instant::now();
+        let t = cpu_time::ThreadTime::now();
         highlight_into(Some(lang), text, &mut out);
         best = best.min(t.elapsed());
     }
@@ -268,10 +270,15 @@ fn time_is_linear_in_input_size() {
         for lang in Lang::ALL {
             let a = adversarial(unit, small, 0);
             let b = adversarial(unit, big, 0);
-            let (ta, tb) = (time(lang, &a), time(lang, &b));
-            // generous: linear is ~8x; allow 24x plus timer noise
-            let limit = ta.mul_f64(24.0) + Duration::from_millis(5);
-            assert!(tb <= limit, "{} on {unit:?}: {ta:?} for {small} bytes but {tb:?} for {big}", lang.name());
+            // generous: linear is ~8x; allow 24x plus timer noise. Load still slows CPU time a
+            // little (shared caches, clock speed), so a pair gets three tries: a quadratic lexer
+            // fails every one, noise does not repeat.
+            let fits = |(ta, tb): (Duration, Duration)| tb <= ta.mul_f64(24.0) + Duration::from_millis(2);
+            let mut tries = Vec::new();
+            while tries.len() < 3 && !tries.last().copied().is_some_and(fits) {
+                tries.push((time(lang, &a), time(lang, &b)));
+            }
+            assert!(tries.last().copied().is_some_and(fits), "{} on {unit:?}: (time for {small} bytes, time for {big}) {tries:?}", lang.name());
         }
     }
 }
