@@ -22,6 +22,7 @@ use ashlar_fs::{ConfigStore, DirConfig, MemoryConfig, Settings};
 use ashlar_jobs::Jobs;
 use ashlar_store::{Autosave, AutosaveConfig, RecoveryCandidate, Revision};
 use ashlar_ui::automation;
+use ashlar_ui::commands::keys::works_while_typing;
 use ashlar_ui::commands::{CommandPalette, KeymapChange, KeymapEditor, MenuSpec, dispatch, menu_bar};
 use ashlar_ui::devtools;
 use ashlar_ui::dialog::{Dialog, DialogButton, DialogOutcome};
@@ -203,6 +204,12 @@ pub struct Runtime<D: Document> {
     pub(crate) native: bool,
     #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
     native_menu: Option<crate::native_menu::NativeMenu>,
+    /// The OS menu bar was tried (installed and attached, or refused) on the first frame.
+    #[cfg_attr(not(all(feature = "native-menu", any(target_os = "macos", target_os = "windows"))), allow(dead_code))]
+    native_menu_tried: bool,
+    /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
+    /// [`crate::Driver::native_menu_pick`]).
+    native_picks: Vec<String>,
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -270,6 +277,8 @@ impl<D: Document> Runtime<D> {
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
+            native_menu_tried: false,
+            native_picks: Vec::new(),
             launch,
             shared,
         };
@@ -438,9 +447,10 @@ impl<D: Document> Runtime<D> {
         }
         self.apply_effects(ctx);
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
-        for id in self.native_menu.as_ref().map(|m| m.drain()).unwrap_or_default() {
-            self.run_ui_command(ctx, &id, json!({}));
+        if let Some(m) = &self.native_menu {
+            self.native_picks.extend(m.drain());
         }
+        self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
     }
 
@@ -560,7 +570,6 @@ impl<D: Document> Runtime<D> {
                 self.stats.set_first_frame(c.elapsed());
             }
             self.launch.telemetry.first_frame();
-            self.install_native_menu(&ctx);
         }
         self.launch.telemetry.end_turn();
     }
@@ -594,15 +603,52 @@ impl<D: Document> Runtime<D> {
         }
     }
 
-    fn install_native_menu(&mut self, ctx: &egui::Context) {
+    /// After the first frame, install the OS menu bar and attach it to the window. Until it is
+    /// attached (and when that fails) the in-window bar shows.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn install_native_menu(&mut self, ctx: &egui::Context, window: &eframe::Frame) {
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
-        if self.native {
-            self.native_menu = crate::native_menu::NativeMenu::install(&self.cache.infos, ctx);
+        if self.native && self.first_frame_done && !self.native_menu_tried {
+            self.native_menu_tried = true;
+            self.native_menu = crate::native_menu::NativeMenu::install(&self.cache.infos, ctx, window);
+            // the in-window bar goes (or stays) with the next frame
+            wake::wake(ctx, Reason::MENU);
         }
-        let _ = ctx;
+        let _ = (ctx, window);
     }
 
-    fn modal_open(&self) -> bool {
+    /// Run the ids picked in the OS menu bar, under the rules key presses follow: nothing runs
+    /// while a dialog or the palette is open, and while a text field has the keyboard a command
+    /// whose shortcut belongs to the field ([`works_while_typing`]) is skipped. The OS reports a
+    /// click and a key equivalent the same way, so a click on such an item while typing is
+    /// skipped too; text-editing shortcuts have no key equivalent (see `native_menu`), so this
+    /// mostly affects clicks on Undo / Redo while a text field is focused, which then belong to
+    /// the field anyway.
+    fn run_native_picks(&mut self, ctx: &egui::Context) {
+        if self.native_picks.is_empty() {
+            return;
+        }
+        let picks = std::mem::take(&mut self.native_picks);
+        let typing = ctx.egui_wants_keyboard_input();
+        for id in picks {
+            if self.modal_open() {
+                log::debug!("menu pick `{id}` ignored: a dialog is open");
+                continue;
+            }
+            if typing && self.keymap.keys_for(&id).first().is_some_and(|c| !works_while_typing(c)) {
+                log::debug!("menu pick `{id}` ignored: a text field has the keyboard");
+                continue;
+            }
+            self.run_ui_command(ctx, &id, json!({}));
+        }
+    }
+
+    /// Queue an OS menu pick (the headless driver's stand-in for the OS menu bar).
+    pub(crate) fn push_native_pick(&mut self, id: impl Into<String>) {
+        self.native_picks.push(id.into());
+    }
+
+    pub(crate) fn modal_open(&self) -> bool {
         !self.modals.is_empty() || self.palette.is_open() || self.view_error.is_some()
     }
 
@@ -1248,6 +1294,8 @@ impl<D: Document> eframe::App for EframeApp<D> {
             self.rt.stats.record_frame_cpu(d);
         }
         self.rt.ui(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.rt.install_native_menu(ui.ctx(), frame);
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {

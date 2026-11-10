@@ -39,6 +39,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `native-menu`: picks in the OS menu bar no longer run while a dialog (such as "Save changes?") or
+  the command palette is open.
+- ⌘Z / Ctrl+Z in a text field undoes the text, not the document. Text-editing shortcuts (undo,
+  redo, select all, copy, cut, paste) are left to a focused text field (`works_while_typing`);
+  with `native-menu` they have no OS key equivalent, and menu picks of commands bound to them are
+  skipped while typing.
+- `native-menu` on Windows: the menu bar is attached to the window; until it is (or if that
+  fails) the in-window bar shows, so the app never ends up without a menu.
+- `native-menu` on macOS: Quit is in the application menu, and a Window menu has Minimize, Zoom
+  and Bring All to Front.
 - `ashlar-debug`: `trace start <dir>` inside `--port P batch -` (or `--app NAME`) recorded nothing,
   since the trace was kept only in a session file. The trace now lives in that batch run; outside
   a batch, `trace` with `--port`/`--app` is a usage error instead of doing nothing.
