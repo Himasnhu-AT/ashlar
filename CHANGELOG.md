@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+
+- `ashlar-motion` (new crate, rank 0, no dependencies, builds for wasm32): closed-form springs set
+  by duration and bounce (`Spring`, never early `settle_time`), `Curve` (spring, cubic-bezier
+  tween, decay, instant), `Animated<T>` values whose retargets keep position and velocity and that
+  land exactly on their target, `Class` settle thresholds and reduced-motion rules (opacity and
+  colour never overshoot), `MotionPrefs`, motion `tokens` (exits shorter than enters), an
+  OKLab/OKLCH `color` module with gamut mapping, premultiplied mixing and WCAG contrast, and
+  `gesture` helpers (velocity tracker, fling projection, rubber band).
+
 ### Changed
 
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,

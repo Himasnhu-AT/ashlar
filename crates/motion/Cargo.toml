@@ -1,0 +1,17 @@
+[package]
+name = "ashlar-motion"
+description = "Headless motion maths: closed-form springs, curves, animated values, reduced-motion policy, OKLab colour and gesture helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["animation", "spring", "easing", "oklab", "motion"]
+categories = ["gui", "mathematics"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
