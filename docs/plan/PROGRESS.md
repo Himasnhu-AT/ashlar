@@ -21,7 +21,7 @@ and any decision or surprise.
   - `cargo deny check advisories` now passes, with no ignores
 - **IMP-6.8 (gate part):** `cargo xtask wasm` also checks `ashlar-ui` and `ashlar-app` (12 crates), and
   the wasm dead-code warnings are fixed.
-- **CI:** the `names` gate caught "crafted" in the new CHANGELOG line (a substring match for an app
+- **CI:** the `names` gate caught a word in the new CHANGELOG line that contains an app name as a substring (a
   name). The line was reworded in a34be3c.
 - **Wave 3:**
   - wt-wake: IMP-2.14, IMP-2.15, IMP-0.4
