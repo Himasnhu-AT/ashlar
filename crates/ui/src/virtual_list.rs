@@ -546,7 +546,7 @@ pub(crate) fn show_rows(
     let view_h_id = base.with("view_h");
     let mut scroll = egui::ScrollArea::vertical().id_salt(base.with("scroll")).auto_shrink([false, false]).max_height(body_rect.height());
     if let Some(target) = scroll_target {
-        let state = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(base.with("scroll")));
+        let state = egui::scroll_area::State::load(ui.ctx(), scroll_area_id(ui, base));
         let offset = state.map_or(0.0, |s| s.offset.y as f64);
         let view_h: f32 = ui.data(|d| d.get_temp(view_h_id)).unwrap_or(body_rect.height());
         let (top, h) = layout.span(target);
@@ -645,10 +645,8 @@ pub(crate) fn show_rows(
     });
     let view_h = out.inner_rect.height();
     ui.data_mut(|d| d.insert_temp(view_h_id, view_h));
-    if list.fling {
-        // the scroll area's own id (it lives in the body's child ui), for reading its offset
-        ui.data_mut(|d| d.insert_temp(base.with("fling").with("scroll_id"), out.id));
-    }
+    // the scroll area's own id (it lives in the body's child ui), for reading its offset
+    ui.data_mut(|d| d.insert_temp(base.with("scroll_id"), out.id));
     if let Some(o) = offsets {
         ui.data_mut(|d| d.insert_temp(offsets_id, o));
     }
@@ -658,6 +656,12 @@ pub(crate) fn show_rows(
     }
     automation::register_with(ui, &response, list.id, "", kind.role, Details::default());
     ListResponse { response, clicked, double_clicked, secondary_clicked, select, activated, visible }
+}
+
+/// The id the list's scroll area keeps its offset under, as it reported last frame. The area
+/// lives in the body's child ui, so the id is not `ui`'s own id with the salt.
+fn scroll_area_id(ui: &Ui, base: Id) -> Id {
+    ui.data(|d| d.get_temp::<Id>(base.with("scroll_id"))).unwrap_or_else(|| ui.make_persistent_id(base.with("scroll")))
 }
 
 /// A list's drag-to-scroll state between frames.
@@ -685,7 +689,7 @@ fn drive_fling(ui: &Ui, base: Id, layout: &Layout<'_>, body: Rect, scrolling_to:
     let anim = key.with("offset");
     let view_h: f32 = ui.data(|d| d.get_temp(base.with("view_h"))).unwrap_or(body.height()).max(1.0);
     let max = (layout.total().min(f32::MAX as f64 / 4.0) as f32 - view_h).max(0.0);
-    let scroll_id = ui.data(|d| d.get_temp::<Id>(key.with("scroll_id"))).unwrap_or_else(|| ui.make_persistent_id(base.with("scroll")));
+    let scroll_id = scroll_area_id(ui, base);
     let current = egui::scroll_area::State::load(&ctx, scroll_id).map_or(0.0, |s| s.offset.y);
     // the list scrolls by hand itself (egui's own drag-to-scroll would fight it)
     *scroll = scroll.clone().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() });

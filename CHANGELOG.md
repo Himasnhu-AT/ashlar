@@ -312,6 +312,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui` lists: `scroll_to` read the scroll offset under the wrong id, so it never scrolled
+  up to a row above the view and moved the list for a row already in view. It now reads the scroll
+  area's own id, as the fling does.
 - `ashlar-ui` accessibility: lists, tables and trees take a `.label(text)` that screen readers
   announce; table cells are `Cell` nodes and the header row holds `ColumnHeader` nodes (with sort
   direction); resize handles, tree disclosure arrows and the fling drag surface no longer show up as
