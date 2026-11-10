@@ -27,7 +27,7 @@ pub mod caret;
 mod clock;
 mod control;
 pub mod driver;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
 mod headless_run;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
 mod native_menu;
