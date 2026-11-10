@@ -62,9 +62,9 @@ a task's state.
 | IMP-4.1 | Fix `trace` with `--port`/`--app` | done (5ef4d81) |
 | IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (MCP tools done 550ce99; process numbers in `app.stats` still todo) |
 | IMP-4.3 | Control-protocol doc drift | done (1084a69) |
-| IMP-4.4 | Headless wgpu renderer for `Driver` | doing (wt-headless) |
-| IMP-4.5 | In-process `.ui` scripts on virtual time | todo |
-| IMP-4.6 | `--headless --snap --tree` flags | todo |
+| IMP-4.4 | Headless wgpu renderer for `Driver` | done (c2d7270) |
+| IMP-4.5 | In-process `.ui` scripts on virtual time | doing (wt-uiscript) |
+| IMP-4.6 | `--headless --snap --tree` flags | doing (wt-uiscript) |
 | IMP-4.7 | `app.clock` | todo |
 | IMP-4.8 | App-level golden snapshots | todo |
 | IMP-4.9 | Named scenes | todo |

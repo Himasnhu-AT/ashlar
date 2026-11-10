@@ -3,6 +3,21 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/headless merged (CI green)
+
+- **IMP-4.4:** `Driver::with_renderer(runtime, Renderer::wgpu())`
+  - A wgpu device with no surface: a software adapter first, predictable renderer options.
+  - Screenshots go through the existing offscreen path, and textures are uploaded after every frame
+    (`offscreen::apply_textures`).
+  - With no adapter, on wasm, or when a render fails, the image is grey and the reply says
+    `"renderer": "none"`. Device creation runs under `catch_unwind`.
+  - Grey screenshots are now sized in pixels, not points: this fixes the wrong size at scales other
+    than 1.
+  - Tests are in `crates/app/tests/headless_render.rs`: real pixels, the button's colour and label,
+    byte-identical repeats, size at 2×.
+  - `perf_headless_screenshot` (2560×1600, including PNG and base64): 26 ms release.
+- wt-uiscript started IMP-4.5 and 4.6.
+
 ## 2026-11-10: wt/wake merged (CI green)
 
 | Metric (release) | Before | After IMP-2.14 | After IMP-2.15 |
