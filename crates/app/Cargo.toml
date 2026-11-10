@@ -23,6 +23,8 @@ accesskit = ["eframe/accesskit"]
 headless = []
 # The app's commands in the macOS / Windows menu bar (ashlar-native + muda) instead of the window.
 native-menu = ["ashlar-native/menu"]
+# A tray / status-bar icon (`App::tray`): its menu runs commands, a click shows the window.
+tray = ["ashlar-native/tray"]
 # Crash, performance and usage telemetry through ashlar-telemetry: always on when the app
 # configures an endpoint (no notice, no switches); TRACER_DISABLED turns it off.
 telemetry = ["dep:ashlar-telemetry"]

@@ -1,5 +1,5 @@
-//! The parts of the API that must run on the main thread (the menu bar, Dock progress, Apple
-//! event handlers), exercised on the real main thread: this test has no harness, so `main` is
+//! The parts of the API that must run on the main thread (the menu bar, the tray, Dock progress,
+//! Apple event handlers), exercised on the real main thread: this test has no harness, so `main` is
 //! the process's main thread. Nothing is shown on screen: the app never runs its event loop.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -48,6 +48,28 @@ fn progress() {
     set_badge(None).unwrap();
 }
 
+#[cfg(all(target_os = "macos", feature = "tray"))]
+fn tray() {
+    use ashlar_native::menu::{Item, MenuNode, MenuSpec, Submenu};
+    use ashlar_native::tray::{Icon, Tray, TraySpec};
+
+    let menu = |label: &str| {
+        MenuSpec::new(vec![Submenu::new("Tray", vec![Item::new("show", label).into(), MenuNode::Separator, Item::new("quit", "Quit").into()])])
+    };
+    let icon = Icon { rgba: vec![255; 16 * 16 * 4], width: 16, height: 16 };
+    // With the menu bar's events routed too, a tray item must not reach the bar.
+    let tray = Tray::new(TraySpec::new("test", "ashlar test", icon.clone(), menu("Show")).template(true), ashlar_native::no_waker())
+        .expect("tray on the main thread");
+    tray.set_tooltip("still here").unwrap();
+    tray.set_icon(&icon).unwrap();
+    tray.set_menu(&menu("Show window")).unwrap();
+    assert!(tray.events().is_empty());
+    assert!(Tray::new(TraySpec::new("test", "dup", icon.clone(), menu("x")), ashlar_native::no_waker()).is_err(), "one tray per id");
+    drop(tray);
+    // the id is free again once dropped
+    drop(Tray::new(TraySpec::new("test", "again", icon, menu("x")), ashlar_native::no_waker()).unwrap());
+}
+
 fn main() {
     #[cfg(all(target_os = "macos", feature = "menu"))]
     menu();
@@ -55,5 +77,7 @@ fn main() {
     open_files();
     #[cfg(all(target_os = "macos", feature = "progress"))]
     progress();
+    #[cfg(all(target_os = "macos", feature = "tray"))]
+    tray();
     println!("main-thread checks passed");
 }

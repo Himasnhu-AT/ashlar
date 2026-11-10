@@ -124,7 +124,7 @@ a task's state.
 | IMP-6.8 | Web target gate | doing (gate and warnings done 766bdf8; web example and DOM error todo) |
 | IMP-6.9 | Honest launch timing and ready signal | done (wt/launch, 4356a62) |
 | IMP-6.10 | Open command-line document after first frame | done (wt/launch, 4356a62) |
-| IMP-6.11 | Tray / status item | todo |
+| IMP-6.11 | Tray / status item | done (wt/shell) |
 | IMP-6.12 | Rich clipboard, secret copy | done (42baf45) |
 | IMP-6.13 | `ashlar-i18n` | done (186ecf4) |
 | IMP-6.14 | macOS shell shims | todo |

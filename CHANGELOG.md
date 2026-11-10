@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_native::tray` (feature `tray`, IMP-6.11): a tray / status-bar icon with a menu built from
+  a `MenuSpec` (macOS status bar, Windows notification area, Linux StatusNotifierItem over D-Bus
+  with no GTK). `Tray::new(TraySpec { id, tooltip, icon, template, menu }, waker)`, `events()`
+  (`Activate`, `Menu(id)`), `set_tooltip` / `set_icon` / `set_menu`; dropping it removes the icon.
+  The menu bar, trays and later popups now share one process-wide menu-event router, so a tray's
+  items never reach the menu bar. `App::tray(spec)` (feature `tray` of `ashlar-app`) runs the
+  chosen item's command and shows the window on a click.
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down

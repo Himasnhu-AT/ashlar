@@ -261,6 +261,11 @@ pub struct Runtime<D: Document> {
     /// The OS menu bar was tried (installed and attached, or refused) on the first frame.
     #[cfg_attr(not(all(feature = "native-menu", any(target_os = "macos", target_os = "windows"))), allow(dead_code))]
     native_menu_tried: bool,
+    /// The tray icon ([`App::tray`](crate::App::tray)), installed with the OS menu bar.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray: Option<ashlar_native::tray::Tray>,
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray_tried: bool,
     /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
@@ -353,6 +358,10 @@ impl<D: Document> Runtime<D> {
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
             native_menu_tried: false,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray: None,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             inbox,
@@ -595,6 +604,8 @@ impl<D: Document> Runtime<D> {
         if let Some(m) = &self.native_menu {
             self.native_picks.extend(m.drain());
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        self.drain_tray(ctx);
         self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
     }
@@ -877,7 +888,34 @@ impl<D: Document> Runtime<D> {
             // the in-window bar goes (or stays) with the next frame
             wake::wake(ctx, Reason::MENU);
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.tray_tried {
+            self.tray_tried = true;
+            if let Some(spec) = self.shared.tray.clone() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::tray::Tray::new(spec, std::sync::Arc::new(move || wake.wake())) {
+                    Ok(t) => self.tray = Some(t),
+                    Err(e) => log::warn!("no tray icon: {e}"),
+                }
+            }
+        }
         let _ = (ctx, window);
+    }
+
+    /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    fn drain_tray(&mut self, ctx: &egui::Context) {
+        let Some(t) = &self.tray else { return };
+        for e in t.events() {
+            match e {
+                ashlar_native::tray::TrayEvent::Menu(id) => self.native_picks.push(id),
+                ashlar_native::tray::TrayEvent::Activate => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+        }
     }
 
     /// Run the ids picked in the OS menu bar, under the rules key presses follow: nothing runs
