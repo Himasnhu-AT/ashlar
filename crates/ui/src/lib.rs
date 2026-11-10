@@ -35,6 +35,7 @@ pub mod fonts;
 pub mod icons;
 pub mod idle;
 pub mod layout;
+pub mod list;
 pub mod markdown;
 pub mod motion;
 pub mod printing;
