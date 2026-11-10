@@ -41,7 +41,8 @@ fn visible_rows_only_are_list_items_with_position_and_name() {
     let items = h.query_all_by_role(Role::ListItem).count();
     assert!(items > 10 && items < 60, "{items} row nodes");
     let list = h.get_by_role(Role::List);
-    assert_eq!(list.accesskit_node().label().as_deref(), Some("files"));
+    // the automation id is not a name a screen reader should read out
+    assert_eq!(list.accesskit_node().label().as_deref(), None);
     assert!(list.accesskit_node().is_multiselectable());
     let row = h.get_by_role_and_label(Role::ListItem, "row 3");
     let node = row.accesskit_node();

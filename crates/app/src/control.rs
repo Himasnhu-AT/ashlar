@@ -6,7 +6,7 @@ use ashlar_control::{DEBUG_METHODS, Request, UI_METHODS, UiHandler};
 use ashlar_ui::devtools;
 
 /// Extra methods the windowed runtime answers itself.
-pub const RUNTIME_METHODS: &[&str] = &["app.stats", "app.logs"];
+pub const RUNTIME_METHODS: &[&str] = &["app.stats", "app.logs", ashlar_control::APP_CLOCK];
 
 /// Collects requests while `ashlar_control::handle` runs; the runtime answers them right after
 /// with access to the whole app.

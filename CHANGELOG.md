@@ -9,6 +9,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
+  the running app opens the first file with `file.open` (a dirty document asks to save first) and
+  comes to the front. Desktop only.
+- Files from Finder (macOS `odoc` / `GURL` Apple events: a double-click, a drop on the Dock icon)
+  open with `file.open` while the app runs and at launch.
+- `App::accept_drops(bool)` (on by default when the app sets a format or a file extension): the
+  first dropped file with a known extension opens with `file.open`; the others reach the view as
+  `Cx::dropped_files()`. `Driver::drop_files` and `Driver::forward_launch` test both paths.
+- `app.clock` control method: `{pause: true}`, `{step_ms}` (one frame that much later) and
+  `{resume: true}` hold the time an `ashlar-app` window's frames see, so an animation can be
+  screenshotted or measured at an exact moment; input still runs while paused and resume does not
+  jump. `ashlar-debug clock pause|step <ms>|resume` (also in `.ui` scripts) and the MCP tool
+  `ui_clock` send it; `ashlar_control::{APP_CLOCK, ClockOp}` parse it.
 
 - `examples/hello`, the smallest ashlar app, and a `cargo xtask bench` step that reports its
   stripped release size as `hello_stripped_bytes`.
@@ -34,6 +47,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   in process, with no port or thread. `sleep` and `wait N` let virtual time pass, so two runs give
   the same steps. `ashlar-debug` gains the `Transport` trait and `run_script` to run scripts
   against any target.
+- `ashlar-ui`: `cache::label` (a `ui.label` with its galley cached under a key: no layout and
+  no `String` on steady frames), `cache::row_label` (the same, not selectable, for text inside a
+  clickable row) and `cache::button_text` (a button's text as a cached galley).
+- `ashlar_ui::tokens::set_mode_animated`: switches theme with an OKLab crossfade, surfaces over
+  0.4 s and text leading at half that; primary and secondary text keep 3:1 on the panel at every
+  frame, and once settled the theme's own visuals are back and nothing more runs. `Tokens::mix`
+  blends two token sets.
+- `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
+  by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
+- `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
+  its exit settles, then `None`), entering and leaving along a token pair as an opacity.
+- `ashlar_ui::code_view::CodeView`: a read-only code view with virtualized lines (O(visible) per
+  frame), a line-number gutter, optional wrapping, mouse selection, select all and copy, search
+  marks and syntax colours from `SyntaxTheme::from_tokens`. Line galleys are cached per line and
+  revision; lexer states are computed lazily. Automation `<id>.line.<n>` for visible lines only;
+  AccessKit document and paragraphs. About 0.06 ms per scrolled frame at 100k lines.
+- `ashlar_ui::markdown`: fenced code blocks in a known language are syntax-coloured.
+- `ashlar-syntax` (new crate, rank 0, no dependencies, builds for wasm32): syntax highlighting
+  with hand-written, linear-time lexers for Rust, TypeScript/JavaScript, Go, C, C++, Java, C#,
+  Python, shell, SQL, JSON, TOML, YAML, HTML (with script and style), CSS, Markdown (fenced code
+  in its language) and diffs. `highlight` returns ordered byte ranges that cover the input;
+  `highlight_line` carries a `State` from line to line for incremental views; `lang_for_path`;
+  a `Highlighter` trait so a bigger engine can plug in. About 0.5 ms per 1,000 lines of Rust.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
@@ -76,12 +112,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
+  0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
+  change at once when egui's `animation_time` is 0, which reduced motion sets. Visual regression
+  tests now run with reduced motion.
+- `ashlar_ui::dialog`: on open the backdrop fades in and the panel fades in while growing from
+  97 %; when the app stops showing a dialog, its last frame fades out a little faster without
+  taking input. No growing under reduced motion; hit testing uses the resting layout.
+- `ashlar_ui::docking`: the drop preview moves quickly (0.1 s) from one drop target to the next
+  while a tab is dragged, and appears in place when a drag first shows it.
+- `ashlar_ui::toasts`: a new toast fades and slides 8 pt in, a dismissed one slides back out and
+  is painted until its exit settles, and the toasts behind it glide into the gap. Toasts queued
+  before the stack is first shown appear at once; hit testing and automation rects use the resting
+  layout; reduced motion keeps only the fade.
 - `Tokens::with_accent` derives hover, focus, selection and selection text in OKLCH (same hue,
   lightness steps, capped chroma) instead of sRGB mixing, flips `text.on_accent` dark when white
   falls below 4.5:1 and pushes the focus ring to 3:1 on every surface. The dark theme's accent is
   darker (`#276ee0`, was `#3b82f6`) so white text on it reaches 4.5:1; its derived states follow.
 - The status bar's indeterminate progress holds still (and asks for no frames) under reduced
   motion, and its sweep follows the motion time scale.
+- Fewer allocations per frame (IMP-2.16): a frame woken only by a caret blink in the notes app
+  makes 550 allocations instead of 958, a scroll frame 345 instead of 472, a keystroke 1,935
+  instead of 3,720. The menu bar and the notes list draw cached galleys, and an edit that changes
+  no command's enabled state no longer rebuilds every command's info and the menus.
 - `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
   asks for a `document` frame: the frame that ran it already shows the change. The runtime also
   stops copying and comparing the view state and formatting the window title on frames that did
@@ -140,9 +193,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `Curve::Tween` started from rest follows its easing exactly: a linear tween is linear (it used to
+  start at zero velocity, so a 2 s linear 0→100 tween read ≈12 at 0.525 s instead of 26.25).
+  Retargets mid-motion still keep velocity continuous.
 - Telemetry: a run whose shutdown wait ran out no longer takes back its own unsent session folder (and
   other leftover ones) as its worker finishes, so a courier delivers them instead of seeing them as in
   use until the process exits.
+- `notes` example: a click on a note's title in the list selects the note (the title was
+  selectable text that took the click).
 - `native-menu`: picks in the OS menu bar no longer run while a dialog (such as "Save changes?") or
   the command palette is open.
 - ⌘Z / Ctrl+Z in a text field undoes the text, not the document. Text-editing shortcuts (undo,

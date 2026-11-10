@@ -160,6 +160,10 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   `raise: false` for the same purpose.
 - `logs -n 50`, `stats` and `devtools open` show the app's recent log lines, its frame and job
   statistics, and the in-app inspector.
+- `clock pause`, `clock step 16.7` and `clock resume` hold the app's animation clock: pause, take
+  screenshots or `get rect` at an exact moment, step one frame at a time, then resume with no jump.
+  Input still works while paused. The same lines work in `.ui` scripts. See
+  [control-protocol.md](control-protocol.md#ui-methods) for what else stands still.
 - `call <method> '{json}'` sends any control method as is.
 
 ## Agents (MCP)
@@ -168,8 +172,8 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 `ui_get`, `ui_wait`, `ui_scroll_into_view`, `ui_highlight` and `screenshot` (with `target`,
 `annotate`, `highlight`, `pad` and `raise`) when the app reports these methods in `app.version`,
 along with `ui_inspect`, `ui_drag`, `ui_scroll`, `ui_key`, `ui_type`, `ui_menu_list`,
-`ui_menu_invoke` and `ui_set`. `app_stats {reset?}` and `app_logs {limit?, level?}` are the CLI's
-`stats` and `logs`. The full table with every argument is in
+`ui_menu_invoke` and `ui_set`. `app_stats {reset?}`, `app_logs {limit?, level?}` and
+`ui_clock {pause?, step_ms?, resume?}` are the CLI's `stats`, `logs` and `clock`. The full table with every argument is in
 [control-protocol.md](control-protocol.md#mcp-tools). Targets are ref strings (`"@e3"`,
 `"id=file.save"`) or objects. `ui_snapshot` returns the outline as text and adds the element list
 as JSON when you pass `elements: true`. A typical loop is: snapshot, act on a ref, wait, then

@@ -22,7 +22,7 @@ use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ashlar_motion::color::Rgba;
-use ashlar_motion::{Animatable, Animated, Class, Curve, Edges, MotionPrefs, tokens};
+use ashlar_motion::{Animatable, Animated, Class, Curve, Edges, MotionPrefs, Pair, tokens};
 use egui::{Color32, Id, IdMap, Rect, pos2};
 
 use crate::wake::{Reason, wake};
@@ -51,6 +51,18 @@ pub fn f32(ctx: &egui::Context, id: Id, target: f32, curve: impl Into<Curve>) ->
 pub fn opacity(ctx: &egui::Context, id: Id, visible: bool) -> f32 {
     let target = if visible { 1.0 } else { 0.0 };
     value(ctx, id, target, Class::Opacity, tokens::SNAP.pick(visible))
+}
+
+/// Keeps an item drawn while it leaves. Returns `Some(progress)` (0 = gone, 1 = fully shown)
+/// while the item should be drawn and `None` once it has left. It comes in along `pair.enter`
+/// and leaves along `pair.exit`, as an opacity: it never overshoots, and under reduced motion it
+/// takes the short fade. The first call for an id returns `Some(1.0)` when shown and `None` when
+/// hidden (nothing animates on first show); to animate an item's arrival anyway (a new toast),
+/// [`set`] its id to `0.0_f32` first.
+pub fn presence(ctx: &egui::Context, id: Id, shown: bool, pair: Pair) -> Option<f32> {
+    let target = if shown { 1.0_f32 } else { 0.0 };
+    let (p, settled) = step(ctx, id, Op::To { target, class: Class::Opacity, curve: pair.pick(shown).into() });
+    if !shown && settled { None } else { Some(p.clamp(0.0, 1.0)) }
 }
 
 /// A colour animated in premultiplied OKLab (no muddy midpoints, no dark fringe when fading to
@@ -405,6 +417,21 @@ mod tests {
     }
 
     #[test]
+    fn linear_tween_from_rest_is_linear_over_egui_time() {
+        let ctx = egui::Context::default();
+        let curve = Curve::tween(2.0, ashlar_motion::Easing::LINEAR);
+        pass(&ctx, 0.0, |c| f32(c, id(), 0.0, curve));
+        let t0 = 1.0;
+        for k in 0..=150 {
+            let t = t0 + k as f64 * DT;
+            let x = pass(&ctx, t, |c| f32(c, id(), 100.0, curve));
+            let want = (100.0 * (t - t0) / 2.0).min(100.0) as f32;
+            // one frame of slack for where the clock anchors the start
+            assert!((x - want).abs() <= 100.0 * DT as f32 / 2.0 + 1e-3, "t={t}: {x} vs {want}");
+        }
+    }
+
+    #[test]
     fn first_call_returns_target_and_requests_nothing() {
         let ctx = egui::Context::default();
         let v = pass(&ctx, 0.0, |c| f32(c, id(), 42.0, tokens::SNAP.enter));
@@ -560,5 +587,53 @@ mod tests {
             v = pass(&ctx, k as f64 * DT, |c| value(c, id(), 0.0_f32, Class::Gesture, tokens::SETTLE.enter));
         }
         assert_eq!(v, 0.0);
+    }
+    #[test]
+    fn presence_keeps_a_leaving_item_drawn_until_it_settles() {
+        let ctx = egui::Context::default();
+        let pid = Id::new("p");
+        // first show: no animation either way
+        assert_eq!(pass(&ctx, 0.0, |c| presence(c, pid, true, tokens::SNAP)), Some(1.0));
+        assert_eq!(pass(&ctx, 0.0, |c| presence(c, Id::new("hidden"), false, tokens::SNAP)), None);
+        assert_eq!(requests(&ctx), 0);
+        let mut last = 1.0;
+        let mut gone = None;
+        for k in 1..120 {
+            match pass(&ctx, k as f64 * DT, |c| presence(c, pid, false, tokens::SNAP)) {
+                Some(p) => {
+                    assert!(p <= last, "progress went back up at frame {k}");
+                    last = p;
+                }
+                None => {
+                    gone = Some(k);
+                    break;
+                }
+            }
+        }
+        let k = gone.expect("the item left");
+        assert!(k > 3, "left too soon ({k} frames)");
+        let flat = requests(&ctx);
+        for j in 1..=100 {
+            assert_eq!(pass(&ctx, (k + j) as f64 * DT, |c| presence(c, pid, false, tokens::SNAP)), None);
+        }
+        assert_eq!(requests(&ctx), flat);
+    }
+
+    #[test]
+    fn presence_enters_from_zero_when_seeded() {
+        let ctx = egui::Context::default();
+        let pid = Id::new("p");
+        let first = pass(&ctx, 0.0, |c| {
+            set(c, pid, 0.0_f32);
+            presence(c, pid, true, tokens::SNAP)
+        });
+        assert_eq!(first, Some(0.0));
+        let mut last = 0.0;
+        for k in 1..120 {
+            let p = pass(&ctx, k as f64 * DT, |c| presence(c, pid, true, tokens::SNAP)).expect("shown");
+            assert!(p >= last);
+            last = p;
+        }
+        assert_eq!(last, 1.0);
     }
 }

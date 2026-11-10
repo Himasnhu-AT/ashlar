@@ -445,7 +445,6 @@ pub(crate) fn show_rows(
         .ctx()
         .accesskit_node_builder(base, |node| {
             node.set_role(kind.node);
-            node.set_label(list.id);
             if sel.is_some() {
                 node.set_multiselectable();
             }

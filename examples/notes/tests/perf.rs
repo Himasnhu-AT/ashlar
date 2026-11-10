@@ -231,10 +231,11 @@ fn perf_live_resize() {
 // ---------------------------------------------------------------------------------------------
 
 /// Allocations a frame woken only by a timer (the caret blink of a focused field, nothing else
-/// changing) may make. Measured at 954 on 2026-11-10 (a bare egui frame with a focused field makes
-/// 29; about 470 are the visible list rows, the rest the app's chrome), plus 5%. Lower it as
-/// IMP-2.x removes per-frame work.
-const IDLE_WAKE_FRAME_ALLOCS: usize = 1_000;
+/// changing) may make. Measured at 550 on 2026-11-10 after IMP-2.16 (954 before; a bare egui frame
+/// with a focused field makes 29; most of the rest is inside egui's own widgets: about 7 per list
+/// row, 17 per button, the text field, panels and tessellation), plus 5%. Lower it as IMP-2.x
+/// removes per-frame work.
+const IDLE_WAKE_FRAME_ALLOCS: usize = 578;
 
 /// Wheel `steps` times over the list, 120 pt per step, reversing every 150 steps.
 fn scroll_list(d: &mut Driver<Notes>, steps: u32) {

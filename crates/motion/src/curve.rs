@@ -159,6 +159,8 @@ impl Curve {
 
 /// `x0 + Δ·ease(u) + w·h(t)`, where `h = t(1 − u)²` carries the start velocity away by the end
 /// (`h(0) = 0, h'(0) = 1, h(d) = h'(d) = 0`) and `w` makes the start velocity exactly `v0`.
+/// From rest (`v0 == 0`) there is no motion to continue, so `w = 0` and the tween follows its
+/// easing exactly, like a CSS transition (a linear tween is linear).
 fn tween(duration: f32, easing: Easing, x0: f32, v0: f32, target: f32, t: f32) -> (f32, f32) {
     if t >= duration {
         return (target, 0.0);
@@ -167,7 +169,7 @@ fn tween(duration: f32, easing: Easing, x0: f32, v0: f32, target: f32, t: f32) -
     let t = f64::from(t);
     let u = t / d;
     let delta = f64::from(target) - f64::from(x0);
-    let w = f64::from(v0) - delta * f64::from(easing.slope(0.0)) / d;
+    let w = if v0 == 0.0 { 0.0 } else { f64::from(v0) - delta * f64::from(easing.slope(0.0)) / d };
     let uf = u as f32;
     let x = f64::from(x0) + delta * f64::from(easing.ease(uf)) + w * t * (1.0 - u) * (1.0 - u);
     let v = delta * f64::from(easing.slope(uf)) / d + w * (1.0 - u) * (1.0 - 3.0 * u);

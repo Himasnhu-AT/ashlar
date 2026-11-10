@@ -35,6 +35,7 @@ use crate::app::{App, Error, SetupFn, Shared, ViewFn};
 use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
+use crate::open::Inbox;
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
@@ -58,6 +59,12 @@ pub struct Launch {
     pub control_port: Option<u16>,
     pub(crate) guard: Option<LaunchGuard>,
     pub(crate) telemetry: Telemetry,
+    /// Files from the OS and later launches, set up before the window opened.
+    pub(crate) inbox: Option<Inbox>,
+    /// Held while this is the app's only instance ([`App::single_instance`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code, reason = "held for its drop, which stops listening")]
+    pub(crate) instance: Option<ashlar_native::single_instance::PrimaryGuard>,
 }
 
 /// Which file dialog a command asked for.
@@ -80,6 +87,7 @@ pub struct Cx<'a, D: Document> {
     /// App settings (debounced, saved in the config folder).
     pub settings: &'a mut Settings,
     queued: &'a mut Vec<(String, Value)>,
+    dropped: &'a [PathBuf],
     ctx: egui::Context,
 }
 
@@ -109,6 +117,12 @@ impl<D: Document> Cx<'_, D> {
 
     pub fn ctx(&self) -> &egui::Context {
         &self.ctx
+    }
+
+    /// Files dropped on the window this frame that the runtime did not open as the document
+    /// (another extension, or a second document). Empty with [`App::accept_drops`] off.
+    pub fn dropped_files(&self) -> &[PathBuf] {
+        self.dropped
     }
 
     /// Run a command after the view returns (menus, buttons). Errors are shown as toasts.
@@ -204,6 +218,8 @@ pub struct Runtime<D: Document> {
     picker: Option<FilePicker>,
     passes: u64,
     caret: Caret,
+    /// `app.clock`: the time frames see (pause, step, resume).
+    clock: crate::clock::Clock,
     /// Running in a real window (not the headless driver): OS menus may be installed.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
@@ -216,6 +232,14 @@ pub struct Runtime<D: Document> {
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
     os_prefs: prefs::OsPrefs,
+    /// Files from the OS and later launches.
+    inbox: Inbox,
+    /// Paths dropped since the last [`Runtime::logic`] (when drops are accepted).
+    drops: Vec<PathBuf>,
+    /// Dropped files left for the view this frame ([`Cx::dropped_files`]).
+    dropped: Vec<PathBuf>,
+    /// A file from outside waiting for open dialogs to close; a newer one replaces it.
+    open_next: Option<PathBuf>,
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -227,7 +251,8 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 impl<D: Document> Runtime<D> {
-    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, launch: Launch) -> Self {
+    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, mut launch: Launch) -> Self {
+        let inbox = launch.inbox.take().unwrap_or_default();
         let mut session = Session::new(Arc::clone(&shared.format));
         session.set_windowed(true);
         session.telemetry = launch.telemetry.clone();
@@ -280,12 +305,17 @@ impl<D: Document> Runtime<D> {
             picker: None,
             passes: 0,
             caret: Caret::default(),
+            clock: crate::clock::Clock::default(),
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
             native_menu_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
+            inbox,
+            drops: Vec::new(),
+            dropped: Vec::new(),
+            open_next: None,
             launch,
             shared,
         };
@@ -408,6 +438,7 @@ impl<D: Document> Runtime<D> {
         }
         self.started = true;
         devtools::install(ctx);
+        self.inbox.set_ctx(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
         // OS accent, contrast and reduced motion; tokens the setup below installs win
         let (light, dark) = self.os_prefs.startup(ctx);
@@ -462,6 +493,7 @@ impl<D: Document> Runtime<D> {
             }
         }
         self.apply_effects(ctx);
+        self.open_from_outside(ctx);
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
         if let Some(m) = &self.native_menu {
             self.native_picks.extend(m.drain());
@@ -487,7 +519,8 @@ impl<D: Document> Runtime<D> {
         raw.dropped_files.clear();
         raw.viewport_id = egui::ViewportId::ROOT;
         // eframe hands no time to a hidden window: go on from the last pass on the wall clock
-        let last = ctx.input(|i| i.time);
+        // (host time: `app.clock` turns it into the app's in `raw_input_hook`)
+        let last = self.clock.host_time();
         raw.time = Some(time.unwrap_or_else(|| self.created.map_or(last, |c| c.elapsed().as_secs_f64())).max(last));
         if raw.screen_rect.is_none()
             && let Some(r) = raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.inner_rect)
@@ -511,13 +544,62 @@ impl<D: Document> Runtime<D> {
         Some(out)
     }
 
-    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
-    /// frame to the wake reasons that were due. (Injected agent input is handed to egui by the
-    /// debugger's plugin.)
+    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): set the
+    /// frame's time (`app.clock` may hold it), then credit the frame to the wake reasons that were
+    /// due. (Injected agent input is handed to egui by the debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.clock.begin_frame(raw);
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
+        // on the web a dropped file has no path to open: the view reads it from egui's input
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.shared.accept_drops {
+            self.drops.extend(raw.dropped_files.iter().map(|f| f.path().to_path_buf()));
+        }
+    }
+
+    /// Open what the OS, a later launch or a drop asked for: one document at a time, after any
+    /// open dialog, through `file.open` (a dirty document asks to save first). A forwarded launch
+    /// brings the window to the front.
+    fn open_from_outside(&mut self, ctx: &egui::Context) {
+        let (items, focus) = self.inbox.drain();
+        if focus {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        let mut files = items.into_iter().filter_map(|item| match item {
+            ashlar_native::open_files::Opened::File(p) => Some(p),
+            ashlar_native::open_files::Opened::Url(u) => {
+                log::info!("asked to open {u}: URLs are not handled");
+                None
+            }
+        });
+        if let Some(p) = files.next() {
+            self.open_next = Some(p);
+        }
+        let skipped = files.count();
+        if skipped > 0 {
+            log::info!("{skipped} more file(s) to open ignored: one document at a time");
+        }
+        if !self.drops.is_empty() {
+            let (open, rest) = crate::open::split_drops(std::mem::take(&mut self.drops), &self.shared.extensions);
+            if open.is_some() {
+                self.open_next = open;
+            }
+            self.dropped = rest;
+        }
+        if self.modal_open() {
+            return;
+        }
+        if let Some(p) = self.open_next.take() {
+            self.run_ui_command(ctx, "file.open", json!({"path": p.to_string_lossy()}));
+        }
+    }
+
+    /// Queue a later launch's arguments, as [`App::single_instance`] receives them (tests).
+    pub(crate) fn forwarded(&self, f: ashlar_native::single_instance::Forwarded) {
+        self.inbox.forward(f);
     }
 
     /// Draw the frame.
@@ -554,6 +636,7 @@ impl<D: Document> Runtime<D> {
             }
         }
         self.draw_view(ui);
+        self.dropped.clear();
         for (id, params) in std::mem::take(&mut self.queued) {
             self.run_ui_command(&ctx, &id, params);
         }
@@ -591,14 +674,14 @@ impl<D: Document> Runtime<D> {
     }
 
     fn draw_view(&mut self, ui: &mut egui::Ui) {
-        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, .. } = self;
+        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, .. } = self;
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(err) = view_error.as_deref() {
                 ui.centered_and_justified(|ui| ui.label(format!("This view stopped after an internal error:\n{err}")));
                 return;
             }
             let Some(view) = view.as_mut() else { return };
-            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, ctx: ui.ctx().clone() };
+            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone() };
             let r = catch_unwind(AssertUnwindSafe(|| view(ui, &mut cx)));
             if let Err(p) = r {
                 let msg = crash::last_panic().map_or_else(|| panic_text(p.as_ref()), |r| format!("{} ({})", r.message, r.location));
@@ -675,6 +758,15 @@ impl<D: Document> Runtime<D> {
         if self.cache.key == Some(key) {
             return;
         }
+        // only the document changed (typing): what the menus show moves only if a command's
+        // enabled state did, and checking that is far cheaper than rebuilding every info
+        if let Some(old) = self.cache.key
+            && (old.1, old.2, old.3) == (key.1, key.2, key.3)
+            && self.enabled_unchanged()
+        {
+            self.cache.key = Some(key);
+            return;
+        }
         let mut infos = self.shared.registry.infos(&self.session);
         for info in &mut infos {
             let keys = self.keymap.keys_for(&info.id);
@@ -688,6 +780,16 @@ impl<D: Document> Runtime<D> {
         if let Some(m) = &mut self.native_menu {
             m.update(&self.cache.infos);
         }
+    }
+
+    /// Every command's enabled state (and reason) is what the cached infos say.
+    fn enabled_unchanged(&self) -> bool {
+        let specs = self.shared.registry.specs();
+        specs.len() == self.cache.infos.len()
+            && specs.iter().zip(&self.cache.infos).all(|(spec, info)| match (spec.enabled)(&self.session) {
+                Ok(()) => info.enabled,
+                Err(reason) => !info.enabled && info.disabled_reason.as_deref() == Some(reason.as_str()),
+            })
     }
 
     /// Run a command the user chose (menu, key, palette, button): errors become toasts.
@@ -859,7 +961,8 @@ impl<D: Document> Runtime<D> {
     }
 
     fn tick_storage(&mut self, ctx: &egui::Context) {
-        let t = ctx.input(|i| i.time).max(0.0);
+        // host time: saves go on while `app.clock` holds the app's time
+        let t = self.clock.host_time().max(ctx.input(|i| i.time)).max(0.0);
         let now = Duration::from_secs_f64(t);
         // a pending save asks for its own frame through the settings' wake hook
         if let Err(e) = self.settings.tick(now) {
@@ -1183,6 +1286,27 @@ impl<D: Document> Runtime<D> {
                 }
                 req.ok(v);
             }
+            ashlar_control::APP_CLOCK => {
+                let op = match ashlar_control::ClockOp::from_params(&p) {
+                    Ok(op) => op,
+                    Err(e) => return req.fail(e),
+                };
+                let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
+                match op {
+                    ashlar_control::ClockOp::Read => {}
+                    ashlar_control::ClockOp::Pause => self.clock.pause(now, predicted_dt),
+                    ashlar_control::ClockOp::Step { ms } => {
+                        self.clock.step(now, predicted_dt, ms / 1000.0);
+                        // the frame at the new time
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                    ashlar_control::ClockOp::Resume => {
+                        self.clock.resume();
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                }
+                req.ok(json!({"paused": self.clock.is_paused(), "time": self.clock.time(now)}));
+            }
             "app.logs" => {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200).min(crate::logging::RING_LINES as u64) as usize;
                 let level = p.get("level").and_then(Value::as_str).and_then(crate::logging::level_of).unwrap_or(log::Level::Trace);
@@ -1397,6 +1521,17 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     {
         eprintln!("{}: could not create its folders: {e}", shared.name);
     }
+    // before anything else: a second launch hands its files to the first and exits
+    let inbox = Inbox::default();
+    let mut instance = None;
+    if shared.single_instance {
+        let launch_args: Vec<String> = std::env::args().skip(1).collect();
+        match ashlar_native::single_instance::SingleInstance::new(&shared.name).claim(&launch_args, inbox.forwarder()) {
+            Ok(ashlar_native::single_instance::Launch::Forwarded) => return Ok(()),
+            Ok(ashlar_native::single_instance::Launch::Primary(g)) => instance = Some(g),
+            Err(e) => eprintln!("{}: running without the single-instance check: {e}", shared.name),
+        }
+    }
     let env_var = format!("{}_LOG", shared.env_prefix);
     let filter = crate::logging::filter_from_env(&[env_var.as_str(), "RUST_LOG"], "info");
     let level = filter.max_level();
@@ -1427,7 +1562,11 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     if safe_mode {
         log::warn!("starting in safe mode ({previous:?})");
     }
-    let launch = Launch { safe_mode, previous: Some(previous), open: args.open, control_port: args.control, guard, telemetry };
+    // main thread, before the event loop: Finder's launch documents arrive as Apple events
+    #[cfg(target_os = "macos")]
+    inbox.listen_os();
+    let launch =
+        Launch { safe_mode, previous: Some(previous), open: args.open, control_port: args.control, guard, telemetry, inbox: Some(inbox), instance };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(shared.title.clone())
@@ -1458,5 +1597,26 @@ mod tests {
         assert_eq!(human_age(600), "10 min");
         assert_eq!(human_age(7200), "2 h");
         assert_eq!(human_age(300_000), "3 days");
+    }
+
+    #[test]
+    fn menus_follow_enabled_state_but_typing_rebuilds_nothing() {
+        let mut rt = crate::App::<i64>::new("runtimetest", "0.0.0").runtime();
+        let undo = |rt: &Runtime<i64>| rt.cache.infos.iter().find(|i| i.id == "app.undo").map(|i| i.enabled);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "nothing to undo yet");
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(true), "an edit enables Undo");
+        assert_eq!(rt.cache.menu.find("app.undo").map(|i| i.enabled), Some(true), "and the menu shows it");
+        let seq = rt.cache.seq;
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(rt.cache.seq, seq, "another edit changes no command's state: the infos stay");
+        assert_eq!(rt.cache.key.map(|k| k.0), Some(rt.session().revision()), "and are current");
+        rt.session_mut().undo();
+        rt.session_mut().undo();
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "undoing everything disables Undo again");
     }
 }
