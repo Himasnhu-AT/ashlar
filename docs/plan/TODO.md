@@ -29,7 +29,7 @@ a task's state.
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | done for size (4e91720); idle memory probe moved to IMP-2.10 |
 | IMP-1.8 | Launch to first present | done (wt/launch, 4356a62) |
 | IMP-1.10 | Allocation counter is per process: `perf_allocs_idle_wake_frame` fails when perf tests run in parallel (1,823 vs 272 alone). `cargo xtask bench` uses one thread, so the gate holds; make the count per thread or serialise | doing (wt-flakes) |
-| IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
+| IMP-1.9 | Complete the head-to-head table | doing (audit-bench; owner approved building the reference framework) |
 
 ## Phase 2: performance
 | Id | Task | Status |
@@ -87,7 +87,7 @@ a task's state.
 | IMP-5.1 | Basic controls kit | done (10ee980) |
 | IMP-5.2 | Toast v2 | done (aaf674c) |
 | IMP-5.3 | List and tree accessibility and selection | done (b2775e5, fix 9bc416c) |
-| IMP-5.4 | Markdown v2 | doing (wt-md2) |
+| IMP-5.4 | Markdown v2 | done (f88d718, 68be0d6) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | done (4473fe0, c7311b4) |
 | IMP-5.6 | Diff view | done (b0de2c5) |
 | IMP-5.7 | Chat kit | done (ae5d998) |
@@ -103,7 +103,7 @@ a task's state.
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |
 | IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | done (329a6bc) |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
-| IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | doing (wt-md2) |
+| IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | done (a3aff34) |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
 | IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
 
@@ -112,19 +112,19 @@ a task's state.
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
-| IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo (markdown labels done by wt-md2, pending merge) |
+| IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo (markdown labels done 68be0d6; rest open) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
 | IMP-6.4 | Window placement and viewport hook | done (2f334d7) |
 | IMP-6.5 | Parented, non-blocking file dialogs | done (0f57748) |
 | IMP-6.6 | Notifications | done (77beeae; Windows compile-checked only) |
-| IMP-6.7 | Dock Quit, logout and shutdown | doing (wt-native2) |
+| IMP-6.7 | Dock Quit, logout and shutdown | done (wt/native2, 80b2135) |
 | IMP-6.8 | Web target gate | doing (gate and warnings done 766bdf8; web example and DOM error todo) |
 | IMP-6.9 | Honest launch timing and ready signal | done (wt/launch, 4356a62) |
 | IMP-6.10 | Open command-line document after first frame | done (wt/launch, 4356a62) |
 | IMP-6.11 | Tray / status item | todo |
-| IMP-6.12 | Rich clipboard, secret copy | doing (wt-native2) |
+| IMP-6.12 | Rich clipboard, secret copy | done (42baf45) |
 | IMP-6.13 | `ashlar-i18n` | done (186ecf4) |
 | IMP-6.14 | macOS shell shims | todo |
 | IMP-6.15 | Drag-out and native context menus | todo |

@@ -3,6 +3,31 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/md2 and wt/native2 merged (CI green); head-to-head approved
+
+- **Agents stalled:** the owner noticed nothing was running. wt-md2, wt-native2 and wt-flakes had gone
+  idle saying "waiting for CI" with no gate running (`memgate status`: no jobs). Their branches were
+  merged by the integrator, and the full gate was run on `imp`. Lesson: check `memgate status` and
+  the branch state instead of trusting "waiting" messages.
+- **IMP-5.4 / 5.18:** markdown v2.
+  - Links: focusable, Link role, a click target on every wrapped row.
+  - Tables: content-sized, with an "N more rows" footer.
+  - Builder: `.on_task`, `.find` (highlights and counts matches), `.streaming(true)` (repairs unclosed
+    markers), `.revision`, and `show_with_revision`.
+  - Labels are wired into `UiLabels` (`ui.markdown.*`, English and German).
+  - `inline()` is now linear (`md_long_paragraph_parse` 0.4–0.7 ms).
+  - `markdown_snapshot.rs` checks the drawing with no GPU.
+  - `md_static_allocs` went from 108 to 102.
+- **IMP-6.7:** `native::session_end` (macOS `applicationShouldTerminate:`, Windows end-session
+  messages). A pure quit state machine in the runtime has unit tests; the OS hooks were not run on
+  a real logout.
+- **IMP-6.12:** `set_rich`/`rich`, `set_secret` (cleared only if the clipboard still holds our text),
+  a long-lived clipboard on a worker thread on Linux, and an HTML sanitizer on read.
+- CI on the merge failed only on the format check in `clipboard.rs` and `session_end.rs`. Fixed in
+  2cf658a.
+- **IMP-1.9:** the owner approved building and running the reference framework. audit-bench is
+  measuring both on this Mac.
+
 ## 2026-11-10: wt/a11yfix merged (CI green)
 
 - **IMP-5.21:** no `Unknown` nodes remain in any gallery outline.
