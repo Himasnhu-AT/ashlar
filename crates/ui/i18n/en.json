@@ -58,5 +58,6 @@
   "ui.markdown.copy": "Copy",
   "ui.markdown.copied": "Copied",
   "ui.markdown.code": "code",
-  "ui.markdown.more_rows": "{n} more rows"
+  "ui.markdown.more_rows": "{n} more rows",
+  "ui.controls.loading": "Loading"
 }

@@ -1,5 +1,6 @@
 //! Everyday controls drawn from the design [`tokens`](crate::tokens): text buttons, a switch, a
-//! segmented control and radio group, badges and keycaps, progress bars, circles and spinners.
+//! segmented control and radio group, badges and keycaps, progress bars, circles and spinners,
+//! and skeleton rows.
 //!
 //! Every control:
 //! - takes its state by reference (`&mut bool`, `&mut usize`) or as a value and reports what the
@@ -37,12 +38,14 @@ mod badge;
 mod button;
 mod choice;
 mod progress;
+mod skeleton;
 mod switch;
 
 pub use badge::{Badge, Keycap, Tone};
 pub use button::{Button, IconPainter, Size, Variant};
 pub use choice::{RadioGroup, Segmented};
 pub use progress::{Progress, Spinner};
+pub use skeleton::Skeleton;
 pub use switch::Switch;
 
 use std::hash::Hash;

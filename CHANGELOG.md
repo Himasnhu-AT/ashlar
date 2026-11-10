@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Controls follow-ups (IMP-5.19): `controls::Skeleton` placeholder rows (pulse while visible,
+  static and frame-free under reduced motion, a busy progress node named by the new
+  `UiLabels::controls.loading`, English and German); `content::Accordion` keeps at most one
+  section open; `Segmented::disabled` and `RadioGroup::disabled` dim options that cannot be
+  picked and that the keys skip; the `⇧` keycap is drawn as an outlined arrow (the default fonts
+  lack the glyph). Visual regression adds reference-painter pairs for the progress circle and the
+  spinner's static poses.
 - Toasts (IMP-5.17): F6 moves keyboard focus into the newest toast (its first action, else its
   close button) and back to where it was; `Toasts::take_actions_where` drains only the actions a
   caller accepts; `App::run_toast_actions(true)` makes the runtime run a clicked toast action

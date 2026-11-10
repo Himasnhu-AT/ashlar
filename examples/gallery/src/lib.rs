@@ -12,8 +12,8 @@ use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use ashlar::ui::chat::{Approval, ChatMessage, ChatRole, Composer, Message, ToolCard, ToolStatus, Transcript};
 use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
-use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
-use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
+use ashlar::ui::content::{Accordion, Banner, Card, Collapsible, EmptyState};
+use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Skeleton, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::form::{self, Field};
@@ -176,6 +176,10 @@ pub struct Gallery {
     pub view: usize,
     pub quality: usize,
     pub align: usize,
+    /// The plan picker, whose last option is disabled.
+    pub plan: usize,
+    /// The open section of the help accordion.
+    pub faq_open: Option<usize>,
     pub reduce_motion: bool,
     pub exporting: bool,
     pub button_clicks: u64,
@@ -286,6 +290,8 @@ impl Gallery {
             view: 1,
             quality: 1,
             align: 0,
+            plan: 0,
+            faq_open: None,
             reduce_motion: false,
             exporting: false,
             button_clicks: 0,
@@ -681,6 +687,9 @@ impl Gallery {
                     RadioGroup::new("controls.quality", "Quality", &["Draft", "Good", "Best"], &mut self.quality).show(ui);
                     ui.add_space(t.space.xl);
                     RadioGroup::new("controls.align", "Alignment", &["Left", "Center", "Right"], &mut self.align).horizontal(true).show(ui);
+                    ui.add_space(t.space.xl);
+                    // an option the current account cannot pick
+                    Segmented::new("controls.plan", "Plan", &["Free", "Team", "Enterprise"], &mut self.plan).disabled(&[2]).show(ui);
                 });
             });
             section(ui, &t, "Badges and keycaps", |ui| {
@@ -700,6 +709,9 @@ impl Gallery {
                         Keycap::chord("controls.keys.palette", chord, Platform::current()).show(ui);
                     }
                     Keycap::new("controls.keys.escape", "Esc").show(ui);
+                    if let Ok(chord) = Chord::parse("Mod+Shift+Z") {
+                        Keycap::chord("controls.keys.mac", chord, Platform::Mac).show(ui);
+                    }
                 });
             });
             section(ui, &t, "Progress", |ui| {
@@ -713,6 +725,8 @@ impl Gallery {
                     Progress::circle("controls.progress.circle.busy", "Connecting", None).reduced_motion(reduced).show(ui);
                     Spinner::new("controls.spinner", "Loading").reduced_motion(reduced).show(ui);
                 });
+                ui.add_space(t.space.sm);
+                Skeleton::rows("controls.skeleton", 3).width(260.0).reduced_motion(reduced).show(ui);
             });
             section(ui, &t, "Rolling numbers", |ui| {
                 ui.horizontal(|ui| {
@@ -804,6 +818,21 @@ impl Gallery {
                     .action
                 {
                     self.button_clicks += 1;
+                }
+            });
+            section(ui, &t, "Accordion (one section open)", |ui| {
+                let mut acc = Accordion::new("content.faq", &mut self.faq_open);
+                for (i, (title, body)) in [
+                    ("Where are my files kept?", "In the folder you chose when you created the project."),
+                    ("Can I work offline?", "Yes. Changes sync when the connection is back."),
+                    ("How do I export?", "File, Export, then pick a format."),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    acc.section(ui, i, title, |ui| {
+                        ui.label(body);
+                    });
                 }
             });
         });

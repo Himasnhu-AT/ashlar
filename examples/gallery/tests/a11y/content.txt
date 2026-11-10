@@ -42,4 +42,8 @@ Window
     Label value="No files yet"
     Label value="Drop files here, or create one to get started."
     Button "New file"
+  Label value="Accordion (one section open)"
+  Button "Where are my files kept?" [collapsed]
+  Button "Can I work offline?" [collapsed]
+  Button "How do I export?" [collapsed]
   ScrollBar

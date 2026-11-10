@@ -107,6 +107,20 @@ pub struct UiLabels {
     pub print: PrintLabels,
     pub search: SearchLabels,
     pub markdown: MarkdownLabels,
+    pub controls: ControlLabels,
+}
+
+/// Words of the everyday [`controls`](crate::controls) that do not take one from the caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ControlLabels {
+    /// The accessible name of [`Skeleton`](crate::controls::Skeleton) rows.
+    pub loading: String,
+}
+
+impl Default for ControlLabels {
+    fn default() -> Self {
+        ControlLabels { loading: "Loading".into() }
+    }
 }
 
 /// The search field's and the command palette's words.
@@ -187,6 +201,7 @@ pub const KEYS: &[&str] = &[
     "ui.markdown.copied",
     "ui.markdown.code",
     "ui.markdown.more_rows",
+    "ui.controls.loading",
 ];
 
 /// Adds the built-in catalogs to `i18n` (add the app's own catalogs after, to override keys).
@@ -291,6 +306,7 @@ impl UiLabels {
                 *field = text.to_owned().into();
             }
         }
+        set(&mut l.controls.loading, "ui.controls.loading");
         l
     }
 }

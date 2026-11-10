@@ -161,3 +161,35 @@ fn content_components_idle_without_frames() {
     }
     assert_eq!(Scheduler::of(&h.ctx).stats().requests(), before);
 }
+
+#[test]
+fn an_accordion_keeps_at_most_one_section_open() {
+    let mut h = Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+        |ui, open: &mut Option<usize>| {
+            let mut acc = Accordion::new("faq", open);
+            for (i, title) in ["Shipping", "Returns", "Billing"].into_iter().enumerate() {
+                acc.section(ui, i, title, |ui| {
+                    ui.label(format!("Body {i}"));
+                });
+            }
+        },
+        None,
+    );
+    automation::install(&h.ctx);
+    h.run();
+    assert_eq!(automation::find(&h.ctx, "faq.1").unwrap().role, Role::Disclosure);
+    let click = |h: &mut Harness<'_, Option<usize>>, id: &str| {
+        let p = automation::find(&h.ctx, id).unwrap_or_else(|| panic!("{id}")).center();
+        crate::test_support::click(h, p);
+        h.run();
+    };
+    click(&mut h, "faq.0");
+    assert_eq!(*h.state(), Some(0));
+    click(&mut h, "faq.2");
+    assert_eq!(*h.state(), Some(2), "opening one closes the other");
+    assert!(automation::find(&h.ctx, "faq.0").is_some_and(|e| e.selected == Some(false)));
+    assert!(h.query_by_label("Body 0").is_none());
+    assert!(h.query_by_label("Body 2").is_some());
+    click(&mut h, "faq.2");
+    assert_eq!(*h.state(), None, "closing the open one leaves all closed");
+}

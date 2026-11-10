@@ -1,5 +1,5 @@
-//! Small content components: [`EmptyState`], [`Banner`] (a live region), [`Card`] and
-//! [`Collapsible`].
+//! Small content components: [`EmptyState`], [`Banner`] (a live region), [`Card`],
+//! [`Collapsible`] and [`Accordion`] (at most one section open).
 //!
 //! Like the [`controls`](crate::controls) they take every string from the caller, register a
 //! dotted automation id (`<id>`, plus `<id>.action` and `<id>.dismiss` for their buttons), fill
@@ -32,7 +32,7 @@ mod empty_state;
 
 pub use banner::{Banner, BannerOutput};
 pub use card::Card;
-pub use collapsible::{Collapsible, CollapsibleOutput};
+pub use collapsible::{Accordion, Collapsible, CollapsibleOutput};
 pub use empty_state::{EmptyState, EmptyStateOutput};
 
 #[cfg(test)]
