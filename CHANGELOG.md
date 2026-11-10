@@ -14,6 +14,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   launch opens the window there, sizes bounded and a window left on no monitor moved back
   (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
   (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
+- Perf warnings in debug builds (`ashlar_app::perf_warn`): one stderr line per site when a frame
+  waits (≥ 8 ms wall at ≥ 4× its CPU time; names the command or wake reason) or when 60 identical
+  frames in a row are drawn for non-input wakes. `ASHLAR_FRAME_BUDGET_MS=N` (any build) prints at
+  most one line a second for frames over `N` ms with the phase split; `ASHLAR_PERF_WARN=0` silences.
+- `ASHLAR_FRAME_LOG=FILE` and `Runtime::log_frames(path)`: one JSON line per frame (wall and
+  UI-thread CPU time, phases, wake reasons, commands run, pass number), written by a background
+  thread and capped at 64 MiB with a final `"end"` line (`ashlar_app::frame_log`).
+- `app.stats` (and the MCP `app_stats` tool) reports `process`: `footprint_bytes`, `peak_bytes`,
+  `cpu_s` and `threads` (`ProcessStats`; `null` where the platform cannot say).
 - `ashlar-native` notifications: stable ids (`Notification::id`; the same id replaces a shown
   notification), `notify::show` (returns the id), `notify::remove`, `notify::on_click` (a
   `Receiver<Click>` with the notification's `info` map), `silent`, and `notify::set_app_identity`.

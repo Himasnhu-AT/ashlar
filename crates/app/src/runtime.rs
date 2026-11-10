@@ -234,6 +234,13 @@ pub struct Runtime<D: Document> {
     persisted_view: Option<u64>,
     picker: Option<FilePicker>,
     passes: u64,
+    /// Times each pass for the perf warnings (`None`: nothing uses it).
+    probe: Option<crate::perf_warn::Probe>,
+    probe_installed: bool,
+    /// `app.stats` → `process`.
+    process: crate::stats::ProcessProbe,
+    /// The wake counts at the probe's previous frame (their growth is the frame's reasons).
+    probe_wakes: ashlar_ui::wake::WakeStats,
     caret: Caret,
     /// `app.clock`: the time frames see (pause, step, resume).
     clock: crate::clock::Clock,
@@ -324,6 +331,10 @@ impl<D: Document> Runtime<D> {
             persisted_view: None,
             picker: None,
             passes: 0,
+            probe: crate::perf_warn::Probe::from_env(),
+            probe_installed: false,
+            process: crate::stats::ProcessProbe::default(),
+            probe_wakes: ashlar_ui::wake::WakeStats::default(),
             caret: Caret::default(),
             clock: crate::clock::Clock::default(),
             native: false,
@@ -412,6 +423,22 @@ impl<D: Document> Runtime<D> {
 
     pub fn toasts(&self) -> &Toasts {
         &self.toasts
+    }
+
+    /// Write one JSON line per frame to `path` (what `ASHLAR_FRAME_LOG=path` does; see
+    /// [`crate::frame_log`]), from the next frame on. Replaces an earlier log.
+    pub fn log_frames(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let log = crate::frame_log::FrameLog::create(path.as_ref(), crate::frame_log::MAX_BYTES)?;
+        self.probe.get_or_insert_with(crate::perf_warn::Probe::default).set_log(log);
+        Ok(())
+    }
+
+    /// Watch frames with these warning meters instead of the environment's (tests).
+    #[cfg(test)]
+    pub(crate) fn watch_frames(&mut self, warn: crate::perf_warn::PerfWarn) -> crate::perf_warn::Probe {
+        let p = crate::perf_warn::Probe::with_warn(warn);
+        self.probe = Some(p.clone());
+        p
     }
 
     /// Frame-time statistics (`app.stats`).
@@ -600,6 +627,16 @@ impl<D: Document> Runtime<D> {
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
+        if let Some(p) = &self.probe {
+            // before egui's pass begins, so the plugin times the first frame too
+            if !self.probe_installed {
+                ctx.add_plugin(p.plugin());
+                self.probe_installed = true;
+            }
+            let now = self.wakes.stats();
+            p.begin_frame(crate::perf_warn::credited(&self.probe_wakes, &now));
+            self.probe_wakes = now;
+        }
         // on the web a dropped file has no path to open: the view reads it from egui's input
         #[cfg(not(target_arch = "wasm32"))]
         if self.shared.accept_drops {
@@ -747,10 +784,15 @@ impl<D: Document> Runtime<D> {
             wake::wake(&ctx, Reason::DOCUMENT);
         }
         self.caret.end(&ctx);
-        if let Some(s) = started {
-            let took = s.elapsed();
+        let took = started.map(|s| s.elapsed());
+        if let Some(took) = took {
             self.stats.record(took);
             self.launch.telemetry.frame(took);
+        }
+        self.process.tick();
+        let ran = self.session.take_ran();
+        if let Some(p) = &self.probe {
+            p.end_ui(took, ran);
         }
         if !self.first_frame_done {
             self.first_frame_done = true;
@@ -1440,6 +1482,7 @@ impl<D: Document> Runtime<D> {
                     o.insert("jobs".into(), self.jobs.to_json());
                     o.insert("log_lines_dropped".into(), json!(crate::logging::dropped()));
                     o.insert("wakes".into(), serde_json::to_value(self.wakes.stats()).unwrap_or(Value::Null));
+                    o.insert("process".into(), serde_json::to_value(self.process.read()).unwrap_or(Value::Null));
                 }
                 if p.get("reset").and_then(Value::as_bool) == Some(true) {
                     self.stats.reset_window();
