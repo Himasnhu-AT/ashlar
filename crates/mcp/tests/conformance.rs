@@ -180,13 +180,14 @@ struct FakeRuntime;
 
 impl UiHandler for FakeRuntime {
     fn methods(&self) -> Vec<String> {
-        vec!["ui.inspect".into(), "app.stats".into(), "app.logs".into()]
+        vec!["ui.inspect".into(), "app.stats".into(), "app.logs".into(), "app.clock".into()]
     }
     fn handle(&mut self, req: Request) {
         let p = req.params().clone();
         match req.method() {
             "app.stats" => req.ok(json!({"frames": 3, "passes": 4, "params": p})),
             "app.logs" => req.ok(json!({"lines": [{"unix": 1, "level": "WARN", "target": "t", "message": "m"}], "params": p})),
+            "app.clock" => req.ok(json!({"paused": true, "time": 1.5, "params": p})),
             "ui.inspect" => req.ok(json!({"elements": []})),
             _ => req.unknown(),
         }
@@ -205,7 +206,11 @@ fn app_stats_and_app_logs_are_listed_only_when_the_app_answers_them() {
         }
     });
     let mut server = McpServer::new(Backend::Remote(Client::connect(app.port(), dir.path()).unwrap()), options());
-    assert_eq!(tool_names(&mut server), ["list_commands", "describe_command", "execute", "batch", "ui_inspect", "app_stats", "app_logs"]);
+    assert_eq!(tool_names(&mut server), ["list_commands", "describe_command", "execute", "batch", "ui_inspect", "app_stats", "app_logs", "ui_clock"]);
+    let r = call(&mut server, 1, "ui_clock", json!({"step_ms": 16.7}));
+    assert_eq!(r["isError"], false, "{r}");
+    let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v, json!({"paused": true, "time": 1.5, "params": {"step_ms": 16.7}}));
     let r = call(&mut server, 2, "app_stats", json!({"reset": true}));
     assert_eq!(r["isError"], false, "{r}");
     let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -223,12 +228,12 @@ fn app_stats_and_app_logs_are_listed_only_when_the_app_answers_them() {
     app_thread(rx);
     let mut server = McpServer::new(Backend::Remote(Client::connect(app.port(), dir.path()).unwrap()), options());
     let names = tool_names(&mut server);
-    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs" || n == "ui_clock"), "{names:?}");
     let r = call(&mut server, 4, "app_stats", json!({}));
     assert_eq!(r["isError"], true, "the app says it has no such method: {r}");
     drop(app);
     let names = tool_names(&mut headless(ToolMode::Fixed));
-    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs" || n == "ui_clock"), "{names:?}");
 }
 
 #[test]

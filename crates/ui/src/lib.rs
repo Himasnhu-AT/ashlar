@@ -24,6 +24,7 @@
 pub mod automation;
 pub mod buttons;
 pub mod cache;
+pub mod code_view;
 pub mod commands;
 pub mod content;
 pub mod controls;

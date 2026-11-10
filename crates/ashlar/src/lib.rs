@@ -4,6 +4,11 @@
 //! palette, a CLI and an MCP server, background jobs, native OS features, egui components, and a
 //! runtime with crash safety, agent control and telemetry. Start with [`prelude`] and
 //! [`app::App`]; the `notes` example is a complete app.
+//!
+//! Features: `accesskit` (on: assistive technology sees the window), `headless` (on: `--headless`
+//! runs the app with no window, `.ui` scripts and snapshots), `native-menu` (the commands in the
+//! macOS / Windows menu bar) and `telemetry` (crash, performance and usage reports).
+//! `default-features = false` drops the first two for a smaller binary.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub use ashlar_app as app;

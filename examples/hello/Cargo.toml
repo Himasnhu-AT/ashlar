@@ -1,0 +1,18 @@
+[package]
+name = "ashlar-example-hello"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The smallest ashlar app: an empty document, a heading and a checkbox (binary size baseline)"
+
+[lints]
+workspace = true
+
+[features]
+# The umbrella crate's defaults; `--no-default-features` measures the smallest app.
+default = ["ashlar/default"]
+
+[dependencies]
+# default features off here (the workspace entry keeps them on) so the size probe can drop them
+ashlar = { package = "ashlar-rs", path = "../../crates/ashlar", default-features = false }
+serde = { workspace = true }

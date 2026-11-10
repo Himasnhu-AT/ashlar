@@ -147,6 +147,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linear_is_identity() {
+        for e in [Easing::LINEAR, Easing::cubic_bezier(0.0, 0.0, 1.0, 1.0), Easing::cubic_bezier(0.3, 0.3, 0.7, 0.7)] {
+            for i in 0..=100 {
+                let u = i as f32 / 100.0;
+                assert!((e.ease(u) - u).abs() < 1e-5, "{e:?} {u}");
+                assert!((e.slope(u) - 1.0).abs() < 1e-3, "{e:?} {u}");
+            }
+        }
+    }
+
+    #[test]
     fn ends_and_monotone() {
         for e in [Easing::LINEAR, Easing::EASE, Easing::EASE_IN, Easing::EASE_OUT, Easing::EASE_IN_OUT] {
             assert!(e.ease(0.0).abs() < 1e-6);

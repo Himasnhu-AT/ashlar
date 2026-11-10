@@ -198,6 +198,7 @@ impl<'a> Button<'a> {
             let pressed = live && response.is_pointer_button_down_on();
             let hovered = live && response.hovered();
             let (fill, stroke, text) = colors(&t, self.variant, hovered, pressed);
+            let fill = crate::tokens::state_color(ui.ctx(), response.id, fill);
             let radius = CornerRadius::same(t.radius.md);
             let painter = dimmed(ui, !self.enabled);
             painter.rect(rect, radius, fill, stroke, StrokeKind::Inside);

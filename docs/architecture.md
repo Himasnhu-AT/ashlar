@@ -21,6 +21,7 @@ layers` and `cargo xtask wasm` enforce this; the table below must match
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
 | 0 | `ashlar-obfuscate` | Compile-time string obfuscation: build-time values kept out of a strings dump of the binary | yes | yes |
 | 0 | `ashlar-motion` | Motion maths: closed-form springs, curves, animated values that keep their velocity on retarget, reduced-motion rules per value class, motion tokens, OKLab/OKLCH colour, gesture helpers | yes | yes |
+| 0 | `ashlar-syntax` | Syntax highlighting: linear-time lexers for 18 languages, line states for incremental views, a `Highlighter` trait for bigger engines | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
@@ -39,7 +40,7 @@ layers` and `cargo xtask wasm` enforce this; the table below must match
 | 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | yes |
 | 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | yes |
 | 7 | `ashlar-rs` | Umbrella crate (imported as `ashlar`): re-exports the others behind features | no | – |
-| 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
+| 8 | `ashlar-example-gallery`, `ashlar-example-hello`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
 
 Adding a crate: give it the lowest rank its dependencies allow, add it to `LAYERS` and to this
@@ -82,6 +83,11 @@ bench: <metric> <value> <unit>        e.g. bench: edit_100k 812 ns
 
 Units ending in `/s` are higher-is-better; all others lower-is-better. A test that prints no
 `bench:` line is measured by wall time, which is noisy, so prefer explicit metrics.
+
+One step is not a test: `perf_hello_size` builds `examples/hello` (an empty document, a heading
+and a checkbox) in release, strips a copy and reports `hello_stripped_bytes`, the size the
+framework adds to every app. `cargo build --profile release-small` (fat LTO, one codegen unit,
+`opt-level = "s"`, stripped) is the workspace's size profile.
 
 ```sh
 cargo xtask bench                             # writes target/bench/bench.{json,md}

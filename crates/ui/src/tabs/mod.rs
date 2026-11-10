@@ -2,12 +2,21 @@
 //! the caller paints.
 //!
 //! The caller owns everything else: ids, which tab is selected, labels, the overflow menu, close
-//! buttons, context menus and drags.
+//! buttons, context menus and drags. [`indicator`] animates a selection underline or pill.
 
 use egui::accesskit::Role;
 use egui::{Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, WidgetType};
 
 use crate::layout::{EXTENT, usable};
+
+/// Where to paint a strip's selection indicator (an underline or a pill) this frame: `target`,
+/// the selected tab's indicator at rest, animated by its edges with the snap spring, so it slides
+/// from the previously selected tab and an edge that does not move stays put. Call it once per
+/// frame per strip with the strip's id. It only moves paint: the tabs keep their own rects for
+/// hit testing. The first call returns `target`; under reduced motion it jumps.
+pub fn indicator(ctx: &egui::Context, strip: Id, target: Rect) -> Rect {
+    crate::motion::rect(ctx, strip.with("ashlar_ui::tab_indicator"), target, ashlar_motion::tokens::SNAP.enter)
+}
 
 /// The outcome of [`fit`].
 #[derive(Clone, Debug, Default, PartialEq)]

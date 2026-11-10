@@ -1136,7 +1136,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let accent = self.style.accent;
         match (&proposal, float_rect) {
             (Some(proposal), _) => {
-                painter.rect(proposal.preview.shrink(1.0), 0.0, accent.gamma_multiply(0.15), Stroke::new(2.0, accent), StrokeKind::Inside);
+                let preview = preview_rect(&self.ctx, self.id, proposal.preview.shrink(1.0));
+                painter.rect(preview, 0.0, accent.gamma_multiply(0.15), Stroke::new(2.0, accent), StrokeKind::Inside);
                 if let Some(marker) = proposal.insertion {
                     painter.rect_filled(marker, 0.0, accent);
                 }
@@ -1147,6 +1148,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             (None, None) => {}
         }
     }
+}
+
+/// Where to paint the drop preview for `target` this frame. It moves quickly (the instant spring)
+/// from one drop target to the next while the drag is held, and appears in place when a drag
+/// first shows it. The drop itself still uses the resolved target, not the painted rect.
+pub(super) fn preview_rect(ctx: &egui::Context, surface: Id, target: Rect) -> Rect {
+    let id = surface.with("drop-preview-rect");
+    let pass_id = surface.with("drop-preview-pass");
+    let pass = ctx.cumulative_pass_nr();
+    let last = ctx.data_mut(|d| {
+        let last = d.get_temp::<u64>(pass_id);
+        d.insert_temp(pass_id, pass);
+        last
+    });
+    if last.is_none_or(|l| l.saturating_add(1) < pass) {
+        // not shown last frame: start where the new drag points, not where the last one ended
+        crate::motion::set(ctx, id, ashlar_motion::Edges::new(target.min.x, target.min.y, target.max.x, target.max.y));
+    }
+    crate::motion::rect(ctx, id, target, ashlar_motion::tokens::INSTANT.enter)
 }
 
 /// A menu button whose visible text may differ from its accessible name.

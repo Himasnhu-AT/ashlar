@@ -157,6 +157,7 @@ impl Ctx<'_, '_, '_> {
             "menu" => self.menu(a),
             "logs" => self.logs(a),
             "stats" => self.stats(a),
+            "clock" => self.clock(a),
             "devtools" => self.devtools(a),
             "call" => self.raw_call(a),
             "batch" => self.batch(a),
@@ -746,6 +747,27 @@ impl Ctx<'_, '_, '_> {
         a.finish().map_err(usage("stats"))?;
         let v = self.call("app.stats", if reset { json!({"reset": true}) } else { json!({}) })?;
         let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+        Ok(Done::new(v, text))
+    }
+
+    fn clock(&mut self, mut a: Args) -> Res {
+        let what = a.positional();
+        let params = match what.as_deref() {
+            None => json!({}),
+            Some("pause") => json!({"pause": true}),
+            Some("resume") => json!({"resume": true}),
+            Some("step") => {
+                let ms = a.positional().ok_or_else(|| Fail::Usage("clock step needs milliseconds".into(), usage_of("clock")))?;
+                let ms: f64 = ms.parse().map_err(|_| Fail::Usage(format!("clock step {ms}: not a number of milliseconds"), usage_of("clock")))?;
+                json!({"step_ms": ms})
+            }
+            Some(other) => return Err(Fail::Usage(format!("clock {other}?"), usage_of("clock"))),
+        };
+        a.finish().map_err(usage("clock"))?;
+        let v = self.call(ashlar_control::APP_CLOCK, params)?;
+        let paused = v.get("paused").and_then(Value::as_bool).unwrap_or(false);
+        let time = v.get("time").and_then(Value::as_f64).unwrap_or(0.0);
+        let text = format!("{} at {time:.3}s", if paused { "paused" } else { "running" });
         Ok(Done::new(v, text))
     }
 

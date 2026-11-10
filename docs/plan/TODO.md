@@ -24,7 +24,7 @@ a task's state.
 | IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
 | IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | done (726b637, d5bd509) |
 | IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
-| IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | todo |
+| IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | done for size (4e91720); idle memory probe moved to IMP-2.10 |
 | IMP-1.8 | Launch to first present | todo |
 | IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
 
@@ -39,12 +39,13 @@ a task's state.
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | done (bfcafc7) |
-| IMP-2.9 | Binary size | todo (note: IMP-3.3 turned on ashlar-native `system`, which pulls zbus on Linux) |
+| IMP-2.9 | Binary size | done (c8e3e97) |
 | IMP-2.10 | Idle memory | todo |
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
-| IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | doing (wt-allocfix) |
+| IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
+| IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | doing (wt-allocreg) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | todo |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
@@ -57,7 +58,8 @@ a task's state.
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | done (2089b8c) |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | done (8ec7a04) |
 | IMP-3.5 | Animated theme switch | doing (wt-animate (if time)) |
-| IMP-3.6 | Presence and component adoption | doing (wt-animate) |
+| IMP-3.9 | `motion::f32` tween with `Easing::LINEAR` reached about 12 % at 26 % of its duration (reported by wt-clock): check against a unit test | done (c657940) |
+| IMP-3.6 | Presence and component adoption | done (378458b..ea70000) |
 | IMP-3.7 | Gesture handoff | todo |
 | IMP-3.8 | `Cx` API polish | todo |
 
@@ -70,9 +72,9 @@ a task's state.
 | IMP-4.4 | Headless wgpu renderer for `Driver` | done (c2d7270) |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | done (3669d42) |
 | IMP-4.6 | `--headless --snap --tree` flags | done (11a4853) |
-| IMP-4.7 | `app.clock` | doing (wt-clock) |
-| IMP-4.8 | App-level golden snapshots | todo |
-| IMP-4.9 | Named scenes | todo |
+| IMP-4.7 | `app.clock` | done (221164b) |
+| IMP-4.8 | App-level golden snapshots | doing (wt-snap) |
+| IMP-4.9 | Named scenes | doing (wt-snap) |
 | IMP-4.10 | Motion and jank gate | todo |
 | IMP-4.11 | Record and replay | todo |
 
@@ -81,19 +83,20 @@ a task's state.
 |---|---|---|
 | IMP-5.1 | Basic controls kit | done (10ee980) |
 | IMP-5.2 | Toast v2 | done (aaf674c) |
-| IMP-5.3 | List and tree accessibility and selection | doing (wt-a11y) |
+| IMP-5.3 | List and tree accessibility and selection | done (b2775e5, fix 9bc416c) |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
-| IMP-5.5 | `ashlar-syntax` and `CodeView` | doing (wt-syntax) |
+| IMP-5.5 | `ashlar-syntax` and `CodeView` | done (4473fe0, c7311b4) |
 | IMP-5.6 | Diff view | todo |
 | IMP-5.7 | Chat kit | todo |
 | IMP-5.8 | Settings form pattern | todo |
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | todo |
-| IMP-5.10 | Standalone tab strip | todo |
+| IMP-5.10 | Standalone tab strip | doing (wt-tabs) |
 | IMP-5.11 | Dialog focus | done (9fcbdd7) |
 | IMP-5.12 | Rolling numbers | todo (after IMP-3.2) |
 | IMP-5.13 | Small content components | done (05f44af) |
 | IMP-5.14 | Sidebar / source list | todo |
 | IMP-5.15 | Accessibility goldens | todo |
+| IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | todo |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
@@ -104,7 +107,7 @@ a task's state.
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
-| IMP-6.2 | Open files, single instance, dropped files | todo |
+| IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
 | IMP-6.4 | Window placement and viewport hook | todo |
 | IMP-6.5 | Parented, non-blocking file dialogs | todo |

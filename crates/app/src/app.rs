@@ -51,6 +51,8 @@ pub(crate) struct Shared<D: Document> {
     pub control_port: Option<u16>,
     pub follow_system_accent: bool,
     pub motion: Option<ashlar_motion::MotionPrefs>,
+    pub single_instance: bool,
+    pub accept_drops: bool,
 }
 
 /// An app: name, document type and format, commands, views. `run()` opens the window; the same
@@ -99,6 +101,8 @@ pub struct App<D: Document> {
     control_port: Option<u16>,
     follow_system_accent: bool,
     motion: Option<ashlar_motion::MotionPrefs>,
+    single_instance: bool,
+    accept_drops: Option<bool>,
 }
 
 impl<D: Document> App<D> {
@@ -123,6 +127,8 @@ impl<D: Document> App<D> {
             control_port: None,
             follow_system_accent: true,
             motion: None,
+            single_instance: false,
+            accept_drops: None,
         }
     }
 
@@ -224,8 +230,26 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// One window per app (default off). A second launch hands its arguments (the files to open)
+    /// to the running one and exits; the running one opens them with `file.open` and comes to the
+    /// front. The endpoint is named after the app (see [`App::organization`]); desktop only.
+    pub fn single_instance(mut self, on: bool) -> Self {
+        self.single_instance = on;
+        self
+    }
+
+    /// Open files dropped on the window (default on when the app sets a [`App::format`] or a
+    /// [`App::file_extension`]). The first file with a known extension opens with `file.open`
+    /// (a dirty document asks to save first); the others reach the view as
+    /// [`Cx::dropped_files`](crate::Cx::dropped_files). Off leaves drops to the view's own input.
+    pub fn accept_drops(mut self, on: bool) -> Self {
+        self.accept_drops = Some(on);
+        self
+    }
+
     pub(crate) fn split(self) -> (Arc<Shared<D>>, Option<ViewFn<D>>, Option<SetupFn>) {
         let env_prefix: String = self.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+        let accept_drops = self.accept_drops.unwrap_or(self.format.is_some() || !self.extensions.is_empty());
         let format = self.format.unwrap_or_else(|| Format::new(format!("{}.document", self.name), format!("{} {}", self.name, self.version)));
         let mut specs = builtins::leading::<D>();
         specs.extend(self.commands);
@@ -251,6 +275,8 @@ impl<D: Document> App<D> {
             control_port: self.control_port,
             follow_system_accent: self.follow_system_accent,
             motion: self.motion,
+            single_instance: self.single_instance,
+            accept_drops,
         };
         (Arc::new(shared), self.view, self.setup)
     }
@@ -299,8 +325,9 @@ impl<D: Document> App<D> {
     /// [`crate::Driver`] in a temporary folder that writes `--snap out.png` and `--tree tree.json`
     /// (after `--script file.ui` and `--at SECONDS`, at `--size WxH`, `--scale S`, `--theme
     /// light|dark`), then exits with 0 (done), 1 (a step failed) or 2 (bad arguments).
+    /// (`--headless` needs the `headless` feature, on by default.)
     pub fn run(self) -> Result<(), Error> {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
         {
             let args: Vec<String> = std::env::args().skip(1).collect();
             if crate::headless_run::requested(&args) {

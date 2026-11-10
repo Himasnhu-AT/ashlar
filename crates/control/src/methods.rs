@@ -69,7 +69,7 @@ impl UiHandler for NoUi {
         Vec::new()
     }
     fn handle(&mut self, req: Request) {
-        if req.method().starts_with("ui.") || req.method() == "app.quit" {
+        if req.method().starts_with("ui.") || req.method() == "app.quit" || req.method() == crate::APP_CLOCK {
             let m = req.method().to_string();
             req.fail(format!("`{m}` needs the app window; this is a headless session (connect to the running app instead)"));
         } else {
