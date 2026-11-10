@@ -144,7 +144,7 @@ fn colors(theme: Theme) -> Colors {
     match theme {
         Theme::Light => Colors {
             accent: c(37, 99, 235),
-            accent_hover: c(29, 78, 216),
+            accent_hover: c(18, 79, 214),
             accent_press: c(28, 74, 176),
             danger: c(220, 38, 38),
             danger_hover: c(193, 33, 33),
@@ -159,9 +159,9 @@ fn colors(theme: Theme) -> Colors {
             text_secondary: c(82, 82, 91),
         },
         Theme::Dark => Colors {
-            accent: c(59, 130, 246),
-            accent_hover: c(96, 156, 248),
-            accent_press: c(44, 98, 185),
+            accent: c(39, 110, 224),
+            accent_hover: c(61, 132, 248),
+            accent_press: c(29, 83, 168),
             danger: c(248, 113, 113),
             danger_hover: c(217, 99, 99),
             danger_press: c(186, 85, 85),
@@ -170,7 +170,7 @@ fn colors(theme: Theme) -> Colors {
             pressed: c(60, 60, 66),
             border: c(58, 58, 64),
             border_strong: c(88, 88, 96),
-            focus: c(124, 180, 255),
+            focus: c(130, 178, 255),
             text: c(228, 228, 231),
             text_secondary: c(161, 161, 170),
         },

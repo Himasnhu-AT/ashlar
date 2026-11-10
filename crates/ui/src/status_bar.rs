@@ -108,16 +108,22 @@ pub fn progress(ui: &mut Ui, id: &str, label: &str, fraction: Option<f32>) -> eg
             percent(f, &mut value_buf)
         }
         None => {
-            // indeterminate: a segment sweeping across; only this item asks for repaints
-            let time = ui.input(|i| i.time);
-            let phase = (time * 0.8).fract() as f32;
+            // indeterminate: a segment sweeping across; only this item asks for repaints. Under
+            // reduced motion (or a paused clock) it holds still at the left and asks for none.
+            let prefs = crate::motion::prefs(ui.ctx());
             let seg = bar.width() * 0.3;
-            let x = bar.left() - seg + (bar.width() + seg) * phase;
+            let x = if prefs.reduced || prefs.scale() == 0.0 {
+                bar.left()
+            } else {
+                let time = ui.input(|i| i.time);
+                let phase = (time * 0.8 * f64::from(prefs.scale())).fract() as f32;
+                crate::wake::wake_after(ui.ctx(), crate::wake::Reason::ANIMATION, std::time::Duration::from_millis(33));
+                bar.left() - seg + (bar.width() + seg) * phase
+            };
             let s = Rect::from_min_max(pos2(x.max(bar.left()), bar.top()), pos2((x + seg).min(bar.right()), bar.bottom()));
             if s.width() > 0.0 {
                 ui.painter().rect_filled(s, 3.0, t.accent);
             }
-            crate::wake::wake_after(ui.ctx(), crate::wake::Reason::ANIMATION, std::time::Duration::from_millis(33));
             ""
         }
     };
@@ -184,6 +190,31 @@ mod tests {
         h.drop_at(zoom.center());
         h.step();
         assert_eq!(*h.state(), 1);
+    }
+
+    #[test]
+    fn indeterminate_sweep_holds_still_under_reduced_motion() {
+        use crate::wake::{Reason, Scheduler};
+        let run = |reduced: bool| {
+            let ctx = egui::Context::default();
+            crate::motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::new(reduced, 1.0));
+            let before = Scheduler::of(&ctx).stats().requests_for(Reason::ANIMATION);
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    StatusBar::new("status").show(
+                        ui,
+                        |_| {},
+                        |bar| {
+                            progress(bar, "status.busy", "Working", None);
+                        },
+                    );
+                });
+                out.textures_delta.clear();
+            }
+            Scheduler::of(&ctx).stats().requests_for(Reason::ANIMATION) - before
+        };
+        assert!(run(false) >= 3, "the sweep animates normally");
+        assert_eq!(run(true), 0, "no animation frames under reduced motion");
     }
 
     #[test]

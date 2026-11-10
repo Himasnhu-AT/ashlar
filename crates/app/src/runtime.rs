@@ -27,7 +27,7 @@ use ashlar_ui::commands::{CommandPalette, KeymapChange, KeymapEditor, MenuSpec, 
 use ashlar_ui::devtools;
 use ashlar_ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar_ui::toasts::Toasts;
-use ashlar_ui::tokens::{self, ThemeMode, Tokens};
+use ashlar_ui::tokens::{self, ThemeMode};
 use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
@@ -38,6 +38,11 @@ use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
+
+mod prefs;
+
+pub use ashlar_motion::MotionPrefs;
+pub use ashlar_native::system::Preferences;
 
 /// Top-level menus in this order; menus the app adds follow in first-seen order.
 pub const MENU_ORDER: &[&str] = &["File", "Edit", "View"];
@@ -210,6 +215,7 @@ pub struct Runtime<D: Document> {
     /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
+    os_prefs: prefs::OsPrefs,
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -279,6 +285,7 @@ impl<D: Document> Runtime<D> {
             native_menu: None,
             native_menu_tried: false,
             native_picks: Vec::new(),
+            os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             launch,
             shared,
         };
@@ -353,6 +360,12 @@ impl<D: Document> Runtime<D> {
         self.passes
     }
 
+    /// Replace the OS preferences (reduced motion, accent, contrast) with `source` (tests). Call
+    /// it before the first frame; it is read again whenever the window gains focus.
+    pub fn set_preferences(&mut self, source: impl FnMut() -> Preferences + 'static) {
+        self.os_prefs.source = Some(Box::new(source));
+    }
+
     /// Replace the native file dialogs (tests, scripted runs).
     pub fn set_file_picker(&mut self, picker: impl FnMut(Pick) -> Option<PathBuf> + 'static) {
         self.picker = Some(Box::new(picker));
@@ -396,7 +409,9 @@ impl<D: Document> Runtime<D> {
         self.started = true;
         devtools::install(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
-        tokens::install(ctx, &Tokens::light(), &Tokens::dark(), mode);
+        // OS accent, contrast and reduced motion; tokens the setup below installs win
+        let (light, dark) = self.os_prefs.startup(ctx);
+        tokens::install(ctx, &light, &dark, mode);
         if let Some(setup) = self.setup.take()
             && let Err(p) = catch_unwind(AssertUnwindSafe(|| setup(ctx)))
         {
@@ -439,6 +454,7 @@ impl<D: Document> Runtime<D> {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.launch.telemetry.begin_turn();
         self.ensure_started(ctx);
+        self.os_prefs.poll(ctx);
         self.serve_control(ctx);
         for rec in self.jobs.drain_ready(&mut self.session) {
             if rec.status == ashlar_jobs::Status::Failed {
