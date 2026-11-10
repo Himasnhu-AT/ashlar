@@ -25,6 +25,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   revision of the text skips hashing it each frame. Inline parsing is linear in the paragraph's
   length (a 50 KB paragraph: `bench: md_long_paragraph_parse`, about 0.4 ms), and a drawing
   snapshot (`tests/markdown_snapshot.rs`) checks what markdown paints (IMP-5.18).
+- Rich clipboard: `clipboard::set_rich` / `rich` (text, HTML, PNG, file lists; read HTML is
+  sanitized by `clipboard::sanitize_html`, every form size-capped), `clipboard::set_secret(text,
+  clear_after)` (kept out of clipboard history where supported, cleared only if still ours) and a
+  `Backend` trait with `MemoryClipboard` for tests.
+- Dock ▸ Quit, logout, restart and shutdown go through the "Save changes?" check and flush
+  settings, autosave and telemetry (`ashlar_native::session_end`, feature `session-end`, on by
+  default): macOS answers `applicationShouldTerminate:` later until the user chooses; Windows
+  handles `WM_QUERYENDSESSION` / `WM_ENDSESSION` and, since it can't wait for a dialog, keeps
+  unsaved changes for recovery. The flow is the pure `session_end::step`.
 - Gesture handoff: value fields, sliders and knobs keep going when a drag is let go while moving
   and ease to rest (clamped, snapped; the commit carries the resting value, so one drag is still
   one undo step); `.fling(false)` turns it off. `VirtualList::fling(true)` drags the list to
@@ -327,6 +336,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
 ### Fixed
+- Linux: copied text and images no longer vanish when the copy call returns; one clipboard lives
+  on a worker thread for the life of the process.
 
 - `ashlar-ui` lists: `scroll_to` read the scroll offset under the wrong id, so it never scrolled
   up to a row above the view and moved the list for a row already in view. It now reads the scroll
