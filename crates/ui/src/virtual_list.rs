@@ -26,7 +26,7 @@
 
 use std::ops::Range;
 
-use egui::accesskit::Role as NodeRole;
+use egui::accesskit::{Role as NodeRole, SortDirection};
 use egui::{Event, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
 use ashlar_motion::gesture::{VelocityTracker, decay_k, deceleration, project, rubber_band};
@@ -264,6 +264,7 @@ pub struct VirtualList<'a> {
     selection: Option<&'a mut Selection>,
     changed_rows: &'a [usize],
     fling: bool,
+    label: Option<&'a str>,
 }
 
 /// Typed letters within this many seconds of each other build one type-ahead prefix.
@@ -286,6 +287,7 @@ impl<'a> VirtualList<'a> {
             selection: None,
             changed_rows: &[],
             fling: false,
+            label: None,
         }
     }
     /// Drag the list to scroll it (off by default): let go while moving and it keeps going, then
@@ -293,6 +295,11 @@ impl<'a> VirtualList<'a> {
     /// back. Reduced motion keeps the drag but drops the fling.
     pub fn fling(mut self, on: bool) -> Self {
         self.fling = on;
+        self
+    }
+    /// The name a screen reader announces for the list (a human name, not the automation id).
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.label = Some(text).filter(|t| !t.is_empty());
         self
     }
     /// Rows whose height changed since the last frame, with [`RowHeights::Variable`]: only these
@@ -458,6 +465,9 @@ pub(crate) fn show_rows(
         .ctx()
         .accesskit_node_builder(base, |node| {
             node.set_role(kind.node);
+            if let Some(label) = list.label {
+                node.set_label(label);
+            }
             if sel.is_some() {
                 node.set_multiselectable();
             }
@@ -525,7 +535,9 @@ pub(crate) fn show_rows(
     let mut body_rect = outer;
     if let Some(h) = header {
         let header_rect = Rect::from_min_size(outer.min, vec2(outer.width(), h.height));
-        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header"));
+        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header").accessibility_parent(base));
+        // the header is the table's first row; its cells are column headers
+        ui.ctx().accesskit_node_builder(hui.unique_id(), |n| n.set_role(NodeRole::Row));
         hui.set_clip_rect(header_rect.intersect(ui.clip_rect()));
         (h.paint)(&mut hui, header_rect);
         body_rect.min.y = header_rect.max.y;
@@ -678,6 +690,8 @@ fn drive_fling(ui: &Ui, base: Id, layout: &Layout<'_>, body: Rect, scrolling_to:
     // the list scrolls by hand itself (egui's own drag-to-scroll would fight it)
     *scroll = scroll.clone().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() });
     let drag = ui.interact(body, key, Sense::drag());
+    // a pointer-only surface: the list and its scroll bar are what a screen reader uses
+    ui.ctx().accesskit_node_builder(drag.id, |n| n.set_role(NodeRole::GenericContainer));
     let now = ui.input(|i| i.time);
     let mut f: ListFling = ui.data(|d| d.get_temp(key)).unwrap_or_default();
     let band = |raw: f32| {
@@ -830,6 +844,11 @@ impl<'a> VirtualTable<'a> {
         self.list = self.list.max_height(h);
         self
     }
+    /// The name a screen reader announces for the table. See [`VirtualList::label`].
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.list = self.list.label(text);
+        self
+    }
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.list = self.list.row_label(f);
         self
@@ -897,6 +916,13 @@ impl<'a> VirtualTable<'a> {
                     painter.line_segment([pos2(ax, ay + a * 0.5 - 0.5), pos2(ax + 3.5, ay + b * 0.5)], Stroke::new(1.5, t.text.secondary));
                 }
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, col.title));
+                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                    n.set_role(NodeRole::ColumnHeader);
+                    n.set_column_index(c);
+                    if let Some(s) = sort.filter(|s| s.column == c) {
+                        n.set_sort_direction(if s.ascending { SortDirection::Ascending } else { SortDirection::Descending });
+                    }
+                });
                 let sorted = sort.map(|s| s.column == c);
                 automation::register_fmt(
                     ui,
@@ -911,6 +937,8 @@ impl<'a> VirtualTable<'a> {
                 if col.resizable {
                     let handle = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(6.0, cell.height()));
                     let hr = ui.interact(handle, base.with(("resize", c)), Sense::drag());
+                    // a pointer-only handle: nothing for a screen reader to announce
+                    ui.ctx().accesskit_node_builder(hr.id, |n| n.set_role(NodeRole::GenericContainer));
                     if hr.hovered() || hr.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
                     }
@@ -940,6 +968,11 @@ impl<'a> VirtualTable<'a> {
                         let mut cui =
                             ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)).id_salt(c));
                         cui.set_clip_rect(inner.intersect(ui.clip_rect()));
+                        cui.ctx().accesskit_node_builder(cui.unique_id(), |n| {
+                            n.set_role(NodeRole::Cell);
+                            n.set_column_index(c);
+                            n.set_row_index(row.index);
+                        });
                         cell(&mut cui, row.index, c);
                     }
                     x += w;

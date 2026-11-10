@@ -20,13 +20,13 @@ Window
   ProgressIndicator "Exporting"
   Button "Commands"
   Label value="Banners"
-  Status "A new version is ready. It installs the next time the app starts." value="A new version is ready. It installs the next time the app starts." [live=polite]
+  Status "A new version is ready. It installs the next time the app starts." [live=polite]
   Button "Close"
   Button "Retry"
-  Status "Offline" value="Offline" description="Changes stay on this computer until the connection is back." [live=polite]
+  Status "Offline" description="Changes stay on this computer until the connection is back." [live=polite]
   Button "Save As…"
-  Alert "Save failed" value="Save failed" description="The file could not be saved: the disk is full." [live=assertive]
-  Status "Export finished: 24 files written." value="Export finished: 24 files written." [live=polite]
+  Alert "Save failed" description="The file could not be saved: the disk is full." [live=assertive]
+  Status "Export finished: 24 files written." [live=polite]
   Label value="Cards and collapsible sections"
   Group "Account"
     Label value="Account"

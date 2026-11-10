@@ -53,7 +53,7 @@ Window
   Button "#80206080" [toggled=false]
   Button "#00000000" [toggled=false]
   Label value="Search"
-  TextInput placeholder="Filter layers"
-  TextInput value="brightness" placeholder="Search"
+  TextInput "Search" placeholder="Filter layers"
+  TextInput "Search" value="brightness" placeholder="Search"
   Button "Clear search"
-  TextInput placeholder="Disabled" [disabled]
+  TextInput "Search" placeholder="Disabled" [disabled]

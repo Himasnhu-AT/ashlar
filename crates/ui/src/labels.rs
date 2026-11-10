@@ -104,6 +104,23 @@ pub struct UiLabels {
     pub keymap: KeymapLabels,
     pub tabs: TabLabels,
     pub print: PrintLabels,
+    pub search: SearchLabels,
+}
+
+/// The search field's and the command palette's words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchLabels {
+    /// The search field's name for screen readers (the placeholder is only a hint).
+    pub field: String,
+    pub clear: String,
+    /// The command palette's input name.
+    pub palette: String,
+}
+
+impl Default for SearchLabels {
+    fn default() -> Self {
+        SearchLabels { field: "Search".into(), clear: "Clear search".into(), palette: "Command palette".into() }
+    }
 }
 
 /// Every key [`UiLabels::from_i18n`] reads; each must be in the English catalog (tested).
@@ -147,6 +164,11 @@ pub const KEYS: &[&str] = &[
     "ui.keymap.reset",
     "ui.keymap.clear",
     "ui.keymap.conflicts_with",
+    "ui.keymap.table",
+    "ui.keymap.actions",
+    "ui.search.field",
+    "ui.search.clear",
+    "ui.search.palette",
     "ui.tabs.overflow",
     "ui.tabs.close",
     "ui.print.printer",
@@ -227,9 +249,14 @@ impl UiLabels {
             (&mut k.reset, "ui.keymap.reset"),
             (&mut k.clear, "ui.keymap.clear"),
             (&mut k.conflicts_with, "ui.keymap.conflicts_with"),
+            (&mut k.table, "ui.keymap.table"),
+            (&mut k.actions, "ui.keymap.actions"),
         ] {
             set(field, key);
         }
+        set(&mut l.search.field, "ui.search.field");
+        set(&mut l.search.clear, "ui.search.clear");
+        set(&mut l.search.palette, "ui.search.palette");
         set(&mut l.tabs.overflow, "ui.tabs.overflow");
         set(&mut l.tabs.close, "ui.tabs.close");
         let p = &mut l.print;
