@@ -13,6 +13,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
 - `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
   frame is presented.
+- `cargo xtask launch` measures `examples/hello` launch time over 9 launches (p50/p95), and
+  `cargo xtask launch --memory` its idle RSS and physical footprint (macOS). Manual, opens windows.
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.
