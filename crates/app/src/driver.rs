@@ -378,6 +378,35 @@ impl<D: Document> Driver<D> {
         self.frames - start
     }
 
+    /// Play a recording made with `ASHLAR_RECORD` or [`Runtime::record_to`] into this driver
+    /// (normally a fresh one for the same app): each recorded frame runs at its time, with its
+    /// screen, input events and control requests (their replies are dropped). Returns the number
+    /// of frames run. See [`crate::record`].
+    pub fn replay(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<usize> {
+        let frames = crate::record::read(path.as_ref())?;
+        for f in &frames {
+            if self.closed {
+                break;
+            }
+            if f.time.is_finite() {
+                self.time = f.time.max(self.time);
+            }
+            if let Some((w, h)) = f.screen.filter(|(w, h)| *w >= 1.0 && *h >= 1.0 && *w <= 100_000.0 && *h <= 100_000.0) {
+                self.set_screen(w, h);
+            }
+            if let Some(ppp) = f.ppp {
+                self.pixels_per_point(ppp);
+            }
+            self.input.extend(f.events.iter().cloned());
+            for (method, params) in &f.requests {
+                let (req, _reply) = Request::new(method.as_str(), params.clone());
+                self.runtime.inject_request(req);
+            }
+            self.frame();
+        }
+        Ok(frames.len())
+    }
+
     /// Send a control request (as the control port would) and run frames until it is answered:
     /// one frame for the request, then only the frames something asks for, on the virtual clock
     /// (a request that needs frames nobody asks for is reported, not papered over by polling).
@@ -524,6 +553,35 @@ mod tests {
         d.frame();
         assert!(d.runtime.session().can_undo());
         d
+    }
+
+    #[test]
+    fn the_view_sees_who_changed_the_document() {
+        use crate::session::Origin;
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<Option<Origin>>>> = Arc::default();
+        let log = Arc::clone(&seen);
+        let app = App::<i64>::new("drivertest", "0.0.0").view(move |_ui, cx| {
+            log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(cx.origin());
+            let _ = cx.motion("x", *cx.doc() as f32, ashlar_motion::tokens::SNAP.enter);
+        });
+        let mut d = Driver::new(app.runtime());
+        let last = |d: &mut Driver<i64>| {
+            d.frame();
+            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().copied().flatten()
+        };
+        assert_eq!(last(&mut d), None);
+        d.runtime.session_mut().edit("bump", |n| *n += 1);
+        assert_eq!(last(&mut d), Some(Origin::User));
+        assert_eq!(last(&mut d), None, "only the frame after a change reports it");
+        d.runtime.session_mut().edit_merged("drag", "k", |n| *n += 1);
+        assert_eq!(last(&mut d), Some(Origin::Drag));
+        let r = d.request("engine.execute", serde_json::json!({"command": "app.undo"}));
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(d.runtime.session().origin(), Some(Origin::Agent), "an agent's undo is the agent's change");
+        d.runtime.session_mut().undo();
+        assert_eq!(last(&mut d), Some(Origin::Undo));
+        assert!(Origin::Agent.animates() && Origin::Job.animates() && !Origin::User.animates());
     }
 
     #[test]

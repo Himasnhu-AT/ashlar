@@ -137,7 +137,7 @@ How the crates stack is in [docs/architecture.md](docs/architecture.md).
 | macOS | Apple silicon and Intel (CI: `macos-latest`, arm64) |
 | Windows | 10 or newer, x86_64 (CI: `windows-latest`) |
 | Linux | x86_64, X11 and Wayland (CI: `ubuntu-latest`). Native dialogs use the XDG desktop portal. |
-| Web | `wasm32-unknown-unknown` for the headless core (commands, store, files, jobs, logging; checked in CI). The windowed runtime on the web is experimental. |
+| Web | `wasm32-unknown-unknown` for the headless core (commands, store, files, jobs, logging; checked in CI). The windowed runtime on the web is experimental: `examples/web-hello` builds in the gate, and `App::canvas_id` picks the canvas; a start failure shows a visible error next to it. |
 
 **Linux build dependencies** (Debian/Ubuntu names):
 

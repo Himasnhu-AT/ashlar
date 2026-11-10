@@ -112,6 +112,50 @@ pub struct SpaceScale {
     pub xl: f32,
 }
 
+impl Radii {
+    /// [`Radii::sm`](field@Radii::sm) in points, as `f32` for painters and geometry.
+    pub fn sm(self) -> f32 {
+        f32::from(self.sm)
+    }
+
+    /// [`Radii::md`](field@Radii::md) in points, as `f32`.
+    pub fn md(self) -> f32 {
+        f32::from(self.md)
+    }
+
+    /// [`Radii::lg`](field@Radii::lg) in points, as `f32`.
+    pub fn lg(self) -> f32 {
+        f32::from(self.lg)
+    }
+}
+
+/// A step of the spacing scale, for helpers that take a space token
+/// ([`crate::layout::row`], [`crate::layout::inset`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Space {
+    Xxs,
+    Xs,
+    Sm,
+    #[default]
+    Md,
+    Lg,
+    Xl,
+}
+
+impl SpaceScale {
+    /// The size of `space` in points.
+    pub fn get(&self, space: Space) -> f32 {
+        match space {
+            Space::Xxs => self.xxs,
+            Space::Xs => self.xs,
+            Space::Sm => self.sm,
+            Space::Md => self.md,
+            Space::Lg => self.lg,
+            Space::Xl => self.xl,
+        }
+    }
+}
+
 /// The type scale in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TypeScale {

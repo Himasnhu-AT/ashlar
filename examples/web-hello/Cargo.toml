@@ -1,0 +1,14 @@
+[package]
+name = "ashlar-example-web-hello"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The smallest ashlar app for the web: builds for wasm32 in the gate (see index.html)"
+
+[lints]
+workspace = true
+
+[dependencies]
+# no `headless` on the web; accesskit stays on (screen readers in the browser)
+ashlar = { package = "ashlar-rs", path = "../../crates/ashlar", default-features = false, features = ["accesskit"] }
+serde = { workspace = true }
