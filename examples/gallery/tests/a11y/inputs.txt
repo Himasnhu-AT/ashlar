@@ -1,0 +1,59 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=true]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Value fields"
+  Label
+  Label value="Enabled"
+  Label value="Disabled"
+  Label value="Opacity"
+  Slider "Opacity" numeric=80
+  Slider "Opacity" numeric=80 [disabled]
+  Label value="Duration (formatted)"
+  Slider "Duration" numeric=125
+  Slider "Duration" numeric=125 [disabled]
+  Label value="Sliders and knobs"
+  Slider "Gain" numeric=-6
+  Slider "Gain" numeric=-6 [disabled]
+  Slider "Pan" numeric=0.25
+  Slider "Pan" numeric=0.25 [disabled]
+  Slider "Large" numeric=0.8
+  Label value="Swatches"
+  Button "#ef4444ff" [toggled=false]
+  Button "#f97316ff" [toggled=false]
+  Button "#f59e0bff" [toggled=false]
+  Button "#eab308ff" [toggled=false]
+  Button "#84cc16ff" [toggled=false]
+  Button "#22c55eff" [toggled=false]
+  Button "#10b981ff" [toggled=false]
+  Button "#14b8a6ff" [toggled=false]
+  Button "#06b6d4ff" [toggled=false]
+  Button "#0ea5e9ff" [toggled=false]
+  Button "#3b82f6ff" [toggled=true]
+  Button "#6366f1ff" [toggled=false]
+  Button "#8b5cf6ff" [toggled=false]
+  Button "#d946efff" [toggled=false]
+  Button "#80206080" [toggled=false]
+  Button "#00000000" [toggled=false]
+  Label value="Search"
+  TextInput placeholder="Filter layers"
+  TextInput value="brightness" placeholder="Search"
+  Button "Clear search"
+  TextInput placeholder="Disabled" [disabled]
