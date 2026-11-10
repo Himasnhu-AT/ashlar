@@ -20,6 +20,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   `reduced_motion(true)`. New automation roles: `switch`, `radio`, `radio_group`, `progress`,
   `label`, `group`, `disclosure`, `alert`. The gallery has a Controls page, and the visual
   regression suite compares the kit against reference painters (222 pairs).
+- `ashlar-ui`: dialogs move the keyboard focus inside when they open (the body's first field,
+  else the default button, else the cancel button; `Dialog::initial_focus` chooses) and give it
+  back to the widget that had it when they close, however they close (`Dialog::return_focus_to`
+  names it for a dialog opened by a click). Screen readers get a modal dialog node named by the
+  title, with `Dialog::description` (also shown under the title) as its description.
 
 ### Changed
 

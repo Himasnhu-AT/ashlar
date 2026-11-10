@@ -157,6 +157,7 @@ pub struct Gallery {
     outline: Outline,
     // overlays
     pub dialog_open: bool,
+    dialog_opener: Option<egui::Id>,
     pub toasts: Toasts,
     pub last_dialog: Option<DialogOutcome>,
     // commands
@@ -229,6 +230,7 @@ impl Gallery {
             tree,
             outline: Outline::new(),
             dialog_open: false,
+            dialog_opener: None,
             toasts: Toasts::new(),
             last_dialog: None,
             commands,
@@ -602,8 +604,11 @@ impl Gallery {
     fn overlays(&mut self, ui: &mut Ui) {
         let t = tokens::current(ui.ctx());
         section(ui, &t, "Dialog", |ui| {
-            if ui.button("Open dialog").clicked() {
+            let open = Button::new("overlays.open", "Open dialog").show(ui);
+            if open.clicked() {
                 self.dialog_open = true;
+                // a pointer click does not focus the button: name it so the focus comes back there
+                self.dialog_opener = Some(open.id);
             }
             if let Some(o) = self.last_dialog {
                 ui.label(format!("Last result: {o:?}"));
@@ -626,8 +631,12 @@ impl Gallery {
         if self.dialog_open {
             let buttons = [DialogButton::new("Don't Save"), DialogButton::cancel("Cancel"), DialogButton::new("Save").default()];
             let mut name = String::from("Untitled");
-            if let Some(o) = Dialog::new("overlays.dialog", "Save changes before closing?", &buttons).show(ui.ctx(), |ui| {
-                ui.label("Your changes will be lost if you don't save them.");
+            let mut dialog = Dialog::new("overlays.dialog", "Save changes before closing?", &buttons)
+                .description("Your changes will be lost if you don't save them.");
+            if let Some(opener) = self.dialog_opener {
+                dialog = dialog.return_focus_to(opener);
+            }
+            if let Some(o) = dialog.show(ui.ctx(), |ui| {
                 ui.text_edit_singleline(&mut name);
             }) {
                 self.last_dialog = Some(o);
