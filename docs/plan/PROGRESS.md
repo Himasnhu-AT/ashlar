@@ -3,6 +3,42 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/alloc and wt/rows merged
+
+- **IMP-1.2:** a `stats_alloc` 0.1.10 counting allocator (MIT, no dependencies, no `unsafe` in ashlar
+  code), only in the two `tests/perf.rs` binaries. The helper is `crates/ui/tests/support/allocs.rs`.
+
+  | Metric (release) | Value |
+  |---|---|
+  | `allocs_per_frame_scroll_100k` | 472 (215 KB) |
+  | `allocs_per_idle_wake_frame` | 954; **gated at ≤ 1,000** |
+  | `keystroke_allocs` | about 3,716 (2 MB) |
+  | `md_static_allocs` | 108 (31 KB) |
+
+  - A bare egui frame with a focused field makes 29 allocations. About 470 of the idle frame's
+    allocations come from the visible list rows and about 480 from the chrome. Reducing them is
+    IMP-2.16.
+  - `cargo deny check licenses` fails before and after this change, because there is no allow list
+    (IMP-0.5).
+- **IMP-2.8:** `ashlar_ui::list::Row` uses one allocation, one interact, and a galley cached by
+  (row id, hash of text, font and width). It is a list item for screen readers and supports Tab and
+  Space/Enter; its automation id is opt-in. `list::checked` warns in debug builds when a list has
+  more than 2,000 interactive widgets.
+
+  | Metric (release, 5 runs, busy machine) | Before (`Button::selectable`) | After (`list::Row`) |
+  |---|---|---|
+  | `plain_scroll_1k` p50 | 0.73–0.77 ms | **0.094–0.103 ms** |
+  | `plain_scroll_1k` p95 | 0.70–0.80 ms | 0.11–0.15 ms |
+  | `plain_scroll_10k` p50 | 7.1–7.8 ms | 0.92–1.03 ms |
+
+  - The cost breakdown for 1k rows (`perf_plain_scroll_breakdown`):
+    - child `Ui` from `add_sized`: about 0.20 ms
+    - the button's own layout, plus text layout of off-screen rows: about 0.30 ms
+    - `interact`: about 0.035 ms
+    - allocating space plus the scroll area: about 0.035 ms
+  - The reference framework publishes 0.306 ms for this workload, so with `list::Row` ashlar is about
+    3× faster. Adopting `Row` in ashlar's own lists is IMP-2.17.
+
 ## 2026-11-10: wt/headless merged (CI green)
 
 - **IMP-4.4:** `Driver::with_renderer(runtime, Renderer::wgpu())`

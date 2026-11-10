@@ -10,13 +10,14 @@ a task's state.
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
+| IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | todo |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
 |---|---|---|
 | IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | done (0a78f56) |
-| IMP-1.2 | Allocation gate in perf tests | doing (wt-alloc) |
+| IMP-1.2 | Allocation gate in perf tests | done (1f1096d) |
 | IMP-1.3 | `ashlar-ui` perf suite | done (c259234) |
 | IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
 | IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | done (726b637, d5bd509) |
@@ -35,12 +36,14 @@ a task's state.
 | IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
-| IMP-2.8 | Non-virtualized content cost | doing (wt-rows) |
+| IMP-2.8 | Non-virtualized content cost | done (bfcafc7) |
 | IMP-2.9 | Binary size | todo |
 | IMP-2.10 | Idle memory | todo |
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
+| IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | doing (wt-allocfix) |
+| IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | todo |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
 

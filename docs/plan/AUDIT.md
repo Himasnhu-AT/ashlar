@@ -39,7 +39,7 @@ task IMP-1.9.
 | Launch → first UI pass | 91.9 ms median | 59–98 ms "process to pixels" (published, headless) | different boundaries; ~70 ms of ashlar's is window + wgpu setup |
 | Idle CPU, 10 s | 0.0 % (0 ms CPU) | not measured | repaint on demand works (window was off screen) |
 | Idle memory | RSS 107 MB, footprint 36.7 MB, peak 90 MB | target ≤ 50 MiB RSS (published target) | |
-| Scroll frame CPU, 1,000 plain rows | 0.630 ms p50 / 0.656 p95 | 0.306 ms median (published) | **closest apples-to-apples pair; reference ~2× faster** |
+| Scroll frame CPU, 1,000 plain rows | 0.630 ms p50 / 0.656 p95 (egui selectable labels); **0.094–0.103 ms p50 with `list::Row` (IMP-2.8, 2026-11-10)** | 0.306 ms median (published) | **closest apples-to-apples pair; the reference framework was ~2× faster, and ashlar is now ~3× faster with `list::Row`** |
 | Scroll frame CPU, 10,000 plain rows | 6.98 ms p50 / 7.71 p95 | not measured | linear, ~0.7 µs per row; single runs reached 9–10 ms (over the 8.3 ms 120 Hz budget) |
 | Scroll frame CPU, `VirtualList` 1k / 100k | 0.035 / 0.033 ms p50 | no equivalent | flat in row count; tessellation adds ~7 µs |
 | Dependencies (hello) | 229 lines / 172 unique | 267 / 202 unique | ashlar −15 % |
