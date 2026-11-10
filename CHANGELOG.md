@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Windows reopen where they were: `App::remember_window(bool)` (default on) saves position, size,
+  maximized and full screen state in the settings under `"window"` when they change, and the next
+  launch opens the window there, sizes bounded and a window left on no monitor moved back
+  (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
+  (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
 - `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
   counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
 - `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first

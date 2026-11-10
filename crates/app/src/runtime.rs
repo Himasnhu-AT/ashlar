@@ -39,6 +39,7 @@ use crate::open::Inbox;
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
+use crate::window_state::{self, WindowState};
 
 mod prefs;
 
@@ -224,6 +225,8 @@ pub struct Runtime<D: Document> {
     after_save: Option<(String, Value)>,
     /// A file dialog a command asked for, shown at the start of the next frame (IMP-6.5).
     pending_pick: Option<Pick>,
+    /// The window placement written to the settings (IMP-6.4).
+    window: window_state::Tracker,
     shown_title: String,
     /// (dirty, file generation) the title was made for.
     title_key: Option<(bool, u64)>,
@@ -315,6 +318,7 @@ impl<D: Document> Runtime<D> {
             quit_after_save: false,
             after_save: None,
             pending_pick: None,
+            window: window_state::Tracker::default(),
             shown_title: String::new(),
             title_key: None,
             persisted_view: None,
@@ -734,6 +738,7 @@ impl<D: Document> Runtime<D> {
         self.handle_close(&ctx);
         self.apply_effects(&ctx);
         self.persist_view();
+        self.track_window(&ctx);
         self.tick_storage(&ctx);
         self.feed_devtools(&ctx);
 
@@ -1077,6 +1082,26 @@ impl<D: Document> Runtime<D> {
     }
 
     // ------------------------------------------------------------------ storage
+
+    /// Keep the settings' `"window"` placement current: written only when the viewport info
+    /// changes it (the settings debounce the file; closing flushes it). Once the window shows,
+    /// a restored placement that no monitor shows moves back onto the screen.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if !self.native || !self.shared.remember_window || self.shared.dirs.is_none() {
+            return;
+        }
+        let settings = &self.settings;
+        let tracker = &mut self.window;
+        let update = ctx.input(|i| tracker.update(i.viewport(), || settings.get::<WindowState>(window_state::KEY).unwrap_or_default()));
+        if let Some(pos) = update.move_to {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.into()));
+        }
+        if let Some(state) = update.save
+            && let Err(e) = self.settings.set(window_state::KEY, &state)
+        {
+            log::warn!("window placement not saved: {e}");
+        }
+    }
 
     /// Write the view state to the settings when it changed (keyed by its generation: no copy
     /// or comparison on frames that did not change it).
@@ -1669,6 +1694,38 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     Ok(())
 }
 
+/// The window as the app describes it, at the placement it had last time (kept on screen), with
+/// the app's icon and its own changes last.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_builder<D: Document>(shared: &Shared<D>, window: crate::app::WindowSpec, safe_mode: bool) -> egui::ViewportBuilder {
+    let mut b =
+        egui::ViewportBuilder::default().with_title(shared.title.clone()).with_inner_size(shared.window_size).with_app_id(shared.name.clone());
+    if shared.remember_window
+        && !safe_mode
+        && let Some(d) = &shared.dirs
+    {
+        let settings = Settings::load(Arc::new(DirConfig::new(d.config.clone())), "settings.json", &[]);
+        if let Some(saved) = settings.get::<WindowState>(window_state::KEY) {
+            // the monitors are not known before the window exists: sizes and coordinates are
+            // bounded here, and the first frame moves a window no monitor shows
+            b = window_state::apply(b, &window_state::clamp(saved, &[]));
+        }
+    }
+    if let Some(png) = window.icon {
+        match catch_unwind(AssertUnwindSafe(|| eframe::icon_data::from_png_bytes(&png))) {
+            Ok(Ok(icon)) => b = b.with_icon(icon),
+            Ok(Err(e)) => log::warn!("the app icon is not a PNG ashlar can read: {e}"),
+            Err(_) => log::warn!("the app icon could not be decoded"),
+        }
+    }
+    let Some(f) = window.viewport else { return b };
+    let fallback = b.clone();
+    catch_unwind(AssertUnwindSafe(move || f(b))).unwrap_or_else(|p| {
+        log::error!("App::viewport panicked: {}", panic_text(p.as_ref()));
+        fallback
+    })
+}
+
 /// eframe's wgpu setup with `latency` frames queued at most (IMP-2.10: one swapchain image fewer).
 #[cfg(not(target_arch = "wasm32"))]
 fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
@@ -1683,6 +1740,8 @@ fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     // launch timings count from here (IMP-6.9)
     let process_start = now();
+    let mut app = app;
+    let window = app.take_window();
     let (shared, view, setup) = app.split();
     let args = parse_args(&shared.env_prefix);
     let logs = shared.dirs.as_ref().map(|d| d.logs.clone());
@@ -1752,10 +1811,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         scene: args.scene,
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(shared.title.clone())
-            .with_inner_size(shared.window_size)
-            .with_app_id(shared.name.clone()),
+        viewport: window_builder(&shared, window, safe_mode),
         wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
