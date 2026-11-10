@@ -52,7 +52,20 @@ pub struct FrameStats {
     frame_cpu: Series,
     frames: u64,
     first_frame: Option<Duration>,
+    launch: LaunchTimes,
     max_ever: Duration,
+}
+
+/// How long a native launch took, from the first line of `run()`. Times in milliseconds; `None`
+/// headless and on the web.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct LaunchTimes {
+    /// Until eframe had built the window and its wgpu surface.
+    pub to_window_ms: Option<f64>,
+    /// Until the end of the first [`crate::Runtime::ui`].
+    pub to_first_frame_ms: Option<f64>,
+    /// Until the first frame had been painted and presented (the start of the next frame).
+    pub launch_to_present_ms: Option<f64>,
 }
 
 /// Percentiles of one phase over the window. Times in milliseconds.
@@ -80,6 +93,8 @@ pub struct StatsSummary {
     pub max_ever_ms: f64,
     /// Time from runtime creation to the end of the first frame.
     pub first_frame_ms: Option<f64>,
+    /// Process start to window, first frame and first present (native windows only).
+    pub launch: LaunchTimes,
     /// The whole egui pass (input, logic, UI, end of pass); recorded by the headless driver.
     pub pass: PhaseSummary,
     /// Shapes to meshes; recorded by the headless driver.
@@ -120,6 +135,23 @@ impl FrameStats {
         self.first_frame.get_or_insert(d);
     }
 
+    pub(crate) fn set_to_window(&mut self, d: Duration) {
+        self.launch.to_window_ms.get_or_insert(ms(d));
+    }
+
+    pub(crate) fn set_to_first_frame(&mut self, d: Duration) {
+        self.launch.to_first_frame_ms.get_or_insert(ms(d));
+    }
+
+    pub(crate) fn set_presented(&mut self, d: Duration) {
+        self.launch.launch_to_present_ms.get_or_insert(ms(d));
+    }
+
+    /// Process start to window, first frame and first present.
+    pub fn launch(&self) -> LaunchTimes {
+        self.launch
+    }
+
     pub fn frames(&self) -> u64 {
         self.frames
     }
@@ -142,6 +174,7 @@ impl FrameStats {
             max_ms: ui.max_ms,
             max_ever_ms: ms(self.max_ever),
             first_frame_ms: self.first_frame.map(ms),
+            launch: self.launch,
             pass: self.pass.summary(),
             tessellate: self.tessellate.summary(),
             frame_cpu: self.frame_cpu.summary(),

@@ -6,7 +6,8 @@
 //!   app-supplied faces with a CJK fallback chain), [`theme`] (widget-state colouring).
 //! - Inputs: [`value_field`] (drag/scrub and formatted numeric fields), [`slider`] (slider, knob),
 //!   [`swatches`], [`search`], [`buttons`], [`tabs`]; all value edits report [`edit`] phases.
-//! - Text: [`markdown`] (chat replies and short documents, streaming-safe).
+//! - Text: [`markdown`] (chat replies and short documents, streaming-safe), [`code_view`],
+//!   [`diff_view`] (unified and split diffs of [`ashlar_diff`] files).
 //! - Data: [`virtual_list`] (list and table, O(visible) per frame), [`tree`].
 //! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
@@ -31,6 +32,7 @@ pub mod content;
 pub mod controls;
 pub mod devtools;
 pub mod dialog;
+pub mod diff_view;
 pub mod docking;
 pub mod edit;
 pub mod fonts;
@@ -42,6 +44,7 @@ pub mod list;
 pub mod markdown;
 pub mod motion;
 pub mod motion_gate;
+pub mod overlay;
 pub mod printing;
 pub mod search;
 pub mod selection;
@@ -58,6 +61,8 @@ pub mod tree;
 pub mod value_field;
 pub mod virtual_list;
 pub mod wake;
+
+pub use overlay::help;
 
 #[cfg(test)]
 pub(crate) mod test_support;

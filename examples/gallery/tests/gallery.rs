@@ -69,7 +69,7 @@ fn expected(page: Page) -> &'static [&'static str] {
         Page::Tabs => {
             &["tabs.documents", "tabs.documents.tab.0", "tabs.documents.tab.0.close", "tabs.many", "tabs.many.tab.30", "tabs.many.overflow"]
         }
-        Page::Overlays => &["overlays.dialog", "overlays.dialog.button.2"],
+        Page::Overlays => &["overlays.dialog", "overlays.dialog.button.2", "overlays.size", "overlays.font"],
         Page::Commands => &["palette", "palette.search", "palette.results.row.0", "keymap.search", "keymap.file.save.shortcut"],
         Page::Chat => &["chat.transcript", "chat.tool.read", "chat.tool.read.approve", "chat.tool.read.deny", "chat.input"],
         Page::Settings => &["settings.search", "general", "general.launch", "general.updates", "appearance.theme", "appearance.icons"],

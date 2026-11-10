@@ -1,0 +1,93 @@
+diff --git a/added.txt b/added.txt
+new file mode 100644
+index 0000000..07f33c4
+--- /dev/null
++++ b/added.txt
+@@ -0,0 +1,2 @@
++new
++file
+diff --git a/blob.bin b/blob.bin
+index 8352675..c5793f9 100644
+Binary files a/blob.bin and b/blob.bin differ
+diff --git a/main.rs b/main.rs
+index c226300..c878f04 100644
+--- a/main.rs
++++ b/main.rs
+@@ -1,4 +1,4 @@
+ fn main() {
+-    let x = 1;
+-    println!("{}", x);
++    let y = 2;
++    println!("{}", y);
+ }
+diff --git a/move_me.txt b/moved.txt
+similarity index 94%
+rename from move_me.txt
+rename to moved.txt
+index ac9837c..4520eb4 100644
+--- a/move_me.txt
++++ b/moved.txt
+@@ -12,7 +12,7 @@ line 11
+ line 12
+ line 13
+ line 14
+-line 15
++line fifteen
+ line 16
+ line 17
+ line 18
+diff --git a/nonl.txt b/nonl.txt
+index c54071e..adde431 100644
+--- a/nonl.txt
++++ b/nonl.txt
+@@ -1,2 +1,2 @@
+ keep
+-last
+\ No newline at end of file
++last
+diff --git a/numbers.txt b/numbers.txt
+index 1c99002..ba9a42f 100644
+--- a/numbers.txt
++++ b/numbers.txt
+@@ -2,7 +2,7 @@
+ 2
+ 3
+ 4
+-5
++five
+ 6
+ 7
+ 8
+@@ -27,7 +27,7 @@
+ 27
+ 28
+ 29
+-30
++thirty
+ 31
+ 32
+ 33
+diff --git a/old.txt b/old.txt
+deleted file mode 100644
+index 286c5f5..0000000
+--- a/old.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone
+diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755
+diff --git "a/t\303\244b.txt" "b/t\303\244b.txt"
+new file mode 100644
+index 0000000..41d9a24
+--- /dev/null
++++ "b/t\303\244b.txt"
+@@ -0,0 +1 @@
++täb
+diff --git a/with space.txt b/with space.txt
+index b2901ea..6435bc0 100644
+--- a/with space.txt	
++++ b/with space.txt	
+@@ -1 +1 @@
+-a b
++a c
