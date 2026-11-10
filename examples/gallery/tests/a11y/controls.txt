@@ -63,3 +63,30 @@ Window
   ProgressIndicator "Upload" numeric=30 range=0..100
   ProgressIndicator "Connecting"
   ProgressIndicator "Loading"
+  Label value="Rolling numbers"
+  Button "−"
+  Button "+"
+  Label value="$9.95"
+  Label value="Fling"
+  List
+    ListItem [1/200]
+      Label value="Row 1"
+    ListItem [2/200]
+      Label value="Row 2"
+    ListItem [3/200]
+      Label value="Row 3"
+    ListItem [4/200]
+      Label value="Row 4"
+    ListItem [5/200]
+      Label value="Row 5"
+    ListItem [6/200]
+      Label value="Row 6"
+    ListItem [7/200]
+      Label value="Row 7"
+    ListItem [8/200]
+      Label value="Row 8"
+    ListItem [9/200]
+      Label value="Row 9"
+    ScrollBar
+  Unknown
+  ScrollBar
