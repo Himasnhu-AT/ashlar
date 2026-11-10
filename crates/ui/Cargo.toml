@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 ashlar-command = { workspace = true }
 ashlar-control = { workspace = true }
+ashlar-motion = { workspace = true }
 ashlar-telemetry = { workspace = true, optional = true }
 log = { workspace = true }
 egui = { workspace = true }

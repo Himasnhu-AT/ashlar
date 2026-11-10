@@ -17,6 +17,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   colour never overshoot), `MotionPrefs`, motion `tokens` (exits shorter than enters), an
   OKLab/OKLCH `color` module with gamut mapping, premultiplied mixing and WCAG contrast, and
   `gesture` helpers (velocity tracker, fling projection, rubber band).
+- `ashlar_ui::motion`: animated values for egui in one call per frame (`value`, `f32`, `opacity`,
+  `color` in OKLab, `rect` by edges, `set`, `release`), kept in the context and forgotten when
+  unused. Nothing animates on first show, frames are requested (`Reason::ANIMATION`) only while a
+  value moves, and settled values are exactly their target. `prefs`/`set_prefs` set reduced
+  motion (also turning off egui's widget animations) and a time scale; `active` counts moving
+  values.
 
 ### Changed
 

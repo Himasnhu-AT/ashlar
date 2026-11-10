@@ -12,7 +12,8 @@
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
 //! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`devtools`]
 //!   (the UI debugger: element tree with refs, injected input, waits, screenshots, inspector), [`cache`]
-//!   (revision-keyed galleys and meshes), [`wake`] (frame requests with a reason, per-reason
+//!   (revision-keyed galleys and meshes), [`motion`] (animated values that idle when settled),
+//!   [`wake`] (frame requests with a reason, per-reason
 //!   frame counts), [`idle`] (trim caches when idle or in the background; memory and frame-rate
 //!   readouts).
 //!
@@ -33,6 +34,7 @@ pub mod icons;
 pub mod idle;
 pub mod layout;
 pub mod markdown;
+pub mod motion;
 pub mod printing;
 pub mod search;
 pub mod slider;
