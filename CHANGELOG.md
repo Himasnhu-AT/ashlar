@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Gesture handoff: value fields, sliders and knobs keep going when a drag is let go while moving
+  and ease to rest (clamped, snapped; the commit carries the resting value, so one drag is still
+  one undo step); `.fling(false)` turns it off. `VirtualList::fling(true)` drags the list to
+  scroll it, with fling and rubber band past either end. A pause of 40 ms before release, or
+  reduced motion, means no fling.
 - `ashlar_ui::rolling::RollingText`: counters and readouts that roll instead of jumping. Only the
   changed characters move (prefix/suffix, then LCS for short text), up when `.value(..)` rises and
   down when it falls; the width follows; `.tabular(true)` gives digits one width. Reduced motion

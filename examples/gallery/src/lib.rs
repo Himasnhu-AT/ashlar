@@ -722,6 +722,18 @@ impl Gallery {
                     RollingText::new("controls.rolling.cost", &text).value(cents as f64).tabular(true).show(ui);
                 });
             });
+            section(ui, &t, "Fling", |ui| {
+                // drag the list and let go while moving; pull past an end to feel the rubber band
+                let h = t.control_height;
+                ui.allocate_ui(egui::vec2(260.0, h * 6.0), |ui| {
+                    VirtualList::new("controls.fling.list", 200, RowHeights::Uniform(h)).max_height(h * 6.0).stripes(true).fling(true).show(
+                        ui,
+                        |ui, row| {
+                            ui.label(format!("Row {}", row.index + 1));
+                        },
+                    );
+                });
+            });
         });
     }
 

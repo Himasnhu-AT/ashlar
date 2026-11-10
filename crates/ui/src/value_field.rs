@@ -35,8 +35,12 @@ use egui::{Align2, Color32, CursorIcon, Key, Response, Sense, Stroke, StrokeKind
 
 use crate::automation::{self, Details, Role};
 use crate::cache;
-use crate::edit::{Bounds, DragMode, Edit, drive_drag, has_keyboard, snap};
+use crate::edit::{Bounds, DragMode, Edit, EditPhase, drive_drag, has_keyboard, snap};
+use crate::motion;
 use crate::tokens::{self, Tokens};
+use ashlar_motion::gesture::{VelocityTracker, decay_k, deceleration, project};
+use ashlar_motion::{Class, Curve, tokens as mtokens};
+use egui::Id;
 
 /// Turns a value into text and back.
 pub trait ValueFormat {
@@ -123,17 +127,37 @@ pub struct ValueField<'a> {
     key_step: Option<f64>,
     width: Option<f32>,
     hot: Option<Color32>,
+    fling: bool,
 }
 
 impl<'a> ValueField<'a> {
     /// `id` is the automation id (also scopes egui state); `label` is the accessible name.
     pub fn new(id: &'a str, label: &'a str, value: &'a mut f64, format: &'a dyn ValueFormat) -> Self {
-        ValueField { id, label, value, format, range: f64::MIN..=f64::MAX, speed: None, step: 0.0, key_step: None, width: None, hot: None }
+        ValueField {
+            id,
+            label,
+            value,
+            format,
+            range: f64::MIN..=f64::MAX,
+            speed: None,
+            step: 0.0,
+            key_step: None,
+            width: None,
+            hot: None,
+            fling: true,
+        }
     }
     pub fn range(mut self, range: RangeInclusive<f64>) -> Self {
         self.range = range;
         self
     }
+    /// Whether a drag let go while moving keeps going and eases to rest (default on; never under
+    /// reduced motion). The commit carries the value it comes to rest at.
+    pub fn fling(mut self, on: bool) -> Self {
+        self.fling = on;
+        self
+    }
+
     /// Value change per point of horizontal drag (default: 1/300 of a finite range, else 0.1).
     pub fn speed(mut self, speed: f64) -> Self {
         self.speed = Some(speed);
@@ -176,10 +200,12 @@ impl<'a> ValueField<'a> {
         let width = self.width.filter(|w| w.is_finite() && *w > 0.0).unwrap_or(t.control_height * 3.0).min(4096.0);
         let editing = ui.data(|d| d.get_temp::<String>(editing_id));
         let font = Tokens::font(t.type_scale.body);
+        // mid-fling, the value drawn is where the fling has got to
+        let drawn = if editing.is_none() { fling_shown(ui, id, *self.value) } else { *self.value };
         // hot text is laid out first: its size is the text's
         let hot = match (self.hot, &editing) {
             (Some(color), None) => {
-                let shown = *self.value;
+                let shown = drawn;
                 let revision = cache::hash_of(&(shown.to_bits(), self.format.tag(), font.size.to_bits()));
                 let format = self.format;
                 let galley = cache::galley(ui, (id, "hot"), revision, || {
@@ -202,6 +228,7 @@ impl<'a> ValueField<'a> {
         let value = self.value;
         let enabled = response.enabled();
         let mut edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::Relative(|d: Vec2, mult| d.x as f64 * speed * mult));
+        fling(ui, id, self.fling, &mut edit, value, bounds, self.step);
 
         if edit.is_none() && has_keyboard(&response) && enabled {
             let (up, down, enter, shift) = ui.input(|i| {
@@ -245,7 +272,7 @@ impl<'a> ValueField<'a> {
                 let y = rect.max.y - 1.0;
                 painter.line_segment([egui::pos2(rect.min.x + 2.0, y), egui::pos2(rect.max.x - 2.0, y)], Stroke::new(1.0, color.gamma_multiply(0.6)));
             }
-            let text = galley.text().to_owned();
+            let text = final_text(self.format, drawn, *value, galley.text()).into_owned();
             painter.galley_with_override_text_color(rect.min + Vec2::splat(2.0), galley, color);
             let shown = *value;
             response.widget_info(|| WidgetInfo::slider(enabled, shown, self.label));
@@ -270,7 +297,7 @@ impl<'a> ValueField<'a> {
             Stroke::new(1.0, t.border)
         };
         painter.rect_stroke(rect, radius, border, StrokeKind::Inside);
-        let shown = *value;
+        let shown = drawn;
         let format = self.format;
         let revision = cache::hash_of(&(shown.to_bits(), format.tag(), text_color, font.size.to_bits()));
         let galley = cache::galley(ui, (id, "value"), revision, || {
@@ -281,8 +308,10 @@ impl<'a> ValueField<'a> {
         let pos = Align2::CENTER_CENTER.align_size_within_rect(galley.size(), rect.shrink2(Vec2::new(t.space.sm, 0.0))).min;
         painter.galley(pos, galley.clone(), text_color);
 
+        let shown = *value;
+        let text = final_text(format, drawn, shown, galley.text());
         response.widget_info(|| WidgetInfo::slider(enabled, shown, self.label));
-        automation::register_with(ui, &response, self.id, self.label, Role::Field, Details { value: Some(galley.text()), selected: None });
+        automation::register_with(ui, &response, self.id, self.label, Role::Field, Details { value: Some(&text), selected: None });
         ValueResponse { response, edit }
     }
 
@@ -342,6 +371,17 @@ impl<'a> ValueField<'a> {
     }
 }
 
+/// The text of the value a control holds, for automation: `drawn_text` unless a fling is still
+/// drawing another value.
+pub(crate) fn final_text<'t>(format: &dyn ValueFormat, drawn: f64, value: f64, drawn_text: &'t str) -> std::borrow::Cow<'t, str> {
+    if drawn.to_bits() == value.to_bits() {
+        return drawn_text.into();
+    }
+    let mut text = String::new();
+    format.format(value, &mut text);
+    text.into()
+}
+
 fn valid_positive(v: Option<f64>) -> Option<f64> {
     v.filter(|s| s.is_finite() && *s > 0.0)
 }
@@ -368,6 +408,96 @@ pub(crate) fn select_all(ctx: &egui::Context, id: egui::Id, text: &str) {
     let all = egui::text::CCursorRange::two(egui::text::CCursor::default(), egui::text::CCursor::new(text.chars().count()));
     state.cursor.set_char_range(Some(all));
     state.store(ctx, id);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gesture handoff: a dragged value keeps going when it is let go
+// ---------------------------------------------------------------------------------------------
+
+/// What a control remembers between frames for its fling.
+#[derive(Clone, Copy, Debug, Default)]
+struct Fling {
+    tracker: VelocityTracker<f32>,
+    /// The value when the drag began: samples are tracked relative to it (keeps f32 precision).
+    origin: f64,
+    /// The last value tracked.
+    last: f64,
+    dragging: bool,
+    /// A running fling `(from, to)`: drawn as `from + offset` until the offset reaches `to - from`.
+    run: Option<(f64, f64)>,
+}
+
+fn fling_key(id: Id) -> Id {
+    id.with("ashlar_fling")
+}
+
+/// Feeds this frame's `edit` of the control `id` to its velocity tracker. When a drag is let go
+/// while still moving, the commit moves to where the value comes to rest (projected with the
+/// fast deceleration, snapped to `step` and clamped to `bounds`) and the control animates there
+/// with [`motion::release`]. A drag that paused [`STOP`](ashlar_motion::gesture::STOP) or longer
+/// before release, keyboard and typed edits, and reduced motion never fling. One drag is still
+/// one Begin … Commit, so one undo step covers the fling.
+pub(crate) fn fling(ui: &Ui, id: Id, on: bool, edit: &mut Option<Edit>, value: &mut f64, bounds: Bounds, step: f64) {
+    let Some(e) = *edit else { return };
+    let key = fling_key(id);
+    let now = ui.input(|i| i.time);
+    let mut f: Fling = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    match e.phase {
+        EditPhase::Begin => {
+            f = Fling { origin: e.start, last: e.start, dragging: true, ..Fling::default() };
+            f.tracker.add(now, 0.0);
+        }
+        EditPhase::Update if f.dragging => {
+            f.tracker.add(now, (e.value - f.origin) as f32);
+            f.last = e.value;
+        }
+        EditPhase::Commit if f.dragging => {
+            f.dragging = false;
+            // a release without movement is not a sample: the hand was still moving at the last
+            // one, and a 40 ms pause is caught by `velocity_at`
+            if e.value != f.last {
+                f.tracker.add(now, (e.value - f.origin) as f32);
+            }
+            let v = f.tracker.velocity_at(now);
+            let reduced = motion::prefs(ui.ctx()).reduced;
+            if on && !reduced && v.is_finite() && v != 0.0 {
+                let from = e.value;
+                let rest = from + f64::from(project(0.0, v, deceleration::FAST));
+                let to = bounds.clamp(snap(rest, step));
+                if to.is_finite() && to != from {
+                    // never faster than the distance left can absorb: a fling stopped short by
+                    // an edge eases into it rather than overshooting and turning back
+                    let reach = (to - from) as f32 * decay_k(deceleration::FAST);
+                    let v = if v.signum() == reach.signum() { v.abs().min(reach.abs()).copysign(v) } else { 0.0 };
+                    let anim = key.with("value");
+                    motion::set(ui.ctx(), anim, 0.0_f32);
+                    motion::release(ui.ctx(), anim, v, (to - from) as f32, Curve::Spring(mtokens::SETTLE.enter));
+                    *value = to;
+                    *edit = Some(Edit::commit(e.start, to));
+                    f.run = Some((from, to));
+                }
+            }
+        }
+        EditPhase::Cancel => f = Fling::default(),
+        _ => {}
+    }
+    ui.data_mut(|d| d.insert_temp(key, f));
+}
+
+/// The value to draw for the control `id` holding `value`: mid-fling, where the fling has got
+/// to; otherwise `value`. A value changed from outside ends the fling.
+pub(crate) fn fling_shown(ui: &Ui, id: Id, value: f64) -> f64 {
+    let key = fling_key(id);
+    let Some(mut f) = ui.data(|d| d.get_temp::<Fling>(key)) else { return value };
+    let Some((from, to)) = f.run else { return value };
+    let target = (to - from) as f32;
+    let offset = motion::value(ui.ctx(), key.with("value"), target, Class::Gesture, mtokens::SETTLE.enter);
+    if value.to_bits() != to.to_bits() || offset == target || f.dragging {
+        f.run = None;
+        ui.data_mut(|d| d.insert_temp(key, f));
+        return value;
+    }
+    from + f64::from(offset)
 }
 
 #[cfg(test)]
