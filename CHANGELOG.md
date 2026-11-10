@@ -51,6 +51,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
 - `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
   its exit settles, then `None`), entering and leaving along a token pair as an opacity.
+- `ashlar_ui::code_view::CodeView`: a read-only code view with virtualized lines (O(visible) per
+  frame), a line-number gutter, optional wrapping, mouse selection, select all and copy, search
+  marks and syntax colours from `SyntaxTheme::from_tokens`. Line galleys are cached per line and
+  revision; lexer states are computed lazily. Automation `<id>.line.<n>` for visible lines only;
+  AccessKit document and paragraphs. About 0.06 ms per scrolled frame at 100k lines.
+- `ashlar_ui::markdown`: fenced code blocks in a known language are syntax-coloured.
+- `ashlar-syntax` (new crate, rank 0, no dependencies, builds for wasm32): syntax highlighting
+  with hand-written, linear-time lexers for Rust, TypeScript/JavaScript, Go, C, C++, Java, C#,
+  Python, shell, SQL, JSON, TOML, YAML, HTML (with script and style), CSS, Markdown (fenced code
+  in its language) and diffs. `highlight` returns ordered byte ranges that cover the input;
+  `highlight_line` carries a `State` from line to line for incremental views; `lang_for_path`;
+  a `Highlighter` trait so a bigger engine can plug in. About 0.5 ms per 1,000 lines of Rust.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
