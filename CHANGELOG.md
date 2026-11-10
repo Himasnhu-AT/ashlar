@@ -193,6 +193,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
+  `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
+  a screen reader's tree on every later frame (a caret-blink frame in the notes app: 272 allocations
+  instead of 652). This happens only where no screen reader can exist (a `Driver` or `--headless`
+  run, or a build without the `accesskit` feature); in a window it stays on, and
+  `devtools::set_platform_accesskit` sets which applies.
 - `Curve::Tween` started from rest follows its easing exactly: a linear tween is linear (it used to
   start at zero velocity, so a 2 s linear 0→100 tween read ≈12 at 0.525 s instead of 26.25).
   Retargets mid-motion still keep velocity continuous.

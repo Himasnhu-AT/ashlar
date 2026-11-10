@@ -438,6 +438,10 @@ impl<D: Document> Runtime<D> {
         }
         self.started = true;
         devtools::install(ctx);
+        // without eframe's AccessKit adapter no screen reader can turn AccessKit on
+        if !cfg!(feature = "accesskit") {
+            devtools::set_platform_accesskit(ctx, false);
+        }
         self.inbox.set_ctx(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
         // OS accent, contrast and reduced motion; tokens the setup below installs win

@@ -71,6 +71,8 @@ impl<D: Document> Driver<D> {
                 w.lock().unwrap_or_else(PoisonError::into_inner).pending.push((info.delay, info.current_cumulative_pass_nr));
             }
         });
+        // no window, so no screen reader: devtools may switch AccessKit off after a request
+        ashlar_ui::devtools::set_platform_accesskit(&ctx, false);
         Driver {
             runtime,
             ctx,
