@@ -30,8 +30,8 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
 [features]
-default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end"]
-full = ["default", "notify", "progress", "secrets"]
+default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end", "mac-shell"]
+full = ["default", "notify", "progress", "secrets", "drag-out"]
 # Dock Quit, logout and shutdown ask the app first (macOS delegate method, Windows session-end
 # messages).
 session-end = [
@@ -47,14 +47,63 @@ session-end = [
     "windows/Win32_System_LibraryLoader",
     "windows/Win32_Graphics_Gdi",
 ]
+# macOS shell fixes for winit: a nil appearance during screen capture, Dock reopen; and the
+# quiet-launch switch.
+mac-shell = [
+    "dep:objc2",
+    "objc2-app-kit/NSApplication",
+    "objc2-app-kit/NSResponder",
+    "objc2-foundation/NSKeyValueObserving",
+]
+# Drag files, an image or text out of the window (macOS NSDraggingSession).
+drag-out = [
+    "dep:objc2",
+    "dep:raw-window-handle",
+    "objc2-app-kit/NSDragging",
+    "objc2-app-kit/NSDraggingItem",
+    "objc2-app-kit/NSDraggingSession",
+    "objc2-app-kit/NSPasteboard",
+    "objc2-app-kit/NSPasteboardItem",
+    "objc2-app-kit/NSEvent",
+    "objc2-app-kit/NSGraphicsContext",
+    "objc2-app-kit/NSView",
+    "objc2-app-kit/NSWindow",
+    "objc2-app-kit/NSResponder",
+    "objc2-foundation/NSURL",
+    "objc2-foundation/NSData",
+    "objc2-foundation/NSArray",
+    "objc2-foundation/NSGeometry",
+]
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd", "dep:raw-window-handle"]
-# A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
-menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
-# Whether this process can show a window (Windows: not in a service's window station).
-display = ["windows/Win32_System_StationsAndDesktops"]
+# A native menu bar and context menus built from a `MenuSpec` (muda; macOS and Windows).
+menu = [
+    "dep:muda",
+    "dep:objc2",
+    "dep:raw-window-handle",
+    "dep:block2",
+    "objc2-foundation/NSRunLoop",
+    "objc2-foundation/block2",
+    "windows/Win32_UI_Shell",
+    "windows/Win32_UI_WindowsAndMessaging",
+]
+# A tray / status-bar icon with a menu built from a `MenuSpec` (tray-icon; on Linux a
+# StatusNotifierItem over D-Bus, no GTK).
+tray = ["dep:tray-icon", "dep:muda", "dep:objc2"]
+# System-wide shortcuts that reach the app while another app has the focus (global-hotkey).
+hotkey = ["dep:global-hotkey", "dep:objc2"]
+# Whether this process can show a window (Windows: not in a service's window station), and the
+# monitors before any window exists.
+display = [
+    "windows/Win32_System_StationsAndDesktops",
+    "windows/Win32_Graphics_Gdi",
+    "windows/Win32_UI_HiDpi",
+    "dep:objc2",
+    "objc2-app-kit/NSScreen",
+    "objc2-app-kit/objc2-core-foundation",
+]
 # This process's memory footprint, and returning freed allocator pages to the system.
-memory = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
+memory = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading", "windows/Win32_System_Diagnostics_ToolHelp"]
 # Put a bundled command-line tool on PATH (a link in /usr/local/bin, admin prompt, ~/.local/bin
 # fallback), with its commands.
 cli-tool = []
@@ -78,8 +127,9 @@ open-files = [
     "objc2-app-kit/NSApplication",
     "objc2-app-kit/NSRunningApplication",
 ]
-# A second launch forwards its arguments to the first over a local socket.
-single-instance = []
+# A second launch forwards its arguments to the first over a local socket (and, on Windows, lets
+# it take the foreground).
+single-instance = ["windows/Win32_UI_WindowsAndMessaging"]
 # System notifications.
 notify = [
     "dep:objc2",
@@ -122,6 +172,10 @@ secrets = [
 # Appearance, accent colour, reduced motion; open a URL, reveal a file.
 system = [
     "dep:objc2",
+    "dep:raw-window-handle",
+    "objc2-app-kit/NSApplication",
+    "objc2-app-kit/NSResponder",
+    "windows/Win32_System_Threading",
     "objc2-app-kit/NSColor",
     "objc2-app-kit/NSColorSpace",
     "objc2-app-kit/NSWorkspace",
@@ -130,7 +184,10 @@ system = [
     "objc2-foundation/NSUserDefaults",
     "objc2-foundation/NSURL",
     "objc2-foundation/NSArray",
+    "objc2-foundation/NSLocale",
+    "objc2-foundation/NSString",
     "dep:windows-registry",
+    "windows/Win32_Globalization",
     "windows/Win32_UI_WindowsAndMessaging",
     "windows/Win32_UI_Shell",
     "dep:zbus",
@@ -154,9 +211,9 @@ libc = "0.2"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 arboard = { version = "3.6", optional = true }
 png = { version = "0.18", optional = true }
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 muda = { workspace = true, optional = true }
+tray-icon = { version = "0.26", default-features = false, optional = true }
+global-hotkey = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
@@ -185,6 +242,8 @@ windows-native-keyring-store = { version = "1", default-features = false, option
 keyring-core = { version = "1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The tray's StatusNotifierItem through ksni (zbus, async-io): no GTK, no tokio.
+tray-icon = { version = "0.26", default-features = false, optional = true, features = ["ksni"] }
 zbus = { version = "5", optional = true, default-features = false, features = ["blocking-api", "async-io"] }
 zbus-secret-service-keyring-store = { version = "1", features = ["rt-async-io-crypto-rust"], optional = true }
 keyring-core = { version = "1", optional = true }

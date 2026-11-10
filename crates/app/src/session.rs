@@ -96,6 +96,35 @@ pub struct Session<D: Document> {
     effects: Vec<Effect>,
     windowed: bool,
     pub(crate) telemetry: Telemetry,
+    /// Who is changing the document now (set around agent requests and job applies).
+    source: Option<Origin>,
+    /// The revision the latest change produced and who made it.
+    last_change: Option<(Revision, Origin)>,
+}
+
+/// Who made a change to the document: views pick motion from it. Changes made by the user's own
+/// hand ([`Origin::User`], [`Origin::Drag`]) show at once (`motion::set`); the rest
+/// ([`Origin::Undo`], [`Origin::Agent`], [`Origin::Job`]) animate, so a person watching an agent
+/// can follow what moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Origin {
+    /// An edit or command from the person at the keyboard or pointer.
+    User,
+    /// An edit folded into the previous one (a drag): it follows the hand.
+    Drag,
+    /// Undo or redo.
+    Undo,
+    /// A control request (CLI, MCP, the control port).
+    Agent,
+    /// A background job's apply.
+    Job,
+}
+
+impl Origin {
+    /// Whether a change from this origin should animate (false: show it at once).
+    pub fn animates(self) -> bool {
+        matches!(self, Origin::Undo | Origin::Agent | Origin::Job)
+    }
 }
 
 impl<D: Document> Session<D> {
@@ -115,6 +144,8 @@ impl<D: Document> Session<D> {
             effects: Vec::new(),
             windowed: false,
             telemetry: Telemetry::default(),
+            source: None,
+            last_change: None,
         }
     }
 
@@ -182,6 +213,34 @@ impl<D: Document> Session<D> {
         self.edit_with(label, Some(merge_key), f)
     }
 
+    /// Run `f` with every change it makes recorded as coming from `origin` (an app's own agent
+    /// bridge, a sync engine). The runtime does this for control requests and job applies.
+    pub fn with_origin<R>(&mut self, origin: Origin, f: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.source.replace(origin);
+        let r = f(self);
+        self.source = outer;
+        r
+    }
+
+    /// Who made the change that produced the current revision; `None` when the document has not
+    /// changed since it was created or opened (or was changed through [`Session::store_mut`]).
+    pub fn origin(&self) -> Option<Origin> {
+        self.last_change.filter(|(rev, _)| *rev == self.store.revision()).map(|(_, o)| o)
+    }
+
+    /// Set who is changing the document from now on; returns the previous setting.
+    pub(crate) fn swap_source(&mut self, origin: Option<Origin>) -> Option<Origin> {
+        std::mem::replace(&mut self.source, origin)
+    }
+
+    /// Record who made the change from `before` to the current revision (nothing when unchanged).
+    fn mark(&mut self, before: Revision, natural: Origin) {
+        let now = self.store.revision();
+        if now != before {
+            self.last_change = Some((now, self.source.unwrap_or(natural)));
+        }
+    }
+
     /// A change that may fail: on error nothing changes.
     pub fn try_edit<R, E>(&mut self, label: &str, f: impl FnOnce(&mut D) -> Result<R, E>) -> Result<R, E> {
         match &mut self.work {
@@ -192,7 +251,12 @@ impl<D: Document> Session<D> {
                 note_merge(w, None);
                 Ok(r)
             }
-            None => self.store.try_edit(label, f),
+            None => {
+                let before = self.store.revision();
+                let r = self.store.try_edit(label, f);
+                self.mark(before, Origin::User);
+                r
+            }
         }
     }
 
@@ -203,10 +267,15 @@ impl<D: Document> Session<D> {
                 note_merge(w, merge_key);
                 r
             }
-            None => match merge_key {
-                Some(k) => self.store.edit_merged(label, k, f),
-                None => self.store.edit(label, f),
-            },
+            None => {
+                let before = self.store.revision();
+                let (r, natural) = match merge_key {
+                    Some(k) => (self.store.edit_merged(label, k, f), Origin::Drag),
+                    None => (self.store.edit(label, f), Origin::User),
+                };
+                self.mark(before, natural);
+                r
+            }
         }
     }
 
@@ -220,14 +289,18 @@ impl<D: Document> Session<D> {
 
     /// Undo the last step; returns its label.
     pub fn undo(&mut self) -> Option<String> {
+        let before = self.store.revision();
         let r = self.store_mut().undo();
+        self.mark(before, Origin::Undo);
         self.sync_work();
         r
     }
 
     /// Redo the next step; returns its label.
     pub fn redo(&mut self) -> Option<String> {
+        let before = self.store.revision();
         let r = self.store_mut().redo();
+        self.mark(before, Origin::Undo);
         self.sync_work();
         r
     }
@@ -293,7 +366,11 @@ impl<D: Document> Session<D> {
                 w.doc = doc;
                 note_merge(w, None);
             }
-            None => self.store.commit(label, None, doc),
+            None => {
+                let before = self.store.revision();
+                self.store.commit(label, None, doc);
+                self.mark(before, Origin::User);
+            }
         }
     }
 
@@ -406,7 +483,10 @@ impl<D: Document> Session<D> {
         if ok {
             if !w.replaced {
                 let merge = w.merge.flatten();
+                let natural = if merge.is_some() { Origin::Drag } else { Origin::User };
+                let before = self.store.revision();
                 self.store.commit(label.trim_end_matches('…'), merge.as_deref(), w.doc);
+                self.mark(before, natural);
             }
         } else {
             self.effects.truncate(w.effects);

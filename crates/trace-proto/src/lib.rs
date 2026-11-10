@@ -353,7 +353,67 @@ pub struct Perf {
     /// Host-defined gauges, as last value in the window.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gauges: BTreeMap<String, f64>,
+    /// Incident rules that fired during the window, at most one entry per rule. Added within
+    /// schema 1: senders that predate it leave it out, and older readers ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incidents: Vec<Incident>,
 }
+
+/// A performance rule that fired during a window. Repeats of the same rule within one window are
+/// folded into one entry: `count` says how often it fired and `value` keeps the worst figure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Incident {
+    pub rule: IncidentRule,
+    /// When the rule first fired in the window, in milliseconds since the process started.
+    pub at_ms: u64,
+    /// How often the rule fired in the window (at least 1).
+    pub count: u32,
+    /// The worst figure seen, in the unit [`IncidentRule`] gives for the rule.
+    pub value: u64,
+}
+
+/// Which rule an [`Incident`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncidentRule {
+    /// [`LONG_FRAMES_RUN`] frames over [`DISPLAY_BUDGET_US`] within [`LONG_FRAMES_SPAN_MS`].
+    /// `value`: the slowest of them, in microseconds.
+    LongFrames,
+    /// One frame of at least [`STALL_US`]. `value`: its length, in microseconds.
+    Stall,
+    /// [`MEMORY_FLOORS`] rising per-minute memory floors, the last at least
+    /// [`MEMORY_GROWTH_MIB`] and [`MEMORY_GROWTH_PCT`] percent above the first.
+    /// `value`: the growth, in MiB.
+    MemoryGrowth,
+    /// A rule this version does not know.
+    #[serde(other)]
+    Other,
+}
+
+impl IncidentRule {
+    /// The rule's wire name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::LongFrames => "long_frames",
+            Self::Stall => "stall",
+            Self::MemoryGrowth => "memory_growth",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// [`IncidentRule::LongFrames`]: how many frames over budget make an incident...
+pub const LONG_FRAMES_RUN: usize = 3;
+/// ...and the span, in milliseconds, they must fall within.
+pub const LONG_FRAMES_SPAN_MS: u64 = 1_000;
+/// [`IncidentRule::Stall`]: a frame at least this long, in microseconds.
+pub const STALL_US: u32 = 250_000;
+/// [`IncidentRule::MemoryGrowth`]: how many rising minute floors make an incident...
+pub const MEMORY_FLOORS: usize = 5;
+/// ...the least growth from the first floor to the last, in MiB...
+pub const MEMORY_GROWTH_MIB: u64 = 64;
+/// ...and in percent of the first floor.
+pub const MEMORY_GROWTH_PCT: u64 = 20;
 
 /// Frame times over one window, as a histogram that can be merged by adding buckets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

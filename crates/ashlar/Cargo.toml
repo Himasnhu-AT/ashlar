@@ -28,6 +28,10 @@ accesskit = ["ashlar-app/accesskit"]
 headless = ["ashlar-app/headless"]
 # The app's commands in the macOS / Windows menu bar.
 native-menu = ["ashlar-app/native-menu"]
+# A tray / status-bar icon with a menu (`App::tray`).
+tray = ["ashlar-app/tray"]
+# System-wide shortcuts that reach the app while another app has the focus (`App::global_shortcut`).
+hotkey = ["ashlar-app/hotkey"]
 # Crash, performance and usage telemetry (always on when the app configures an endpoint).
 telemetry = ["ashlar-app/telemetry"]
 

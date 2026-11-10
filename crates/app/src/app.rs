@@ -71,8 +71,17 @@ pub(crate) struct Shared<D: Document> {
     pub toast_commands: bool,
     /// Save the window's placement and restore it on launch (see [`App::remember_window`]).
     pub remember_window: bool,
+    /// The tray icon to show (see [`App::tray`]).
+    #[cfg(feature = "tray")]
+    pub tray: Option<ashlar_native::tray::TraySpec>,
+    /// System-wide shortcuts: (command id, chord text) (see [`App::global_shortcut`]).
+    #[cfg(feature = "hotkey")]
+    pub global_shortcuts: Vec<(String, String)>,
     /// Named starting states, in declaration order.
     pub scenes: Vec<(String, SceneFn<D>)>,
+    /// The web page's `<canvas>` id (see [`App::canvas_id`]).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub canvas_id: Option<String>,
 }
 
 impl<D: Document> Shared<D> {
@@ -138,8 +147,13 @@ pub struct App<D: Document> {
     accept_drops: Option<bool>,
     toast_commands: bool,
     remember_window: bool,
+    #[cfg(feature = "tray")]
+    tray: Option<ashlar_native::tray::TraySpec>,
+    #[cfg(feature = "hotkey")]
+    global_shortcuts: Vec<(String, String)>,
     window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
+    canvas_id: Option<String>,
 }
 
 impl<D: Document> App<D> {
@@ -169,8 +183,13 @@ impl<D: Document> App<D> {
             accept_drops: None,
             toast_commands: false,
             remember_window: true,
+            #[cfg(feature = "tray")]
+            tray: None,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: Vec::new(),
             window: WindowSpec::default(),
             scenes: Vec::new(),
+            canvas_id: None,
         }
     }
 
@@ -247,6 +266,15 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// On the web, the id of the `<canvas>` the app runs in (default: the app's name, then
+    /// `ashlar`). When the app cannot start (no such canvas, no WebGL), a visible error appears
+    /// next to the canvas (or at the top of the page) as well as in the console. Ignored on the
+    /// desktop.
+    pub fn canvas_id(mut self, id: impl Into<String>) -> Self {
+        self.canvas_id = Some(id.into());
+        self
+    }
+
     pub fn window_size(mut self, width: f32, height: f32) -> Self {
         self.window_size = [width, height];
         self
@@ -285,6 +313,26 @@ impl<D: Document> App<D> {
     /// front. The endpoint is named after the app (see [`App::organization`]); desktop only.
     pub fn single_instance(mut self, on: bool) -> Self {
         self.single_instance = on;
+        self
+    }
+
+    /// Show a tray / status-bar icon (feature `tray`; desktop only). Choosing one of its menu items
+    /// runs the command with that id, under the rules the OS menu bar follows; clicking the icon
+    /// shows and focuses the window. It appears after the first frame and goes when the app ends;
+    /// where the desktop has no tray it is skipped with a log line.
+    #[cfg(feature = "tray")]
+    pub fn tray(mut self, spec: ashlar_native::tray::TraySpec) -> Self {
+        self.tray = Some(spec);
+        self
+    }
+
+    /// Run `command` when `chord` (`"Mod+Shift+Space"`, the keymap's syntax) is pressed anywhere,
+    /// even while another app has the focus (feature `hotkey`; macOS, Windows, Linux on X11).
+    /// The window comes to the front first. A chord without Ctrl, Alt or ⌘, or one another app
+    /// holds, is skipped with a log line.
+    #[cfg(feature = "hotkey")]
+    pub fn global_shortcut(mut self, command: impl Into<String>, chord: impl Into<String>) -> Self {
+        self.global_shortcuts.push((command.into(), chord.into()));
         self
     }
 
@@ -409,7 +457,12 @@ impl<D: Document> App<D> {
             accept_drops,
             toast_commands: self.toast_commands,
             remember_window: self.remember_window,
+            #[cfg(feature = "tray")]
+            tray: self.tray,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: self.global_shortcuts,
             scenes: self.scenes,
+            canvas_id: self.canvas_id,
         };
         (Arc::new(shared), self.view, self.setup)
     }

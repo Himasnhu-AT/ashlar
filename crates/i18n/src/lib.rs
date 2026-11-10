@@ -33,7 +33,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 pub use catalog::{CatalogError, MAX_CATALOG_BYTES, fill, placeholders};
-pub use locale::{Locale, negotiate, system_locales};
+pub use locale::{Locale, negotiate, set_native_languages, system_locales, with_native};
 pub use number::Symbols;
 pub use plural::{Category, Operands};
 

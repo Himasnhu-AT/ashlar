@@ -19,49 +19,11 @@ pub fn menu_accelerator(text: &str) -> Option<Chord> {
     ashlar_command::menu::menu_chord(text)
 }
 
-/// The `keyboard-types` code name of the physical key `chord` names (`KeyS`, `Digit0`,
-/// `Semicolon`, `ArrowLeft`, `F5`); `None` for keys a menu cannot show (`é`).
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
-fn code_name(chord: &Chord) -> Option<String> {
-    use ashlar_command::shortcut::{Key, Named};
-    Some(match chord.key {
-        Key::Char(c) if c.is_ascii_uppercase() => format!("Key{c}"),
-        Key::Char(c) if c.is_ascii_digit() => format!("Digit{c}"),
-        Key::Char(c) => {
-            let name = match c {
-                '`' => "Backquote",
-                '\\' => "Backslash",
-                '[' => "BracketLeft",
-                ']' => "BracketRight",
-                ',' => "Comma",
-                '-' => "Minus",
-                // `Mod++` (zoom in) is the `=` key, as menus show it.
-                '=' | '+' => "Equal",
-                '.' => "Period",
-                '/' => "Slash",
-                ';' => "Semicolon",
-                '\'' => "Quote",
-                _ => return None,
-            };
-            name.to_string()
-        }
-        Key::Named(n) => match n {
-            Named::Left => "ArrowLeft",
-            Named::Right => "ArrowRight",
-            Named::Up => "ArrowUp",
-            Named::Down => "ArrowDown",
-            n => n.name(),
-        }
-        .to_string(),
-        Key::F(n) => format!("F{n}"),
-    })
-}
-
 /// The menu backend's accelerator for `chord`; `None` for keys it cannot show.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn to_muda(chord: &Chord) -> Option<muda::accelerator::Accelerator> {
     use muda::accelerator::{CMD_OR_CTRL, Code, Modifiers as M};
-    let code: Code = code_name(chord)?.parse().ok()?;
+    let code: Code = crate::key_code::code_name(chord)?.parse().ok()?;
     let mut mods = M::empty();
     for (on, m) in [(chord.mods.command, CMD_OR_CTRL), (chord.mods.ctrl, M::CONTROL), (chord.mods.alt, M::ALT), (chord.mods.shift, M::SHIFT)] {
         if on {
@@ -95,9 +57,9 @@ mod tests {
             ("⌘⇧[", "BracketLeft"),
         ];
         for (text, code) in cases {
-            assert_eq!(code_name(&chord(text)).as_deref(), Some(code), "{text}");
+            assert_eq!(crate::key_code::code_name(&chord(text)).as_deref(), Some(code), "{text}");
         }
-        assert_eq!(code_name(&chord("Mod+é")), None);
+        assert_eq!(crate::key_code::code_name(&chord("Mod+é")), None);
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]

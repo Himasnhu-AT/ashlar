@@ -39,6 +39,7 @@ allow = [
     "OFL-1.1",             # epaint_default_fonts: bundled fonts
     "Ubuntu-font-1.0",     # epaint_default_fonts: bundled Ubuntu font
     "Unicode-3.0",
+    "Unlicense",           # ksni: the Linux tray's StatusNotifierItem (public-domain dedication)
     "Zlib",
 ]
 confidence-threshold = 0.9

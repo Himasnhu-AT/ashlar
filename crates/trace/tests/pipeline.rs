@@ -1116,6 +1116,76 @@ fn shutdown_within_waits_no_longer_than_it_is_told_for_a_slow_server() {
     assert!(!server.items().iter().any(|(_, item)| is_unclean_report(item)), "no unclean exit");
 }
 
+/// A transport whose first request blocks until the test opens the gate; every request then fails
+/// as offline, so whatever was spooled stays on disk.
+#[derive(Clone, Default)]
+struct Gate(Arc<(Mutex<GateState>, std::sync::Condvar)>);
+
+#[derive(Default)]
+struct GateState {
+    entered: bool,
+    open: bool,
+}
+
+impl Gate {
+    fn entered(&self) -> bool {
+        self.0.0.lock().unwrap().entered
+    }
+
+    fn open(&self) {
+        self.0.0.lock().unwrap().open = true;
+        self.0.1.notify_all();
+    }
+
+    /// True once the worker has dropped its copy, which it does only as its thread ends.
+    fn worker_gone(&self) -> bool {
+        Arc::strong_count(&self.0) == 1
+    }
+}
+
+impl Transport for Gate {
+    fn send(&mut self, _request: &Request<'_>) -> Result<Reply, TransportError> {
+        let (state, changed) = &*self.0;
+        let mut state = state.lock().unwrap();
+        state.entered = true;
+        while !state.open {
+            state = changed.wait(state).unwrap();
+        }
+        Err(TransportError::Network("offline".to_owned()))
+    }
+}
+
+/// Regression for IMP-0.6: when `shutdown_within` times out, the caller releases the session folder while
+/// the worker is still in a request. The worker's last pass afterwards must not adopt that folder (or
+/// any other) as an orphan, or it holds the lock until the process exits and no other process can send it.
+#[test]
+fn a_worker_that_outlives_shutdown_within_leaves_the_folder_to_other_processes() {
+    if reran_without_kill_switches("a_worker_that_outlives_shutdown_within_leaves_the_folder_to_other_processes") {
+        return;
+    }
+    let dir = TempDir::new();
+    let gate = Gate::default();
+    let tracer = builder(&dir, &Server::default()).transport(gate.clone()).init();
+    let lock_file = session_dir(&dir, &tracer).join("lock");
+    wait_for("the worker to block in its first request", || gate.entered());
+
+    assert!(!tracer.shutdown_within(Duration::from_millis(1)), "the worker is stuck, so the wait times out");
+    gate.open();
+    wait_for("the worker to finish its last pass and end", || gate.worker_gone());
+
+    // The tracer is still alive, as in a process that has not exited yet: its folder must be free anyway.
+    let file = std::fs::OpenOptions::new().write(true).open(&lock_file).unwrap();
+    assert!(file.try_lock().is_ok(), "another spool can lock the released session folder");
+    drop(file);
+
+    // ... and the next process sends the end the stuck one wrote but could not send.
+    let server = Server::default();
+    let next = builder(&dir, &server).init();
+    assert!(next.flush_blocking(WAIT));
+    assert_eq!(ends(&server, &tracer.session_id()), vec![SessionStatus::Exited]);
+    drop(tracer);
+}
+
 #[test]
 fn a_command_line_process_keeps_its_events_when_it_exits_during_a_slow_send() {
     if reran_without_kill_switches("a_command_line_process_keeps_its_events_when_it_exits_during_a_slow_send") {

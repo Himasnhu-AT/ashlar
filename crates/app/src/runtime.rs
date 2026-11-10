@@ -36,7 +36,7 @@ use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::open::Inbox;
-use crate::session::{Document, Effect, Session, now};
+use crate::session::{Document, Effect, Origin, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
 use crate::window_state::{self, WindowState};
@@ -103,9 +103,39 @@ pub struct Cx<'a, D: Document> {
     queued: &'a mut Vec<(String, Value)>,
     dropped: &'a [PathBuf],
     ctx: egui::Context,
+    /// Who changed the document since the view last drew (`None`: unchanged).
+    origin: Option<Origin>,
 }
 
 impl<D: Document> Cx<'_, D> {
+    /// The design tokens of the current theme (`cx.tokens().space.md`).
+    pub fn tokens(&self) -> tokens::Tokens {
+        tokens::current(&self.ctx)
+    }
+
+    /// Who changed the document since the view last drew; `None` when it did not change (or
+    /// changed without an edit: opened, replaced).
+    pub fn origin(&self) -> Option<Origin> {
+        self.origin
+    }
+
+    /// The value to draw for `id`, moving toward `target` along `curve`
+    /// ([`ashlar_ui::motion::value`], [`Class::Other`](ashlar_motion::Class::Other)). When the
+    /// document changed by the user's own hand since the last frame ([`Origin::animates`] is
+    /// false) it jumps to `target` instead ([`ashlar_ui::motion::set`]): typing and drags show at
+    /// once, while undo, agent and job changes animate.
+    pub fn motion<T>(&self, id: impl egui::AsId, target: T, curve: impl Into<ashlar_motion::Curve>) -> T
+    where
+        T: ashlar_motion::Animatable + Send + Sync + 'static,
+    {
+        let id = egui::Id::new(id);
+        if self.origin.is_some_and(|o| !o.animates()) {
+            ashlar_ui::motion::set(&self.ctx, id, target);
+            return target;
+        }
+        ashlar_ui::motion::value(&self.ctx, id, target, ashlar_motion::Class::Other, curve)
+    }
+
     /// The current document.
     pub fn doc(&self) -> &D {
         self.session.doc()
@@ -211,6 +241,8 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
+    /// The revision the view last drew ([`Cx::origin`]).
+    view_rev: Option<Revision>,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -245,6 +277,8 @@ pub struct Runtime<D: Document> {
     passes: u64,
     /// Times each pass for the perf warnings (`None`: nothing uses it).
     probe: Option<crate::perf_warn::Probe>,
+    /// `ASHLAR_RECORD`: input and control requests appended for replay ([`crate::record`]).
+    recorder: Option<crate::record::Recorder>,
     probe_installed: bool,
     /// `app.stats` → `process`.
     process: crate::stats::ProcessProbe,
@@ -261,6 +295,24 @@ pub struct Runtime<D: Document> {
     /// The OS menu bar was tried (installed and attached, or refused) on the first frame.
     #[cfg_attr(not(all(feature = "native-menu", any(target_os = "macos", target_os = "windows"))), allow(dead_code))]
     native_menu_tried: bool,
+    /// The tray icon ([`App::tray`](crate::App::tray)), installed with the OS menu bar.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray: Option<ashlar_native::tray::Tray>,
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray_tried: bool,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts: Option<ashlar_native::hotkey::GlobalShortcuts>,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts_tried: bool,
+    /// Dock reopen requests (macOS), listened for after the first frame.
+    #[cfg(target_os = "macos")]
+    reopen: Option<std::sync::mpsc::Receiver<ashlar_native::mac_shell::Reopen>>,
+    #[cfg(target_os = "macos")]
+    mac_shell_tried: bool,
+    /// Bring the window to the front on the next frame (a forwarded launch, a tray click, a
+    /// global shortcut), through the OS where the focus request alone may be refused.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    bring_front: bool,
     /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
@@ -285,6 +337,8 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 
 impl<D: Document> Runtime<D> {
     pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, mut launch: Launch) -> Self {
+        // `system_locales()` also reads the OS's language list (desktop launches have no `LANG`)
+        ashlar_i18n::set_native_languages(ashlar_native::system::preferred_languages);
         let inbox = launch.inbox.take().unwrap_or_default();
         let mut session = Session::new(Arc::clone(&shared.format));
         session.set_windowed(true);
@@ -320,6 +374,7 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
+            view_rev: None,
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -344,6 +399,7 @@ impl<D: Document> Runtime<D> {
             picker: None,
             passes: 0,
             probe: crate::perf_warn::Probe::from_env(),
+            recorder: crate::record::Recorder::from_env(),
             probe_installed: false,
             process: crate::stats::ProcessProbe::default(),
             probe_wakes: ashlar_ui::wake::WakeStats::default(),
@@ -353,6 +409,19 @@ impl<D: Document> Runtime<D> {
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
             native_menu_tried: false,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray: None,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray_tried: false,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts: None,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts_tried: false,
+            bring_front: false,
+            #[cfg(target_os = "macos")]
+            reopen: None,
+            #[cfg(target_os = "macos")]
+            mac_shell_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             inbox,
@@ -442,6 +511,14 @@ impl<D: Document> Runtime<D> {
     pub fn log_frames(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let log = crate::frame_log::FrameLog::create(path.as_ref(), crate::frame_log::MAX_BYTES)?;
         self.probe.get_or_insert_with(crate::perf_warn::Probe::default).set_log(log);
+        Ok(())
+    }
+
+    /// Record every frame's input and time, and every control request, to `path` (what
+    /// `ASHLAR_RECORD=path` does; see [`crate::record`]), from the next frame on. Replaces an
+    /// earlier recording. [`crate::Driver::replay`] plays it back.
+    pub fn record_to(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.recorder = Some(crate::record::Recorder::create(path.as_ref(), crate::record::MAX_BYTES)?);
         Ok(())
     }
 
@@ -584,7 +661,10 @@ impl<D: Document> Runtime<D> {
         self.os_prefs.poll(ctx);
         self.serve_control(ctx);
         self.show_pending_pick(ctx, None);
-        for rec in self.jobs.drain_ready(&mut self.session) {
+        let outer = self.session.swap_source(Some(Origin::Job));
+        let done = self.jobs.drain_ready(&mut self.session);
+        self.session.swap_source(outer);
+        for rec in done {
             if rec.status == ashlar_jobs::Status::Failed {
                 self.toasts.error(format!("{}: {}", rec.label, rec.message));
             }
@@ -594,6 +674,16 @@ impl<D: Document> Runtime<D> {
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
         if let Some(m) = &self.native_menu {
             self.native_picks.extend(m.drain());
+        }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        self.drain_tray(ctx);
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if let Some(g) = &self.global_shortcuts {
+            let pressed = g.drain();
+            if !pressed.is_empty() {
+                self.show_window(ctx);
+            }
+            self.native_picks.extend(pressed);
         }
         self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
@@ -645,6 +735,12 @@ impl<D: Document> Runtime<D> {
     /// frame's time (`app.clock` may hold it), then credit the frame to the wake reasons that were
     /// due. (Injected agent input is handed to egui by the debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // the host's time and input, before `app.clock` changes them: what replay hands back
+        if let Some(r) = &mut self.recorder
+            && !r.frame(raw)
+        {
+            self.recorder = None;
+        }
         self.clock.begin_frame(raw);
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
@@ -674,6 +770,7 @@ impl<D: Document> Runtime<D> {
         if focus {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.bring_front = true;
         }
         let mut files = items.into_iter().filter_map(|item| match item {
             ashlar_native::open_files::Opened::File(p) => Some(p),
@@ -839,14 +936,17 @@ impl<D: Document> Runtime<D> {
     }
 
     fn draw_view(&mut self, ui: &mut egui::Ui) {
-        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, .. } = self;
+        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, view_rev, .. } = self;
+        let rev = session.revision();
+        let origin = if *view_rev == Some(rev) { None } else { session.origin() };
+        *view_rev = Some(rev);
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(err) = view_error.as_deref() {
                 ui.centered_and_justified(|ui| ui.label(format!("This view stopped after an internal error:\n{err}")));
                 return;
             }
             let Some(view) = view.as_mut() else { return };
-            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone() };
+            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone(), origin };
             let r = catch_unwind(AssertUnwindSafe(|| view(ui, &mut cx)));
             if let Err(p) = r {
                 let msg = crash::last_panic().map_or_else(|| panic_text(p.as_ref()), |r| format!("{} ({})", r.message, r.location));
@@ -878,7 +978,84 @@ impl<D: Document> Runtime<D> {
             // the in-window bar goes (or stays) with the next frame
             wake::wake(ctx, Reason::MENU);
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.tray_tried {
+            self.tray_tried = true;
+            if let Some(spec) = self.shared.tray.clone() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::tray::Tray::new(spec, std::sync::Arc::new(move || wake.wake())) {
+                    Ok(t) => self.tray = Some(t),
+                    Err(e) => log::warn!("no tray icon: {e}"),
+                }
+            }
+        }
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.global_shortcuts_tried {
+            self.global_shortcuts_tried = true;
+            if !self.shared.global_shortcuts.is_empty() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::hotkey::GlobalShortcuts::new(std::sync::Arc::new(move || wake.wake())) {
+                    Ok(mut g) => {
+                        for (command, chord) in &self.shared.global_shortcuts {
+                            let done = ashlar_command::shortcut::Chord::parse(chord)
+                                .map_err(|e| ashlar_native::NativeError::Invalid(e.0))
+                                .and_then(|c| g.register(command.clone(), &c));
+                            if let Err(e) = done {
+                                log::warn!("global shortcut `{chord}` for `{command}` skipped: {e}");
+                            }
+                        }
+                        self.global_shortcuts = Some(g);
+                    }
+                    Err(e) => log::warn!("no global shortcuts: {e}"),
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.native && self.first_frame_done && !self.mac_shell_tried {
+            self.mac_shell_tried = true;
+            if let Err(e) = ashlar_native::mac_shell::guard_appearance() {
+                log::debug!("appearance guard: {e}");
+            }
+            let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+            match ashlar_native::mac_shell::listen_reopen(std::sync::Arc::new(move || wake.wake())) {
+                Ok(rx) => self.reopen = Some(rx),
+                Err(e) => log::debug!("Dock reopen: {e}"),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.reopen.as_ref().is_some_and(|rx| rx.try_iter().count() > 0) {
+            self.show_window(ctx);
+        }
+        if std::mem::take(&mut self.bring_front)
+            && let Err(e) = ashlar_native::system::bring_to_front(window)
+            && !e.is_unsupported()
+        {
+            log::debug!("bring to front: {e}");
+        }
         let _ = (ctx, window);
+    }
+
+    /// Show, restore and focus the window, now through the viewport and on the next frame
+    /// through the OS.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn show_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.bring_front = true;
+        wake::wake(ctx, Reason::MENU);
+    }
+
+    /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    fn drain_tray(&mut self, ctx: &egui::Context) {
+        let Some(t) = &self.tray else { return };
+        for e in t.events() {
+            match e {
+                ashlar_native::tray::TrayEvent::Menu(id) => self.native_picks.push(id),
+                ashlar_native::tray::TrayEvent::Activate => self.show_window(ctx),
+            }
+        }
     }
 
     /// Run the ids picked in the OS menu bar, under the rules key presses follow: nothing runs
@@ -1511,8 +1688,15 @@ impl<D: Document> Runtime<D> {
         let info = self.info();
         let mut queue = UiQueue { scenes: !self.shared.scenes.is_empty(), ..UiQueue::default() };
         for req in reqs {
+            if let Some(r) = &mut self.recorder
+                && !r.request(req.method(), req.params())
+            {
+                self.recorder = None;
+            }
+            let outer = self.session.swap_source(Some(Origin::Agent));
             let mut bound = self.shared.registry.bind(&mut self.session);
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
+            self.session.swap_source(outer);
             self.apply_effects(ctx);
         }
         for req in std::mem::take(&mut queue.pending) {
@@ -1820,8 +2004,9 @@ fn parse_args(env_prefix: &str) -> Args {
     a
 }
 
-/// On the web: run in the `<canvas>` whose id is the app's name (or `ashlar`). Returns at once;
-/// the app runs in the browser's event loop.
+/// On the web: run in the `<canvas>` [`App::canvas_id`] names (default: the app's name, then
+/// `ashlar`). Returns at once; the app runs in the browser's event loop. When it cannot start, a
+/// visible error is put next to the canvas (or at the top of the page) and logged to the console.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     use wasm_bindgen::JsCast;
@@ -1840,19 +2025,58 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     });
     crash::install(None, &shared.name, &shared.version);
     let document = web_sys::window().and_then(|w| w.document()).ok_or_else(|| Error::Window("no document".into()))?;
-    let canvas = document
-        .get_element_by_id(&shared.name)
-        .or_else(|| document.get_element_by_id("ashlar"))
-        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-        .ok_or_else(|| Error::Window(format!("no <canvas id=\"{}\"> in the page", shared.name)))?;
+    let ids: Vec<String> = shared.canvas_id.iter().cloned().chain([shared.name.clone(), "ashlar".to_string()]).collect();
+    let canvas = ids.iter().find_map(|id| document.get_element_by_id(id).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()));
+    let Some(canvas) = canvas else {
+        let wanted = ids.first().map_or("ashlar", String::as_str);
+        let msg = format!("{} could not start: the page has no <canvas id=\"{wanted}\">.", shared.title);
+        show_web_error(&document, None, &msg);
+        return Err(Error::Window(msg));
+    };
+    let title = shared.title.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let creator: eframe::AppCreator<'static> =
             Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()), offscreen: false })));
+        let target = canvas.clone();
         if let Err(e) = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), creator).await {
             log::error!("the app could not start: {e:?}");
+            let detail = e.as_string().unwrap_or_else(|| "the browser may not support WebGL or WebGPU".to_string());
+            show_web_error(&document, Some(&target), &format!("{title} could not start: {detail}"));
         }
     });
     Ok(())
+}
+
+/// Put `msg` in a visible box right after `canvas` (or first in the page's body), replacing an
+/// earlier one; screen readers announce it (`role="alert"`). Errors here are only logged.
+#[cfg(target_arch = "wasm32")]
+fn show_web_error(document: &web_sys::Document, canvas: Option<&web_sys::HtmlCanvasElement>, msg: &str) {
+    const ID: &str = "ashlar-start-error";
+    let shown = (|| -> Result<(), wasm_bindgen::JsValue> {
+        if let Some(old) = document.get_element_by_id(ID) {
+            old.remove();
+        }
+        let div = document.create_element("div")?;
+        div.set_id(ID);
+        div.set_attribute("role", "alert")?;
+        div.set_attribute(
+            "style",
+            "margin:12px;padding:12px 16px;border:1px solid #c62828;border-radius:6px;background:#fdecea;\
+             color:#5f2120;font:14px/1.4 system-ui,sans-serif;max-width:640px",
+        )?;
+        div.set_text_content(Some(msg));
+        match canvas.and_then(|c| c.parent_node().map(|p| (p, c.next_sibling()))) {
+            Some((parent, next)) => drop(parent.insert_before(&div, next.as_ref())?),
+            None => match document.body() {
+                Some(body) => drop(body.insert_before(&div, body.first_child().as_ref())?),
+                None => return Err("no <body>".into()),
+            },
+        }
+        Ok(())
+    })();
+    if let Err(e) = shown {
+        log::error!("could not show the start error in the page: {e:?}");
+    }
 }
 
 /// The window as the app describes it, at the placement it had last time (kept on screen), with
@@ -1867,9 +2091,10 @@ fn window_builder<D: Document>(shared: &Shared<D>, window: crate::app::WindowSpe
     {
         let settings = Settings::load(Arc::new(DirConfig::new(d.config.clone())), "settings.json", &[]);
         if let Some(saved) = settings.get::<WindowState>(window_state::KEY) {
-            // the monitors are not known before the window exists: sizes and coordinates are
-            // bounded here, and the first frame moves a window no monitor shows
-            b = window_state::apply(b, &window_state::clamp(saved, &[]));
+            // checked against the monitors the OS lists now (macOS, Windows); where it lists none,
+            // sizes and coordinates are only bounded and the first frame moves a window no monitor
+            // shows
+            b = window_state::apply(b, &window_state::clamp(saved, &window_state::monitors_now()));
         }
     }
     if let Some(png) = window.icon {
@@ -1971,11 +2196,22 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         presented: false,
         scene: args.scene,
     };
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: window_builder(&shared, window, safe_mode),
         wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
+    // `<PREFIX>_QUIET`: open without taking the focus (agents relaunching after each build)
+    if ashlar_native::mac_shell::quiet_requested(&shared.env_prefix) {
+        options.viewport = options.viewport.with_active(false);
+        #[cfg(target_os = "macos")]
+        {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::macos::EventLoopBuilderExtMacOS;
+                b.with_activate_ignoring_other_apps(false);
+            }));
+        }
+    }
     let title = shared.title.clone();
     eframe::run_native(
         &title,

@@ -219,14 +219,26 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 - `<PREFIX>_READY_FILE=path` (the prefix is the app name in capitals, like `<PREFIX>_CONTROL_PORT`)
   makes the app write `{"pid": …, "ready_ms": …}` to `path`, atomically, once its first frame is
   presented: a launcher or a test waits for the file instead of sleeping.
+- `<PREFIX>_QUIET=1` opens the window without taking the focus (on macOS the app doesn't
+  activate either), so an agent that rebuilds and relaunches the app in a loop doesn't pull the
+  user out of the app they are typing in.
 - A document named on the command line opens on the frame after the first one, so the window
   shows before a slow load runs. eframe keeps the window hidden until that first frame is painted,
   so there is no white flash.
 - `cargo xtask launch` builds `examples/hello` in release, launches it 9 times (`--runs N`) and
   prints `bench: launch_to_present_p50/p95` and `spawn_to_ready_p50/p95` (from spawning the
-  process). `cargo xtask launch --memory` lets it idle 10 s (`--settle SECS`) and prints the RSS
-  and the physical footprint and its peak (`vmmap`, macOS). Both open real windows, so they are
-  manual and never run in CI; results swing with machine load, so compare runs made back to back.
+  process). `cargo xtask launch --memory` launches it 5 times (`--runs N`), lets each idle 10 s
+  (`--settle SECS`) and prints the lowest and highest RSS, physical footprint and peak (`vmmap`,
+  macOS), with how many runs fell in the high group. Both open real windows, so they are manual
+  and never run in CI; results swing with machine load, so compare runs made back to back.
+- macOS idle memory comes in two groups (IMP-2.19). A window whose occlusion state never changed
+  idles at about 40 MB (94 MB peak). Once it changes (another window covers it, it is minimized,
+  a Space switch, also by chance right after launch), the system maps two swapchain drawables
+  (`CAMetalLayer Display Drawable`, shared with WindowServer, 9.5 MB each at 960×640 points 2x)
+  into the process for good, and Metal allocates a second set of about 13 × 4 MB purgeable
+  blocks (the ~95 MB peak jump): about 66 MB idle, 193 MB peak. It persists after 40 s idle and
+  does not depend on present mode or frame latency; nothing in ashlar's eframe/wgpu options
+  changes it. Compare `_max` figures, which are what users see.
 
 ## Frame performance
 
@@ -257,6 +269,22 @@ line). `cpu_ms` is the UI thread's CPU time, `phases.ui_ms` the runtime's own pa
 dialogs), `reasons` the wake reasons and `commands` the commands the frame ran. A background
 thread writes the file; it stops at 64 MiB with a last `{"end": "size limit reached", …}` line, and
 `dropped` counts lines lost if the writer falls behind. Not available on the web.
+
+`ASHLAR_RECORD=FILE` (any build; `Runtime::record_to(path)` in tests) records a session for
+replay: one JSON line per frame with its time, screen size and input events (pointer, keys, text,
+wheel, clipboard, focus), and one line per control request served. A background thread writes it;
+when the file passes 32 MiB it becomes `FILE.old` and a new one starts, so the pair holds at most
+64 MiB. `Driver::replay(FILE)` plays it into a fresh driver of the same app, frame by frame at the
+recorded times, which turns a bug report into a test:
+
+```rust
+let mut d = Driver::new(my_app().runtime());
+d.replay("session.jsonl")?;
+assert_eq!(d.call("ui.snapshot", json!({}))?, expected);
+```
+
+Revision numbers come from one process-wide counter, so compare how far a session moved them,
+not their values. Not available on the web.
 
 ## Agents (MCP)
 

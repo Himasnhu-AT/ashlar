@@ -35,6 +35,75 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   caller accepts; `App::run_toast_actions(true)` makes the runtime run a clicked toast action
   whose command is registered (other actions stay for the view). The gallery's Overlays page
   demos action and progress toasts.
+
+- `ashlar-rs`: the `tray` and `hotkey` features pass through to `ashlar-app`, so an app on the
+  umbrella crate can use `App::tray` and `App::global_shortcut`.
+- Windows menu shortcuts (IMP-6.17): `NativeMenuBar::attach_window` subclasses the window and runs
+  `TranslateAcceleratorW` with the bar's table on key-downs, so a native menu's key equivalents
+  fire as item activations (once; the key press doesn't also reach the window). Compile-checked
+  for `x86_64-pc-windows-msvc`; not run on Windows yet.
+- Context menus and drag-out (IMP-6.15): `ashlar_native::menu::popup::show(window, &spec, at,
+  waker)` opens a `MenuSpec` as a native context menu (macOS: posted to the run loop so it never
+  opens inside the UI pass; Windows: opens at once, call it between frames) and reports
+  `Some(id)` or `None` on a receiver. `ashlar_native::drag_out::start(window, DragItem { files,
+  png, text }, on_end)` (feature `drag-out`, in `full`) drags files, a PNG or text into other
+  apps on macOS; `Unsupported` elsewhere.
+- `ashlar_native::mac_shell` (default feature `mac-shell`, IMP-6.14): `guard_appearance()` checks
+  the window delegate's `effectiveAppearance` changes before winit casts them, so a nil appearance
+  while the screen is captured no longer ends the app; `listen_reopen(waker)` reports Dock reopen
+  clicks; `quiet_requested(prefix)` reads `<PREFIX>_QUIET`. An ashlar app installs both after its
+  first frame, shows and focuses its window on reopen, and with `<PREFIX>_QUIET=1` opens without
+  taking the focus.
+- `ashlar_native::hotkey` (feature `hotkey`, IMP-6.16): system-wide shortcuts on global-hotkey
+  (macOS, Windows, Linux on X11). `GlobalShortcuts::new(waker)`, `register(id, &chord)` with the
+  keymap's chords (a chord without Ctrl, Alt or ⌘ is refused), `unregister`, `drain()`; dropping
+  it releases every chord. `system::bring_to_front(window)` restores and focuses a window through
+  the OS (Windows borrows the foreground thread's input when the foreground lock refuses), and a
+  second launch on Windows now calls `AllowSetForegroundWindow` for the first (its pid travels in
+  the endpoint file). `App::global_shortcut(command, chord)` (feature `hotkey` of `ashlar-app`)
+  runs the command and brings the window forward; forwarded launches and tray clicks also bring
+  it forward through the OS.
+- `ashlar_native::tray` (feature `tray`, IMP-6.11): a tray / status-bar icon with a menu built from
+  a `MenuSpec` (macOS status bar, Windows notification area, Linux StatusNotifierItem over D-Bus
+  with no GTK). `Tray::new(TraySpec { id, tooltip, icon, template, menu }, waker)`, `events()`
+  (`Activate`, `Menu(id)`), `set_tooltip` / `set_icon` / `set_menu`; dropping it removes the icon.
+  The menu bar, trays and later popups now share one process-wide menu-event router, so a tray's
+  items never reach the menu bar. `App::tray(spec)` (feature `tray` of `ashlar-app`) runs the
+  chosen item's command and shows the window on a click.
+- `cargo xtask launch --memory` launches 5 times (`--runs N`) and prints the min and max idle and
+  peak footprint and how many runs fell in the high group; one launch landed in either of the two
+  macOS groups at random (IMP-2.19).
+- `ashlar_native::memory` reports the OS's lifetime peak footprint (`ProcessMemory::peak`: macOS
+  lifetime max phys footprint, Windows peak private commit) and `thread_count()` (macOS, Windows,
+  Linux); `app.stats` → `process.peak_bytes` uses the OS peak, so spikes between samples count, and
+  `process.threads` is filled on macOS and Windows too (IMP-6.18).
+- `ashlar_native::display::monitors()` lists the monitors before any window exists (macOS,
+  Windows); a restored window placement is checked against them at launch instead of only on the
+  first frame (IMP-6.18).
+- Web (IMP-6.8): `App::canvas_id`; when a web app cannot start (no such canvas, no WebGL) a
+  visible error (`role="alert"`) appears next to the canvas or at the top of the page;
+  `examples/web-hello` (with an `index.html` for trunk) is checked for wasm32 by `cargo xtask wasm`.
+- i18n follow-ups (IMP-6.19): plural forms for the toast "+N more" line and the keymap editor's
+  "N commands share a shortcut" (new key `ui.keymap.shared`), through `labels::Plurals`,
+  `labels::install_i18n`, `labels::count_text` and `labels::PLURAL_KEYS` (the label structs are
+  unchanged); `ashlar_native::system::preferred_languages()` (macOS `NSLocale.preferredLanguages`,
+  Windows `GetUserPreferredUILanguages`), which `ashlar_i18n::system_locales()` now appends after
+  the environment's languages in apps (`set_native_languages`, `with_native`).
+- Record and replay (IMP-4.11): `ASHLAR_RECORD=path` (or `Runtime::record_to`) records each
+  frame's time, screen and input events plus the control requests served to a JSONL ring of at
+  most 64 MiB (written off the UI thread), and `Driver::replay(path)` plays it into a fresh driver;
+  see docs/debugging-uis.md.
+- `Cx` polish (IMP-3.8): `cx.tokens()`; `cx.motion(id, target, curve)`, which animates unless
+  the document just changed by the user's own hand; `Origin` (`User`, `Drag`, `Undo`, `Agent`,
+  `Job`) recorded per change (`Session::origin`, `Session::with_origin`, `Cx::origin`), with control
+  requests marked `Agent` and job applies `Job`; `ashlar_ui::layout::{row, column, inset}` taking a
+  `tokens::Space`, `SpaceScale::get`; `Radii::{sm, md, lg}()` as `f32`.
+- Telemetry incident rules (IMP-2.13): `ashlar-trace` flags 3 frames over the 120 Hz budget within
+  1 s (`long_frames`), a frame of 250 ms or more (`stall`) and 5 rising per-minute memory floors
+  that grow by at least 64 MiB and 20% (`memory_growth`), once per rule and window, in the new
+  optional `perf.incidents` list (`Incident`, `IncidentRule` in `ashlar-trace-proto`; older
+  readers ignore it). The trace server counts them as `incidents.<rule>` metrics and lists them on
+  a crash's performance panel.
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down
