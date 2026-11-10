@@ -451,6 +451,57 @@ impl Tokens {
         }
     }
 
+    /// [`interact_fill`](Tokens::interact_fill) eased between states with [`state_color`].
+    pub fn interact_fill_animated(&self, ctx: &egui::Context, response: &egui::Response) -> Color32 {
+        state_color(ctx, response.id, self.interact_fill(response))
+    }
+
+    /// `self` blended toward `to` in OKLab: text colours `text` of the way, every other colour
+    /// (surfaces, borders, accents, status, shadows) `surface` of the way. Sizes, motion and
+    /// `dark` come from `to`. Used while a theme switch runs ([`set_mode_animated`]).
+    pub fn mix(&self, to: &Tokens, surface: f32, text: f32) -> Tokens {
+        let m = |a: Color32, b: Color32| mix_color(a, b, surface);
+        let tx = |a: Color32, b: Color32| mix_color(a, b, text);
+        let (a, b) = (&self.surface, &to.surface);
+        let shadow = |x: Shadow, y: Shadow| Shadow { color: m(x.color, y.color), ..y };
+        Tokens {
+            surface: Surfaces {
+                app: m(a.app, b.app),
+                panel: m(a.panel, b.panel),
+                raised: m(a.raised, b.raised),
+                sunken: m(a.sunken, b.sunken),
+                row_alt: m(a.row_alt, b.row_alt),
+                hover: m(a.hover, b.hover),
+                pressed: m(a.pressed, b.pressed),
+            },
+            text: TextColors {
+                primary: tx(self.text.primary, to.text.primary),
+                secondary: tx(self.text.secondary, to.text.secondary),
+                disabled: tx(self.text.disabled, to.text.disabled),
+                on_accent: tx(self.text.on_accent, to.text.on_accent),
+            },
+            status: StatusColors {
+                info: m(self.status.info, to.status.info),
+                success: m(self.status.success, to.status.success),
+                warning: m(self.status.warning, to.status.warning),
+                danger: m(self.status.danger, to.status.danger),
+            },
+            accent: m(self.accent, to.accent),
+            accent_hover: m(self.accent_hover, to.accent_hover),
+            selection: m(self.selection, to.selection),
+            selection_text: tx(self.selection_text, to.selection_text),
+            focus: m(self.focus, to.focus),
+            border: m(self.border, to.border),
+            border_strong: m(self.border_strong, to.border_strong),
+            separator: m(self.separator, to.separator),
+            elevation: Elevation {
+                popup: shadow(self.elevation.popup, to.elevation.popup),
+                window: shadow(self.elevation.window, to.elevation.window),
+            },
+            ..*to
+        }
+    }
+
     /// egui `Visuals` built from these tokens.
     pub fn visuals(&self) -> egui::Visuals {
         let mut v = if self.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -506,6 +557,30 @@ impl Tokens {
         style.text_styles.insert(TextStyle::Monospace, FontId::new(t.mono, FontFamily::Monospace));
         style.visuals = self.visuals();
     }
+}
+
+/// A hover or press colour for the widget `id`, eased toward `target` over about 0.1 s (the
+/// instant spring), like egui's own widgets. Like them it follows egui's `animation_time`: at 0
+/// (reduced motion sets it, and snapshot tests do) the colour changes at once. Paint only.
+pub fn state_color(ctx: &egui::Context, id: egui::Id, target: Color32) -> Color32 {
+    let id = id.with("ashlar_ui::state_color");
+    if ctx.global_style().animation_time <= 0.0 {
+        crate::motion::set(ctx, id, rgba(target));
+        return target;
+    }
+    crate::motion::color(ctx, id, target, motion_tokens::INSTANT.enter)
+}
+
+/// `a` and `b` mixed `t` of the way in premultiplied OKLab.
+fn mix_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    if t <= 0.0 {
+        return a;
+    }
+    if t >= 1.0 {
+        return b;
+    }
+    let [r, g, bl, al] = color::mix(rgba(a), rgba(b), t).to_srgb8();
+    Color32::from_rgba_unmultiplied(r, g, bl, al)
 }
 
 /// WCAG 2 contrast ratio of `fg` on `bg` (1..=21); a translucent `fg` is composited over `bg`.
@@ -585,6 +660,143 @@ pub fn set_mode(ctx: &egui::Context, mode: ThemeMode) {
     ctx.set_theme(mode.preference());
 }
 
+/// The surfaces' spring for [`set_mode_animated`]; text takes half its duration.
+const SWITCH_SURFACE: ashlar_motion::Spring = motion_tokens::REFLOW.enter;
+
+/// Like [`set_mode`], but crossfades from the current colours to the new theme's in OKLab:
+/// surfaces over the reflow spring (0.4 s), text leading at half that, so it stays readable.
+/// Under reduced motion the switch takes the short fade. While it runs, [`current`] returns the
+/// blend and egui's visuals are rebuilt each frame; once it settles the theme's own visuals are
+/// back exactly and nothing more runs. Switching again mid-way starts from the blend.
+pub fn set_mode_animated(ctx: &egui::Context, mode: ThemeMode) {
+    let from = current(ctx);
+    let restore = switch::finish(ctx);
+    if let Some((theme, visuals)) = restore {
+        ctx.style_mut_of(theme, |s| s.visuals = visuals);
+    }
+    set_mode(ctx, mode);
+    let theme = ctx.theme();
+    if from == of(ctx, theme) {
+        return;
+    }
+    switch::start(ctx, from, theme);
+}
+
+/// The running theme switch: a plugin that blends the visuals at the start of each pass.
+mod switch {
+    use egui::{Color32, Context, Id, Theme, Ui, Visuals};
+
+    use super::{SWITCH_SURFACE, Tokens, contrast_ratio, of};
+    use crate::motion;
+    use ashlar_motion::{Class, Spring};
+
+    pub(super) fn mix_id() -> Id {
+        Id::new("ashlar_ui::tokens::switch_mix")
+    }
+
+    fn progress_id() -> Id {
+        Id::new("ashlar_ui::tokens::switch")
+    }
+
+    struct Running {
+        from: Tokens,
+        theme: Theme,
+        /// The theme's own visuals, put back when the switch settles.
+        saved: Visuals,
+    }
+
+    #[derive(Default)]
+    struct Plugin {
+        running: Option<Running>,
+    }
+
+    impl egui::Plugin for Plugin {
+        fn debug_name(&self) -> &'static str {
+            "ashlar_ui::tokens::switch"
+        }
+        fn on_begin_pass(&mut self, ui: &mut Ui) {
+            let Some(r) = &self.running else { return };
+            let ctx = ui.ctx().clone();
+            if ctx.theme() != r.theme {
+                // the app switched another way (set_mode, the OS): drop the blend
+                if let Some(r) = self.running.take() {
+                    end(&ctx, r);
+                }
+                return;
+            }
+            let (surface, text) = progress(&ctx);
+            if surface >= 1.0 && text >= 1.0 {
+                if let Some(r) = self.running.take() {
+                    end(&ctx, r);
+                }
+                return;
+            }
+            let mix = blend(&r.from, &of(&ctx, r.theme), surface, text);
+            ctx.style_mut_of(r.theme, |s| s.visuals = mix.visuals());
+            ctx.data_mut(|d| d.insert_temp(mix_id(), mix));
+        }
+    }
+
+    /// Contrast primary and secondary text keep on the panel at every frame of a switch.
+    const MIN_SWITCH_CONTRAST: f32 = 3.0;
+
+    /// [`Tokens::mix`], with primary and secondary text kept readable on the blended panel: a
+    /// blended text colour that falls under [`MIN_SWITCH_CONTRAST`] is replaced by whichever
+    /// end (old or new theme's) reads better there. One of them always reads at 3:1 or more.
+    fn blend(from: &Tokens, to: &Tokens, surface: f32, text: f32) -> Tokens {
+        let mut mix = from.mix(to, surface, text);
+        let panel = mix.surface.panel;
+        let readable = |c: Color32, a: Color32, b: Color32| {
+            if contrast_ratio(c, panel) >= MIN_SWITCH_CONTRAST {
+                c
+            } else if contrast_ratio(b, panel) >= contrast_ratio(a, panel) {
+                b
+            } else {
+                a
+            }
+        };
+        mix.text.primary = readable(mix.text.primary, from.text.primary, to.text.primary);
+        mix.text.secondary = readable(mix.text.secondary, from.text.secondary, to.text.secondary);
+        mix
+    }
+
+    fn end(ctx: &Context, r: Running) {
+        ctx.style_mut_of(r.theme, |s| s.visuals = r.saved);
+        ctx.data_mut(|d| d.remove::<Tokens>(mix_id()));
+    }
+
+    /// Surface and text progress 0..=1.
+    fn progress(ctx: &Context) -> (f32, f32) {
+        let text_spring = Spring::new(SWITCH_SURFACE.duration() * 0.5, 0.0);
+        let surface = motion::value(ctx, progress_id().with("surface"), 1.0_f32, Class::Opacity, SWITCH_SURFACE);
+        let text = motion::value(ctx, progress_id().with("text"), 1.0_f32, Class::Opacity, text_spring);
+        (surface, text)
+    }
+
+    /// Stop a running switch where it is; the theme and visuals to put back.
+    pub(super) fn finish(ctx: &Context) -> Option<(Theme, Visuals)> {
+        let r = ctx.with_plugin(|p: &mut Plugin| p.running.take()).flatten()?;
+        ctx.data_mut(|d| d.remove::<Tokens>(mix_id()));
+        Some((r.theme, r.saved))
+    }
+
+    pub(super) fn start(ctx: &Context, from: Tokens, theme: Theme) {
+        let saved = ctx.style_of(theme).visuals.clone();
+        let running = Running { from, theme, saved };
+        motion::set(ctx, progress_id().with("surface"), 0.0_f32);
+        motion::set(ctx, progress_id().with("text"), 0.0_f32);
+        // this pass already began: show the starting blend now
+        let mix = blend(&from, &of(ctx, theme), 0.0, 0.0);
+        ctx.style_mut_of(theme, |s| s.visuals = mix.visuals());
+        ctx.data_mut(|d| d.insert_temp(mix_id(), mix));
+        if ctx.with_plugin(|_: &mut Plugin| ()).is_none() {
+            ctx.add_plugin(Plugin::default());
+        }
+        ctx.with_plugin(|p: &mut Plugin| p.running = Some(running));
+        crate::wake::wake(ctx, crate::wake::Reason::ANIMATION);
+    }
+}
+
 /// The mode last chosen with [`set_mode`].
 pub fn mode(ctx: &egui::Context) -> ThemeMode {
     match ctx.options(|o| o.theme_preference) {
@@ -622,6 +834,9 @@ pub fn apply_colors(ctx: &egui::Context, tokens: &Tokens) {
 /// The tokens of the active theme: those installed with [`apply`], else the built-in set.
 pub fn current(ctx: &egui::Context) -> Tokens {
     let theme = ctx.theme();
+    if let Some(mix) = ctx.data(|d| d.get_temp::<Tokens>(switch::mix_id())).filter(|m| m.theme() == theme) {
+        return mix;
+    }
     ctx.data(|d| d.get_temp::<Tokens>(tokens_id(theme))).unwrap_or(Tokens::for_theme(theme))
 }
 
@@ -891,5 +1106,85 @@ mod tests {
         assert_eq!(thick.window_stroke.width, 2.0);
         assert_eq!(thick.text_cursor.stroke.width, 3.0);
         assert!(Tokens::light().elevation.popup.color.a() < t.elevation.popup.color.a());
+    }
+    #[test]
+    fn state_color_eases_settles_and_snaps_without_animation_time() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("button");
+        let requests = |ctx: &egui::Context| crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION);
+        let pass = |t: f64, target: Color32| {
+            let input = egui::RawInput { time: Some(t), predicted_dt: 1.0 / 60.0, ..Default::default() };
+            let mut out = Color32::TRANSPARENT;
+            ctx.run_ui(input, |ui| out = state_color(ui.ctx(), id, target)).textures_delta.clear();
+            out
+        };
+        let (rest, hover) = (Color32::from_rgb(30, 30, 30), Color32::from_rgb(90, 90, 90));
+        assert_eq!(pass(0.0, rest), rest);
+        assert_eq!(requests(&ctx), 0);
+        pass(1.0 / 60.0, hover);
+        let mid = pass(2.0 / 60.0, hover);
+        assert!(mid.r() > rest.r() && mid.r() < hover.r(), "{mid:?}");
+        let mut t = 2.0 / 60.0;
+        let mut last = mid;
+        for _ in 0..20 {
+            t += 1.0 / 60.0;
+            last = pass(t, hover);
+        }
+        assert_eq!(last, hover);
+        let flat = requests(&ctx);
+        for _ in 0..100 {
+            t += 1.0 / 60.0;
+            pass(t, hover);
+        }
+        assert_eq!(requests(&ctx), flat);
+        // egui animations off (reduced motion, snapshot tests): at once
+        crate::motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::REDUCED);
+        assert_eq!(pass(t + 1.0 / 60.0, rest), rest);
+    }
+    #[test]
+    fn theme_switch_crossfades_text_first_keeps_contrast_and_settles() {
+        let ctx = egui::Context::default();
+        let requests = |ctx: &egui::Context| crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION);
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0;
+        let mut pass = |f: &mut dyn FnMut(&egui::Context)| {
+            let input = egui::RawInput { time: Some(t), predicted_dt: dt as f32, ..Default::default() };
+            ctx.run_ui(input, |ui| f(ui.ctx())).textures_delta.clear();
+            t += dt;
+        };
+        pass(&mut |c| set_mode(c, ThemeMode::Light));
+        pass(&mut |_| {});
+        let light = current(&ctx);
+        let dark = of(&ctx, Theme::Dark);
+        let dark_visuals = ctx.style_of(Theme::Dark).visuals.clone();
+        pass(&mut |c| set_mode_animated(c, ThemeMode::Dark));
+        let mut blended = false;
+        let mut text_led = false;
+        let mut worst = f32::INFINITY;
+        for _ in 0..30 {
+            let mut now = light;
+            pass(&mut |c| now = current(c));
+            if now != light && now != dark {
+                blended = true;
+            }
+            if now.text.primary == dark.text.primary && now.surface.panel != dark.surface.panel {
+                text_led = true;
+            }
+            worst = worst.min(contrast_ratio(now.text.primary, now.surface.panel));
+        }
+        assert!(blended, "no blended frame");
+        assert!(text_led, "text did not lead its background");
+        assert!(worst >= 3.0, "primary text contrast fell to {worst}");
+        // settled: the theme's own visuals exactly, and no more frames
+        for _ in 0..30 {
+            pass(&mut |_| {});
+        }
+        assert_eq!(current(&ctx), dark);
+        assert_eq!(ctx.style_of(Theme::Dark).visuals, dark_visuals);
+        let flat = requests(&ctx);
+        for _ in 0..100 {
+            pass(&mut |_| {});
+        }
+        assert_eq!(requests(&ctx), flat);
     }
 }

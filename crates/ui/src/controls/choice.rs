@@ -182,12 +182,18 @@ impl<'a> Segmented<'a> {
                 let chosen = i == *self.selected;
                 let pressed = enabled && item.is_pointer_button_down_on();
                 let hovered = enabled && item.hovered();
+                let state = if chosen || !(pressed || hovered) {
+                    Color32::TRANSPARENT
+                } else if pressed {
+                    t.surface.pressed
+                } else {
+                    t.surface.hover
+                };
+                let state = crate::tokens::state_color(ui.ctx(), item.id, state);
                 if chosen {
                     painter.rect(seg, sm, t.surface.raised, Stroke::new(1.0, t.border), StrokeKind::Inside);
-                } else if pressed {
-                    painter.rect_filled(seg, sm, t.surface.pressed);
-                } else if hovered {
-                    painter.rect_filled(seg, sm, t.surface.hover);
+                } else if state.a() > 0 {
+                    painter.rect_filled(seg, sm, state);
                 }
                 let text = if chosen || hovered { t.text.primary } else { t.text.secondary };
                 painter.galley(egui::Align2::CENTER_CENTER.align_size_within_rect(galley.size(), item.rect).min, galley, text);
@@ -263,6 +269,7 @@ impl<'a> RadioGroup<'a> {
                 let hovered = enabled && item.hovered();
                 let center = pos2(item.rect.left() + r, item.rect.center().y);
                 let (fill, stroke, dot) = radio_colors(&t, chosen, hovered, pressed);
+                let fill = crate::tokens::state_color(ui.ctx(), item.id, fill);
                 painter.circle(center, r, fill, stroke);
                 if let Some(dot) = dot {
                     painter.circle_filled(center, (r * 0.4).round().max(1.0), dot);

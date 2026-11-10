@@ -35,6 +35,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - `ashlar-ui`: `cache::label` (a `ui.label` with its galley cached under a key: no layout and
   no `String` on steady frames), `cache::row_label` (the same, not selectable, for text inside a
   clickable row) and `cache::button_text` (a button's text as a cached galley).
+- `ashlar_ui::tokens::set_mode_animated`: switches theme with an OKLab crossfade, surfaces over
+  0.4 s and text leading at half that; primary and secondary text keep 3:1 on the panel at every
+  frame, and once settled the theme's own visuals are back and nothing more runs. `Tokens::mix`
+  blends two token sets.
+- `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
+  by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
+- `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
+  its exit settles, then `None`), entering and leaving along a token pair as an opacity.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
@@ -77,6 +85,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
+  0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
+  change at once when egui's `animation_time` is 0, which reduced motion sets. Visual regression
+  tests now run with reduced motion.
+- `ashlar_ui::dialog`: on open the backdrop fades in and the panel fades in while growing from
+  97 %; when the app stops showing a dialog, its last frame fades out a little faster without
+  taking input. No growing under reduced motion; hit testing uses the resting layout.
+- `ashlar_ui::docking`: the drop preview moves quickly (0.1 s) from one drop target to the next
+  while a tab is dragged, and appears in place when a drag first shows it.
+- `ashlar_ui::toasts`: a new toast fades and slides 8 pt in, a dismissed one slides back out and
+  is painted until its exit settles, and the toasts behind it glide into the gap. Toasts queued
+  before the stack is first shown appear at once; hit testing and automation rects use the resting
+  layout; reduced motion keeps only the fade.
 - `Tokens::with_accent` derives hover, focus, selection and selection text in OKLCH (same hue,
   lightness steps, capped chroma) instead of sRGB mixing, flips `text.on_accent` dark when white
   falls below 4.5:1 and pushes the focus ring to 3:1 on every surface. The dark theme's accent is

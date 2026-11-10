@@ -10,6 +10,9 @@
 //!   focus returns to the widget that had it before (or to [`Dialog::return_focus_to`]).
 //! - Screen readers get a modal dialog node named by the title, with [`Dialog::description`] as
 //!   its description.
+//! - On open the backdrop fades in and the panel fades in while growing from 97 % (no growing
+//!   under reduced motion). When the app stops showing it, its last frame fades out, a little
+//!   faster, without taking input. Hit testing always uses the resting layout.
 //!
 //! The app keeps whether the dialog is open and acts on the outcome:
 //!
@@ -29,10 +32,13 @@
 //! # }
 //! ```
 
-use egui::{Color32, FocusDirection, Id, Key, Margin, Modifiers, Stroke, Ui};
+use egui::{Color32, FocusDirection, Id, Key, Margin, Modifiers, Rect, Stroke, Ui};
+
+use ashlar_motion::tokens as mt;
 
 use crate::automation::{self, Details, Role};
 use crate::controls::{Button, Size, Variant};
+use crate::motion;
 use crate::tokens::{self, Tokens};
 
 /// What a button does in the dialog's keyboard model and how it looks.
@@ -151,9 +157,22 @@ impl<'a> Dialog<'a> {
             .inner_margin(Margin::same(t.space.xl as i8))
             .shadow(ctx.global_style().visuals.window_shadow);
         let backdrop = if t.dark { Color32::from_black_alpha(140) } else { Color32::from_black_alpha(90) };
+        // enter: nothing animates on the context's first pass (a dialog restored at launch)
+        let fx = modal_id.with("ashlar_ui::dialog_fx");
+        if !focus_return::is_open(ctx, modal_id) && ctx.cumulative_pass_nr() > 0 {
+            motion::set(ctx, fx.with("panel"), 0.0_f32);
+            motion::set(ctx, fx.with("backdrop"), 0.0_f32);
+        }
+        let panel_in = motion::presence(ctx, fx.with("panel"), true, mt::POP).unwrap_or(1.0);
+        let backdrop_in = motion::presence(ctx, fx.with("backdrop"), true, mt::SETTLE).unwrap_or(1.0);
+        let mut frame = frame.fill(t.surface.raised.gamma_multiply(panel_in)).stroke(Stroke::new(1.0, t.border.gamma_multiply(panel_in)));
+        frame.shadow.color = frame.shadow.color.gamma_multiply(panel_in);
         let mut clicked = None;
+        let mut panel_rect = Rect::NOTHING;
         let focus_pending = focus_return::track(ctx, modal_id, self.return_to);
-        let modal = egui::Modal::new(modal_id).frame(frame).backdrop_color(backdrop).show(ctx, |ui| {
+        let area = egui::Modal::default_area(modal_id).fade_in(false);
+        let modal = egui::Modal::new(modal_id).area(area).frame(frame).backdrop_color(backdrop.gamma_multiply(backdrop_in)).show(ctx, |ui| {
+            ui.multiply_opacity(panel_in);
             ui.set_width(self.width.min(ctx.content_rect().width() - 32.0).max(120.0));
             ui.label(egui::RichText::new(self.title).size(t.type_scale.heading).strong().color(t.text.primary));
             if let Some(d) = self.description {
@@ -201,7 +220,13 @@ impl<'a> Dialog<'a> {
             ui.add_space(t.space.lg);
             clicked = button_row(ui, &t, self.id, self.buttons, focus_button);
             automation::register_fmt(ui, ui.min_rect(), format_args!("{}", self.id), self.title, Role::Dialog, true, Details::default());
+            panel_rect = ui.min_rect();
         });
+        let layer = modal.response.layer_id;
+        focus_return::snapshot(ctx, modal_id, layer, panel_rect.center());
+        if panel_in < 1.0 && !motion::prefs(ctx).reduced {
+            grow(ctx, layer, panel_rect.center(), panel_in);
+        }
         if let Some(i) = clicked {
             return Some(DialogOutcome::Button(i));
         }
@@ -260,10 +285,41 @@ fn button_row(ui: &mut Ui, t: &Tokens, id: &str, buttons: &[DialogButton<'_>], f
     clicked
 }
 
+/// Scale the panel's shapes on `layer` (all but the backdrop, its first shape) for a presence
+/// `p`: 97 % at 0, full size at 1. Paint only.
+fn grow(ctx: &egui::Context, layer: egui::LayerId, center: egui::Pos2, p: f32) {
+    let s = 0.97 + 0.03 * p.clamp(0.0, 1.0);
+    let ts = egui::emath::TSTransform::new(center.to_vec2() * (1.0 - s), s);
+    ctx.graphics_mut(|g| {
+        let list = g.entry(layer);
+        let end = list.next_idx();
+        if end.0 > 1 {
+            list.transform_range(egui::layers::ShapeIdx(1), end, ts);
+        }
+    });
+}
+
 /// Returning the focus to the opener: open dialogs are tracked by the pass they were last shown
-/// in, and one that was not shown in a completed pass is closed.
+/// in, and one that was not shown in a completed pass is closed (and fades out from a snapshot of
+/// its last frame).
 mod focus_return {
-    use egui::{Context, Id, Ui};
+    use ashlar_motion::tokens as mt;
+    use egui::epaint::ClippedShape;
+    use egui::{Context, Id, LayerId, Painter, Pos2, Ui};
+
+    use crate::motion;
+
+    /// Shapes kept per dialog for its exit, at most (a bigger dialog just disappears).
+    const MAX_SNAPSHOT: usize = 4096;
+    /// Dialogs fading out at once, at most.
+    const MAX_LEAVING: usize = 4;
+
+    /// A dialog's last frame: the backdrop (the layer's first shape) and the panel.
+    struct Snapshot {
+        layer: LayerId,
+        center: Pos2,
+        shapes: Vec<ClippedShape>,
+    }
 
     /// Dialogs open at once (nested confirmations), at most.
     const MAX_OPEN: usize = 32;
@@ -274,11 +330,13 @@ mod focus_return {
         seen: u64,
         /// The initial focus is still to be placed.
         pending: bool,
+        last_frame: Option<Snapshot>,
     }
 
     #[derive(Default)]
     struct Plugin {
         open: Vec<Open>,
+        leaving: Vec<(Id, Snapshot)>,
     }
 
     impl egui::Plugin for Plugin {
@@ -286,22 +344,35 @@ mod focus_return {
             "ashlar_ui::dialog::focus_return"
         }
         fn on_end_pass(&mut self, ui: &mut Ui) {
-            let ctx = ui.ctx();
-            if ctx.will_discard() || self.open.is_empty() {
+            let ctx = ui.ctx().clone();
+            if ctx.will_discard() || (self.open.is_empty() && self.leaving.is_empty()) {
                 return;
             }
             let pass = ctx.cumulative_pass_nr();
             let mut restore = None;
-            self.open.retain(|o| {
+            let mut closed = Vec::new();
+            self.open.retain_mut(|o| {
                 let shown = o.seen == pass;
-                if !shown && restore.is_none() {
-                    restore = o.opener;
+                if !shown {
+                    if restore.is_none() {
+                        restore = o.opener;
+                    }
+                    if let Some(snap) = o.last_frame.take() {
+                        closed.push((o.modal, snap));
+                    }
                 }
                 shown
             });
+            for c in closed {
+                if self.leaving.len() >= MAX_LEAVING {
+                    self.leaving.remove(0);
+                }
+                self.leaving.push(c);
+            }
             if let Some(id) = restore {
                 ctx.memory_mut(|m| m.request_focus(id));
             }
+            self.leaving.retain(|(modal, snap)| paint_exit(&ctx, *modal, snap));
         }
     }
 
@@ -322,7 +393,9 @@ mod focus_return {
                 if p.open.len() >= MAX_OPEN {
                     p.open.remove(0);
                 }
-                p.open.push(Open { modal, opener: return_to.or(focused), seen: pass, pending: true });
+                // reopened while still fading out: the new one takes over
+                p.leaving.retain(|(m, _)| *m != modal);
+                p.open.push(Open { modal, opener: return_to.or(focused), seen: pass, pending: true, last_frame: None });
                 true
             }
         };
@@ -331,6 +404,46 @@ mod focus_return {
         }
         ctx.add_plugin(Plugin::default());
         ctx.with_plugin(|p: &mut Plugin| update(p)).unwrap_or(true)
+    }
+
+    /// `modal` was shown in an earlier pass and is still open.
+    pub(super) fn is_open(ctx: &Context, modal: Id) -> bool {
+        ctx.with_plugin(|p: &mut Plugin| p.open.iter().any(|o| o.modal == modal)).unwrap_or(false)
+    }
+
+    /// Keep this pass's shapes of `modal` (on `layer`, resting layout) for its exit.
+    pub(super) fn snapshot(ctx: &Context, modal: Id, layer: LayerId, center: Pos2) {
+        let shapes = ctx.graphics(|g| g.get(layer).filter(|l| l.next_idx().0 <= MAX_SNAPSHOT).map(|l| l.all_entries().cloned().collect::<Vec<_>>()));
+        ctx.with_plugin(|p: &mut Plugin| {
+            if let Some(o) = p.open.iter_mut().find(|o| o.modal == modal) {
+                o.last_frame = shapes.map(|shapes| Snapshot { layer, center, shapes });
+            }
+        });
+    }
+
+    /// Paint one pass of a closed dialog's exit; false once it has faded out.
+    fn paint_exit(ctx: &Context, modal: Id, snap: &Snapshot) -> bool {
+        let fx = modal.with("ashlar_ui::dialog_fx");
+        let panel = motion::presence(ctx, fx.with("panel"), false, mt::POP);
+        let backdrop = motion::presence(ctx, fx.with("backdrop"), false, mt::SNAP);
+        if panel.is_none() && backdrop.is_none() {
+            return false;
+        }
+        let (panel, backdrop) = (panel.unwrap_or(0.0), backdrop.unwrap_or(0.0));
+        let s = if motion::prefs(ctx).reduced { 1.0 } else { 0.97 + 0.03 * panel };
+        let ts = egui::emath::TSTransform::new(snap.center.to_vec2() * (1.0 - s), s);
+        for (n, shape) in snap.shapes.iter().enumerate() {
+            let mut painter = Painter::new(ctx.clone(), snap.layer, shape.clip_rect);
+            let mut shape = shape.shape.clone();
+            if n == 0 {
+                painter.multiply_opacity(backdrop);
+            } else {
+                painter.multiply_opacity(panel);
+                shape.transform(ts);
+            }
+            painter.add(shape);
+        }
+        true
     }
 
     /// The initial focus of `modal` has been placed.
@@ -615,5 +728,106 @@ mod tests {
         assert!(node.is_modal());
         let e = automation::find(&h.ctx, "rename").unwrap();
         assert_eq!(e.role, Role::Dialog);
+    }
+    const DT: f64 = 1.0 / 60.0;
+    const SCREEN: Rect = Rect { min: egui::Pos2::ZERO, max: egui::pos2(800.0, 600.0) };
+
+    /// One pass at time `t`, showing the dialog or not; the painted shapes' bounds (backdrop
+    /// left out) and how many shapes were painted.
+    fn frame(ctx: &egui::Context, t: f64, show: bool) -> (Rect, usize) {
+        let input = egui::RawInput { time: Some(t), predicted_dt: DT as f32, screen_rect: Some(SCREEN), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| {
+            if show {
+                let buttons = [DialogButton::cancel("Cancel"), DialogButton::new("OK").default()];
+                Dialog::new("anim", "Title", &buttons).show(ui.ctx(), |ui| {
+                    ui.label("body");
+                });
+            }
+        });
+        out.textures_delta.clear();
+        let mut bounds = Rect::NOTHING;
+        for c in &out.shapes {
+            let r = c.shape.visual_bounding_rect();
+            if r.is_positive() && r != SCREEN {
+                bounds = bounds.union(r);
+            }
+        }
+        (bounds, out.shapes.len())
+    }
+
+    fn animation_requests(ctx: &egui::Context) -> u64 {
+        crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION)
+    }
+
+    /// Opens the dialog at pass 2 and returns the panel bounds of each pass, the automation rect
+    /// of each pass, and the time reached.
+    fn open(ctx: &egui::Context) -> (Vec<Rect>, Vec<[f32; 4]>, f64) {
+        automation::install(ctx);
+        let mut t = 0.0;
+        for _ in 0..2 {
+            frame(ctx, t, false);
+            t += DT;
+        }
+        let mut bounds = Vec::new();
+        let mut rects = Vec::new();
+        for _ in 0..60 {
+            bounds.push(frame(ctx, t, true).0);
+            t += DT;
+            rects.push(automation::find(ctx, "anim").expect("dialog").rect);
+        }
+        (bounds, rects, t)
+    }
+
+    #[test]
+    fn opening_grows_and_fades_in_closing_fades_out_and_stops() {
+        let ctx = egui::Context::default();
+        let (bounds, rects, mut t) = open(&ctx);
+        // hit testing and automation use the resting layout while it grows (egui places an area
+        // on its second pass)
+        let rest = *rects.last().unwrap();
+        assert!(rects[1..].iter().all(|r| *r == rest), "{rects:?}");
+        let settled = *bounds.last().unwrap();
+        let growing = bounds.iter().find(|b| b.width() > 0.0 && b.width() < settled.width() - 0.5);
+        assert!(growing.is_some(), "the panel never painted smaller than at rest: {bounds:?}");
+        // settled: no more frames
+        let flat = animation_requests(&ctx);
+        for _ in 0..100 {
+            frame(&ctx, t, true);
+            t += DT;
+        }
+        assert_eq!(animation_requests(&ctx), flat);
+
+        // closed: still painted a moment, then gone, then idle
+        let (_, painted) = frame(&ctx, t, false);
+        t += DT;
+        assert!(painted > 0, "the dialog vanished at once");
+        assert!(automation::find(&ctx, "anim").is_none());
+        let mut gone = None;
+        for k in 0..60 {
+            let (_, n) = frame(&ctx, t, false);
+            t += DT;
+            if n == 0 {
+                gone = Some(k);
+                break;
+            }
+        }
+        assert!(gone.is_some(), "the exit never finished");
+        let flat = animation_requests(&ctx);
+        for _ in 0..100 {
+            frame(&ctx, t, false);
+            t += DT;
+        }
+        assert_eq!(animation_requests(&ctx), flat);
+    }
+
+    #[test]
+    fn reduced_motion_fades_without_growing() {
+        let ctx = egui::Context::default();
+        motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::REDUCED);
+        let (bounds, _, _) = open(&ctx);
+        let settled = *bounds.last().unwrap();
+        for b in bounds.iter().filter(|b| b.is_positive()).skip(1) {
+            assert!((b.width() - settled.width()).abs() < 0.5, "grew under reduced motion: {b:?} vs {settled:?}");
+        }
     }
 }
