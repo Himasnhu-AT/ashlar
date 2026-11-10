@@ -33,18 +33,26 @@ const MAX_SIDE: f32 = 4096.0;
 /// Its id comes from the position in the surrounding UI (scope it with `push_id` or a child UI
 /// when buttons move around); the label is only the accessible name. Clicks, keyboard activation
 /// and press cancellation are egui's. The button never runs a command or toggles itself: check
-/// `clicked()` on the response.
+/// `clicked()` on the response. [`IconButton::tooltip`] gives it a visible name on hover.
 pub struct IconButton<'a> {
     label: &'a str,
     size: Vec2,
     style: &'a IconButtonStyle,
     selected: bool,
     single_shape: bool,
+    tooltip: Option<&'a str>,
 }
 
 impl<'a> IconButton<'a> {
     pub fn new(label: &'a str, size: Vec2, style: &'a IconButtonStyle) -> Self {
-        Self { label, size, style, selected: false, single_shape: false }
+        Self { label, size, style, selected: false, single_shape: false, tooltip: None }
+    }
+
+    /// Text shown in a tooltip while the pointer rests on the button (also when it is
+    /// disabled): usually the label, perhaps with the shortcut (`"Brush (B)"`).
+    pub fn tooltip(mut self, text: &'a str) -> Self {
+        self.tooltip = Some(text);
+        self
     }
 
     /// Draw with the selected visuals and report the toggled state to AccessKit.
@@ -104,7 +112,10 @@ impl<'a> IconButton<'a> {
                 ui.painter().rect_stroke(inner, radius, focus, StrokeKind::Inside);
             }
         }
-        response
+        match self.tooltip {
+            Some(text) if !text.is_empty() => response.on_hover_text(text).on_disabled_hover_text(text),
+            _ => response,
+        }
     }
 }
 

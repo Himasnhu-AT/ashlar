@@ -10,12 +10,12 @@ define the visual contract of each control; they are not screenshots of an app.
 | Suite | Pairs | What is compared |
 |---|---|---|
 | Controls | 372 | icon button, single-shape button, tab, horizontal and vertical split × light/dark × scales 1, 1.5, 2 × normal and compact sizes × the states normal, hover, press, disabled, focus, plus selected and selected-press for buttons and tabs |
-| Controls kit | 222 | `controls::Button` (primary, secondary, ghost, destructive), `Switch`, a `RadioGroup` option and `Progress::bar` (25 %, 100 %, the reduced-motion indeterminate pose) × light/dark × scales 1, 1.5, 2 × the states normal, hover, press, disabled, focus, plus selected and selected-press for the switch and radio; drawn with the built-in token sets and no labels |
+| Controls and content kit | 282 | `controls::Button` (primary, secondary, ghost, destructive), `Switch`, a `RadioGroup` option, `Progress::bar` (25 %, 100 %, the reduced-motion indeterminate pose), the `content::Collapsible` header and a dismissible `content::Banner` (info, warning, danger) × light/dark × scales 1, 1.5, 2 × the states normal, hover, press, disabled, focus, plus selected (on, chosen, open) and selected-press for the switch, radio and collapsible; drawn with the built-in token sets and no labels |
 | Toolbar overflow | 18 | three widths × two themes × three scales against literal rects |
 | Widget palette | 12 | cells painted from `WidgetPalette::apply_to` against literal painting |
 | SVG icons | 12 | catalog output rasterized by the SVG loader against literal, pre-substituted SVGs |
 
-All 636 positive pairs must give identical RGBA pixels. The 624 pairs rendered with wgpu must
+All 696 positive pairs must give identical RGBA pixels. The 684 pairs rendered with wgpu must
 also give identical meshes: vertices (position, UV, colour), indices, texture ids and clip
 rects. The SVG pairs compare the loader's rasters and must contain visible pixels.
 
@@ -24,8 +24,8 @@ hovered, held down (and dragging, for split handles), or focused. Disabled contr
 unhovered and unfocused under the same input. Selection wins over press. Split handles are driven
 in both orientations. The compact fixtures repeat every contract at a smaller size.
 
-44 negative comparisons change one thing in the reference (fill colour, spacing, stroke width;
-the fill of a kit button, switch, radio and bar) and must differ in both pixels and meshes, which shows the comparison can fail. There is no
+48 negative comparisons change one thing in the reference (fill colour, spacing, stroke width;
+the fill of a kit button, switch, radio, bar and banner, the collapsible's chevron) and must differ in both pixels and meshes, which shows the comparison can fail. There is no
 tolerance, mask, crop, perceptual metric or automatic update. The toolbar fitting itself
 (malformed input, reachable overflow, groups kept in order) is covered by unit tests in the
 `layout` module.

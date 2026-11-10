@@ -9,7 +9,9 @@ use std::time::Duration;
 use ashlar::command::CommandInfo;
 use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
+use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use ashlar::ui::commands::{CommandPalette, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
@@ -29,17 +31,19 @@ use egui::{Color32, Ui};
 pub enum Page {
     Inputs,
     Controls,
+    Content,
     Lists,
     Overlays,
     Commands,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::Inputs, Page::Controls, Page::Lists, Page::Overlays, Page::Commands];
+    pub const ALL: [Page; 6] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Overlays, Page::Commands];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
             Page::Controls => "Controls",
+            Page::Content => "Content",
             Page::Lists => "Lists",
             Page::Overlays => "Overlays",
             Page::Commands => "Commands",
@@ -149,6 +153,10 @@ pub struct Gallery {
     pub reduce_motion: bool,
     pub exporting: bool,
     pub button_clicks: u64,
+    // content
+    pub banner_dismissed: bool,
+    pub advanced_open: bool,
+    pub retries: u64,
     // lists
     pub list_selected: Option<usize>,
     pub table_selected: Option<usize>,
@@ -224,6 +232,9 @@ impl Gallery {
             reduce_motion: false,
             exporting: false,
             button_clicks: 0,
+            banner_dismissed: false,
+            advanced_open: true,
+            retries: 0,
             list_selected: Some(3),
             table_selected: Some(1),
             sort: Sort { column: 0, ascending: true },
@@ -363,6 +374,7 @@ impl Gallery {
             match self.page {
                 Page::Inputs => self.inputs(ui),
                 Page::Controls => self.controls(ui),
+                Page::Content => self.content(ui),
                 Page::Lists => self.lists(ui),
                 Page::Overlays => self.overlays(ui),
                 Page::Commands => self.commands_page(ui),
@@ -482,6 +494,15 @@ impl Gallery {
                     if Button::new("controls.button.icon", "New layer").icon(&plus).show(ui).clicked() {
                         self.button_clicks += 1;
                     }
+                    // an icon-only button names itself on hover
+                    let style = icon_style(&t);
+                    let r = IconButton::new("Add layer", egui::vec2(t.control_height, t.control_height), &style)
+                        .tooltip("Add layer (⇧N)")
+                        .show(ui, |ui, r, c| plus(ui.painter(), r.shrink(5.0), c));
+                    ashlar::ui::automation::register(ui, &r, "controls.icon.add", "Add layer", ashlar::ui::automation::Role::Button);
+                    if r.clicked() {
+                        self.button_clicks += 1;
+                    }
                 });
                 ui.horizontal(|ui| {
                     Button::new("controls.button.small", "Small").size(Size::Sm).show(ui);
@@ -553,6 +574,71 @@ impl Gallery {
                     Progress::circle("controls.progress.circle.busy", "Connecting", None).reduced_motion(reduced).show(ui);
                     Spinner::new("controls.spinner", "Loading").reduced_motion(reduced).show(ui);
                 });
+            });
+        });
+    }
+
+    fn content(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        egui::ScrollArea::vertical().id_salt("gallery.content").show(ui, |ui| {
+            section(ui, &t, "Banners", |ui| {
+                Banner::new("content.banner.info", Tone::Info, "A new version is ready. It installs the next time the app starts.").show(ui);
+                ui.add_space(t.space.sm);
+                if !self.banner_dismissed {
+                    let out = Banner::new("content.banner.warning", Tone::Warning, "Changes stay on this computer until the connection is back.")
+                        .title("Offline")
+                        .action("Retry")
+                        .dismissible("Close")
+                        .show(ui);
+                    self.retries += u64::from(out.action);
+                    self.banner_dismissed |= out.dismissed;
+                    ui.add_space(t.space.sm);
+                } else if Button::new("content.banner.restore", "Show the offline banner again").variant(Variant::Ghost).show(ui).clicked() {
+                    self.banner_dismissed = false;
+                }
+                Banner::new("content.banner.danger", Tone::Danger, "The file could not be saved: the disk is full.")
+                    .title("Save failed")
+                    .action("Save As…")
+                    .show(ui);
+                ui.add_space(t.space.sm);
+                Banner::new("content.banner.success", Tone::Success, "Export finished: 24 files written.").show(ui);
+            });
+            section(ui, &t, "Cards and collapsible sections", |ui| {
+                ui.columns(2, |cols| {
+                    let [a, b] = cols else { return };
+                    Card::new("content.card").title("Account").show(a, |ui| {
+                        ui.label("Signed in as someone@example.com");
+                        ui.horizontal(|ui| {
+                            Badge::new("content.card.plan", "Pro").tone(Tone::Accent).show(ui);
+                            Badge::new("content.card.seats", "3 seats").show(ui);
+                        });
+                    });
+                    Collapsible::new("content.advanced", "Advanced", &mut self.advanced_open).show(b, |ui| {
+                        Switch::new("content.advanced.logs", "Verbose logs", &mut self.notify).show(ui);
+                        ui.label("Settings most people never change.");
+                    });
+                    let mut closed = false;
+                    Collapsible::new("content.about", "About", &mut closed).show(b, |ui| {
+                        ui.label("Version 1.0");
+                    });
+                });
+            });
+            section(ui, &t, "Empty state", |ui| {
+                let folder = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+                    let s = egui::Stroke::new(1.5, c);
+                    let r = r.shrink(r.width() * 0.15);
+                    p.rect_stroke(egui::Rect::from_min_max(r.min + egui::vec2(0.0, r.height() * 0.2), r.max), 3.0, s, egui::StrokeKind::Inside);
+                    p.line_segment([r.min + egui::vec2(0.0, r.height() * 0.2), r.min + egui::vec2(r.width() * 0.4, r.height() * 0.2)], s);
+                };
+                if EmptyState::new("content.empty", "No files yet")
+                    .body("Drop files here, or create one to get started.")
+                    .icon(&folder)
+                    .action("New file")
+                    .show(ui)
+                    .action
+                {
+                    self.button_clicks += 1;
+                }
             });
         });
     }
@@ -666,6 +752,19 @@ impl Gallery {
     /// How many value edits happened (for tests).
     pub fn edit_count(&self) -> u64 {
         self.edits
+    }
+}
+
+/// Colours of the gallery's icon buttons, from the tokens.
+fn icon_style(t: &Tokens) -> IconButtonStyle {
+    let v = |fill, icon| ButtonVisuals { fill, stroke: egui::Stroke::NONE, icon };
+    IconButtonStyle {
+        normal: v(Color32::TRANSPARENT, t.text.secondary),
+        hovered: v(t.surface.hover, t.text.primary),
+        pressed: Some(v(t.surface.pressed, t.text.primary)),
+        selected: v(t.selection, t.selection_text),
+        corner_radius: egui::CornerRadius::same(t.radius.md),
+        focus_stroke: egui::Stroke::new(1.5, t.focus),
     }
 }
 

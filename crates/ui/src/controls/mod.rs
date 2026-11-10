@@ -40,7 +40,7 @@ mod progress;
 mod switch;
 
 pub use badge::{Badge, Keycap, Tone};
-pub use button::{Button, Size, Variant};
+pub use button::{Button, IconPainter, Size, Variant};
 pub use choice::{RadioGroup, Segmented};
 pub use progress::{Progress, Spinner};
 pub use switch::Switch;

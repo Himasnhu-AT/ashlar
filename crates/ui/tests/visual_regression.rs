@@ -246,7 +246,7 @@ fn kit_controls_match_their_references() {
             }
         }
     }
-    assert_eq!(pairs, 222);
+    assert_eq!(pairs, 282);
 }
 
 #[test]
@@ -254,7 +254,14 @@ fn kit_mutations_are_detected() {
     let shared = renderer();
     let report = Report::new("kit-negative");
     let mut pairs = 0;
-    for k in [kit::Kit::Button(ashlar_ui::controls::Variant::Primary), kit::Kit::Switch, kit::Kit::Radio, kit::Kit::Bar(Some(0.25))] {
+    for k in [
+        kit::Kit::Button(ashlar_ui::controls::Variant::Primary),
+        kit::Kit::Switch,
+        kit::Kit::Radio,
+        kit::Kit::Bar(Some(0.25)),
+        kit::Kit::Collapsible,
+        kit::Kit::Banner(ashlar_ui::controls::Tone::Info),
+    ] {
         for theme in THEMES {
             let case = format!("{}-fill-{}", k.name(), theme_name(theme));
             let after = capture(&shared, theme, 1.0, None, move |ui, probe| kit::production(ui, k, State::Normal, probe));
@@ -267,7 +274,7 @@ fn kit_mutations_are_detected() {
             pairs += 1;
         }
     }
-    assert_eq!(pairs, 8);
+    assert_eq!(pairs, 12);
 }
 
 #[test]

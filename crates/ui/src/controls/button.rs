@@ -98,7 +98,7 @@ pub type IconPainter<'a> = &'a dyn Fn(&Painter, Rect, Color32);
 /// clicks and reports itself busy; it keeps its width, so the row does not move.
 pub struct Button<'a> {
     id: &'a str,
-    suffix: Option<(&'static str, usize)>,
+    suffix: Option<(&'static str, Option<usize>)>,
     label: &'a str,
     variant: Variant,
     size: Size,
@@ -159,7 +159,13 @@ impl<'a> Button<'a> {
     /// Register under `<id>.<part>.<index>` (`dialog.button.2`) without formatting a string each
     /// frame: for buttons made in a loop.
     pub fn indexed(mut self, part: &'static str, index: usize) -> Self {
-        self.suffix = Some((part, index));
+        self.suffix = Some((part, Some(index)));
+        self
+    }
+    /// Register under `<id>.<part>` (`banner.action`): for a button that is part of a larger
+    /// component with its own id.
+    pub fn part(mut self, part: &'static str) -> Self {
+        self.suffix = Some((part, None));
         self
     }
 
@@ -214,9 +220,15 @@ impl<'a> Button<'a> {
             }
         }
         let details = Details { value: None, selected: None };
+        if self.id.is_empty() {
+            return response;
+        }
         match self.suffix {
-            Some((part, index)) => {
+            Some((part, Some(index))) => {
                 automation::register_fmt(ui, rect, format_args!("{}.{part}.{index}", self.id), self.label, Role::Button, enabled && active, details)
+            }
+            Some((part, None)) => {
+                automation::register_fmt(ui, rect, format_args!("{}.{part}", self.id), self.label, Role::Button, enabled && active, details)
             }
             None => automation::register_fmt(ui, rect, format_args!("{}", self.id), self.label, Role::Button, enabled && active, details),
         }

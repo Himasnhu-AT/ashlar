@@ -40,6 +40,21 @@ fn expected(page: Page) -> &'static [&'static str] {
             "controls.progress.indeterminate",
             "controls.progress.circle",
             "controls.spinner",
+            "controls.icon.add",
+        ],
+        Page::Content => &[
+            "content.banner.info",
+            "content.banner.warning",
+            "content.banner.warning.action",
+            "content.banner.warning.dismiss",
+            "content.banner.danger",
+            "content.card",
+            "content.card.plan",
+            "content.advanced",
+            "content.advanced.logs",
+            "content.about",
+            "content.empty",
+            "content.empty.action",
         ],
         Page::Lists => &[
             "lists.list",
@@ -200,4 +215,27 @@ fn controls_page_switches_choices_and_motion() {
     h.state_mut().reduce_motion = true;
     h.step();
     assert_eq!(requests(&mut h), 0);
+}
+
+#[test]
+fn content_page_banner_and_sections() {
+    let mut h = harness(Page::Content, ThemeMode::Light, false);
+    h.run_steps(3);
+    let click = |h: &mut egui_kittest::Harness<'_, ashlar_example_gallery::Gallery>, id: &str| {
+        let p = automation::find(&h.ctx, id).unwrap_or_else(|| panic!("{id}")).center();
+        h.hover_at(p);
+        h.step();
+        h.drag_at(p);
+        h.step();
+        h.drop_at(p);
+        h.run_steps(2);
+    };
+    click(&mut h, "content.banner.warning.action");
+    assert_eq!(h.state().retries, 1);
+    click(&mut h, "content.banner.warning.dismiss");
+    assert!(h.state().banner_dismissed);
+    assert!(automation::find(&h.ctx, "content.banner.warning").is_none());
+    click(&mut h, "content.advanced");
+    assert!(!h.state().advanced_open);
+    assert!(automation::find(&h.ctx, "content.advanced.logs").is_none());
 }

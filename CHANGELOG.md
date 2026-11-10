@@ -25,6 +25,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   back to the widget that had it when they close, however they close (`Dialog::return_focus_to`
   names it for a dialog opened by a click). Screen readers get a modal dialog node named by the
   title, with `Dialog::description` (also shown under the title) as its description.
+- `ashlar-ui`: content components (`content`): `EmptyState` (icon, title, text, action),
+  `Banner` (a tone, title, action and close button; a live region that screen readers announce,
+  assertively for errors), `Card` (a titled group) and `Collapsible` (a header that shows or hides
+  its content; reports expanded to AccessKit, arrows open and close it). `IconButton::tooltip`
+  gives icon-only buttons a visible name on hover, and `controls::Button::part` registers a
+  component's button as `<id>.<part>`. The gallery has a Content page; the visual regression
+  suite covers the collapsible header and the banner.
 
 ### Changed
 
