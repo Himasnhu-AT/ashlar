@@ -56,6 +56,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::dialog`: on open the backdrop fades in and the panel fades in while growing from
+  97 %; when the app stops showing a dialog, its last frame fades out a little faster without
+  taking input. No growing under reduced motion; hit testing uses the resting layout.
 - `ashlar_ui::docking`: the drop preview moves quickly (0.1 s) from one drop target to the next
   while a tab is dragged, and appears in place when a drag first shows it.
 - `ashlar_ui::toasts`: a new toast fades and slides 8 pt in, a dismissed one slides back out and
