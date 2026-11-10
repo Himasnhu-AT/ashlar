@@ -76,6 +76,30 @@ fn the_cli_drives_the_running_runtime() {
     }
 }
 
+/// The same kind of script, in process on the driver: no port, no thread, no sleep. `sleep` and
+/// `wait` pass virtual time, so two runs give the same steps.
+#[test]
+fn ui_scripts_run_in_process_on_virtual_time() {
+    let script = "exec note.add '{\"title\": \"from a script\"}'\nsleep 2000\nexec note.list\ncommands note\nwait 250\nsnapshot -i\nassert exists id=notes.add\n";
+    let run = || {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(dir.path());
+        dirs.ensure().unwrap();
+        let mut d = Driver::new(notes::app().dirs(dirs).runtime());
+        d.settle(10);
+        let t0 = d.time();
+        let report = d.run_ui(script).unwrap_or_else(|e| panic!("{e}: {:?}", e.detail));
+        (report, d.time() - t0)
+    };
+    let (a, elapsed) = run();
+    assert_eq!(a.passed, 7);
+    assert!(a.steps[2]["result"].to_string().contains("from a script"), "{}", a.steps[2]);
+    assert!(a.steps[5]["result"].to_string().contains("[ref=e"), "{}", a.steps[5]);
+    assert!(elapsed >= 2.25, "virtual time passed: {elapsed}");
+    let (b, _) = run();
+    assert_eq!(serde_json::to_string(&a.steps).unwrap(), serde_json::to_string(&b.steps).unwrap());
+}
+
 #[test]
 fn open_and_close_the_real_window() {
     if std::env::var_os("ASHLAR_DEBUG_REAL_WINDOW").is_none() {

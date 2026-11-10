@@ -284,6 +284,7 @@ dependencies = [
  "ashlar-cli",
  "ashlar-command",
  "ashlar-control",
+ "ashlar-debug",
  "ashlar-fs",
  "ashlar-jobs",
  "ashlar-log",

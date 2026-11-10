@@ -25,6 +25,7 @@ mod batch;
 pub mod demo;
 pub mod session;
 pub mod target;
+pub mod transport;
 mod verbs;
 pub mod words;
 
@@ -36,6 +37,7 @@ use ashlar_control::{Client, ControlError};
 use serde_json::{Value, json};
 
 pub use session::Env;
+pub use transport::{Report, ScriptError, Transport, run_script};
 use words::Args;
 
 /// How a command ended.
@@ -146,6 +148,27 @@ pub(crate) struct Ctx<'e, 'io, 'a> {
     pub in_batch: bool,
     /// A trace started inside a `batch` run with `--port`/`--app` (no session file to keep it in).
     pub batch_trace: Option<session::Trace>,
+    /// An in-process target ([`run_script`]): every call goes here, and session verbs fail.
+    pub inproc: Option<&'io mut (dyn Transport + 'io)>,
+}
+
+impl<'e, 'io, 'a> Ctx<'e, 'io, 'a> {
+    pub(crate) fn new(env: &'e Env, io: &'io mut Io<'a>, json: bool) -> Self {
+        Ctx {
+            env,
+            io,
+            json,
+            session: env.session.clone(),
+            port: None,
+            key_dir: None,
+            app: None,
+            timeout: DEFAULT_TIMEOUT,
+            conn: None,
+            in_batch: false,
+            batch_trace: None,
+            inproc: None,
+        }
+    }
 }
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -238,19 +261,9 @@ pub fn run(args: Vec<String>, env: &Env, io: &mut Io<'_>) -> Exit {
         help(io.err);
         return Exit::Usage;
     };
-    let mut ctx = Ctx {
-        env,
-        io,
-        json,
-        session,
-        port,
-        key_dir,
-        app,
-        timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
-        conn: None,
-        in_batch: false,
-        batch_trace: None,
-    };
+    let mut ctx = Ctx::new(env, io, json);
+    (ctx.session, ctx.port, ctx.key_dir, ctx.app) = (session, port, key_dir, app);
+    ctx.timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
     let r = ctx.run_verb(&verb, a, &shown);
     finish(json, ctx.io, r)
 }

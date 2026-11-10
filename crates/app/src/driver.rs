@@ -373,6 +373,28 @@ impl<D: Document> Driver<D> {
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.request(method, params).into_result().map_err(|(e, _)| e)
     }
+
+    /// Run a `.ui` script (the `ashlar-debug batch` language) on this app, in process: no port, no
+    /// thread. `sleep N` and `wait N` let virtual time pass, so a script gives the same steps on
+    /// every run.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn run_ui(&mut self, script: &str) -> Result<ashlar_debug::Report, ashlar_debug::ScriptError> {
+        ashlar_debug::run_script(self, "script", script)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<D: Document> ashlar_debug::Transport for Driver<D> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, ashlar_control::ControlError> {
+        match self.request(method, params) {
+            Reply::Ok(v) => Ok(v),
+            Reply::Err { error, detail } => Err(ashlar_control::ControlError::Remote { error, detail }),
+        }
+    }
+
+    fn pause(&mut self, ms: u64) {
+        self.advance(ms as f64 / 1000.0);
+    }
 }
 
 #[cfg(test)]

@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-app`: `Driver::run_ui(script)` runs a `.ui` script (the `ashlar-debug batch` language)
+  in process, with no port or thread. `sleep` and `wait N` let virtual time pass, so two runs give
+  the same steps. `ashlar-debug` gains the `Transport` trait and `run_script` to run scripts
+  against any target.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was

@@ -90,6 +90,24 @@ let code = ashlar_debug::run(vec!["--port".into(), port.to_string(), "--key-dir"
 so it needs no display. It also has a test that opens a real window, which runs only when
 `ASHLAR_DEBUG_REAL_WINDOW=1` is set.
 
+### Scripts in process, on virtual time
+
+`Driver::run_ui(script)` runs the same script language on a `Driver`, with no port and no thread.
+`sleep N` and `wait N` let virtual time pass instead of the wall clock, and waits such as
+`wait --text` run frames on the virtual clock, so a script gives the same steps on every run and
+takes milliseconds:
+
+```rust
+let mut d = Driver::new(notes::app().runtime());
+let report = d.run_ui("exec note.add '{\"title\": \"x\"}'\nsleep 2000\nassert exists id=notes.add\n")?;
+assert_eq!(report.passed, 3); // report.steps: one {"line", "command", "ok", "result"} per step
+```
+
+A failure is a `ScriptError` naming the line, with the same detail as `batch --json`. Verbs about
+sessions, processes and traces (`open`, `connect`, `close`, `sessions`, `trace`, `demo`) fail in
+process. To run scripts against something else, implement `ashlar_debug::Transport` (`call`, and
+`pause` for time) and call `ashlar_debug::run_script`; the TCP `Client` is one such transport.
+
 ### Real pixels with no window
 
 A `Driver` gives flat grey screenshots by default, which keeps tests that need no GPU fast. For
