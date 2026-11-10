@@ -68,7 +68,7 @@ Window
   Button "+"
   Label value="$9.95"
   Label value="Fling"
-  List
+  List "Fling demo"
     ListItem [1/200]
       Label value="Row 1"
     ListItem [2/200]
@@ -88,5 +88,4 @@ Window
     ListItem [9/200]
       Label value="Row 9"
     ScrollBar
-  Unknown
   ScrollBar

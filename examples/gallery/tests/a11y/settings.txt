@@ -19,7 +19,7 @@ Window
   Slider "Interface scale" numeric=1
   ProgressIndicator "Exporting"
   Button "Commands"
-  TextInput placeholder="Search settings"
+  TextInput "Search" placeholder="Search settings"
   Heading "General" value="General"
   Switch "Launch at login" description="Starts the app when you sign in." [toggled=false]
   Label value="Launch at login"

@@ -726,12 +726,14 @@ impl Gallery {
                 // drag the list and let go while moving; pull past an end to feel the rubber band
                 let h = t.control_height;
                 ui.allocate_ui(egui::vec2(260.0, h * 6.0), |ui| {
-                    VirtualList::new("controls.fling.list", 200, RowHeights::Uniform(h)).max_height(h * 6.0).stripes(true).fling(true).show(
-                        ui,
-                        |ui, row| {
+                    VirtualList::new("controls.fling.list", 200, RowHeights::Uniform(h))
+                        .label("Fling demo")
+                        .max_height(h * 6.0)
+                        .stripes(true)
+                        .fling(true)
+                        .show(ui, |ui, row| {
                             ui.label(format!("Row {}", row.index + 1));
-                        },
-                    );
+                        });
                 });
             });
         });
@@ -839,7 +841,10 @@ impl Gallery {
         ui.columns(3, |cols| {
             let [a, b, c] = cols else { return };
             a.label(egui::RichText::new(format!("List — {DEMO_ROWS} rows")).strong());
+            let list_row = |i: usize| demo_names().0.get(i).map_or("", String::as_str);
             let out = VirtualList::new("lists.list", DEMO_ROWS, RowHeights::Uniform(t.control_height))
+                .label("Demo list")
+                .row_label(&list_row)
                 .selected(self.list_selected)
                 .stripes(true)
                 .max_height(h - 40.0)
@@ -853,7 +858,13 @@ impl Gallery {
             let cols_spec = [Column::new("Name", 120.0), Column::new("Size", 70.0), Column::new("Kind", 80.0)];
             let height = |i: usize| if i.is_multiple_of(5) { 40.0 } else { 24.0 };
             let ascending = self.sort.ascending;
+            let table_row = |row: usize| {
+                let n = if ascending { row } else { DEMO_ROWS - 1 - row };
+                demo_names().1.get(n).map_or("", String::as_str)
+            };
             let out = VirtualTable::new("lists.table", &cols_spec, DEMO_ROWS, RowHeights::Variable { revision: ascending as u64, height: &height })
+                .label("Files")
+                .row_label(&table_row)
                 .selected(self.table_selected)
                 .sort(Some(self.sort))
                 .max_height(h - 40.0)
@@ -873,7 +884,7 @@ impl Gallery {
                     if self.sort.column == c { Sort { column: c, ascending: !self.sort.ascending } } else { Sort { column: c, ascending: true } };
             }
             c.label(egui::RichText::new("Tree — 10 041 nodes").strong());
-            TreeView::new("lists.tree", &mut self.tree, &self.outline, 1).max_height(h - 40.0).show(c);
+            TreeView::new("lists.tree", &mut self.tree, &self.outline, 1).label("Outline").max_height(h - 40.0).show(c);
         });
     }
 
@@ -1071,4 +1082,10 @@ pub fn harness(page: Page, mode: ThemeMode, render: bool) -> egui_kittest::Harne
         builder = builder.wgpu();
     }
     builder.build_ui_state(|ui, g: &mut Gallery| g.ui(ui), Gallery::for_snapshot(page, mode))
+}
+
+/// Row names for the Lists page (`Row n` and `file_nnnnnn`), built once on first use.
+fn demo_names() -> &'static (Vec<String>, Vec<String>) {
+    static NAMES: std::sync::OnceLock<(Vec<String>, Vec<String>)> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| ((0..DEMO_ROWS).map(|i| format!("Row {i}")).collect(), (0..DEMO_ROWS).map(|n| format!("file_{n:06}")).collect()))
 }

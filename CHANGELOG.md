@@ -312,6 +312,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui` lists: `scroll_to` read the scroll offset under the wrong id, so it never scrolled
+  up to a row above the view and moved the list for a row already in view. It now reads the scroll
+  area's own id, as the fling does.
+- `ashlar-ui` accessibility: lists, tables and trees take a `.label(text)` that screen readers
+  announce; table cells are `Cell` nodes and the header row holds `ColumnHeader` nodes (with sort
+  direction); resize handles, tree disclosure arrows and the fling drag surface no longer show up as
+  unnamed nodes. The keymap editor's table, its actions column and its shortcut and clear buttons
+  have names (new `KeymapLabels::table` and `actions`, English and German).
+- `ashlar-ui` accessibility: search fields and the command palette input have a name, not only a
+  placeholder (`SearchField::label`, new `UiLabels::search` with English and German); banners
+  announce their text once instead of as both name and value.
 - `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
   `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
   a screen reader's tree on every later frame (a caret-blink frame in the notes app: 272 allocations
