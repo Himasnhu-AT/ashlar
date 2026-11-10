@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use ashlar::command::CommandInfo;
 use ashlar::command::Keymap;
-use ashlar::command::shortcut::Platform;
+use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::commands::{CommandPalette, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::search::SearchField;
@@ -27,16 +28,18 @@ use egui::{Color32, Ui};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Inputs,
+    Controls,
     Lists,
     Overlays,
     Commands,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Inputs, Page::Lists, Page::Overlays, Page::Commands];
+    pub const ALL: [Page; 5] = [Page::Inputs, Page::Controls, Page::Lists, Page::Overlays, Page::Commands];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
+            Page::Controls => "Controls",
             Page::Lists => "Lists",
             Page::Overlays => "Overlays",
             Page::Commands => "Commands",
@@ -137,6 +140,15 @@ pub struct Gallery {
     pub query: String,
     pub last_edit: Option<Edit>,
     edits: u64,
+    // controls
+    pub sync: bool,
+    pub notify: bool,
+    pub view: usize,
+    pub quality: usize,
+    pub align: usize,
+    pub reduce_motion: bool,
+    pub exporting: bool,
+    pub button_clicks: u64,
     // lists
     pub list_selected: Option<usize>,
     pub table_selected: Option<usize>,
@@ -203,6 +215,14 @@ impl Gallery {
             query: String::new(),
             last_edit: None,
             edits: 0,
+            sync: true,
+            notify: false,
+            view: 1,
+            quality: 1,
+            align: 0,
+            reduce_motion: false,
+            exporting: false,
+            button_clicks: 0,
             list_selected: Some(3),
             table_selected: Some(1),
             sort: Sort { column: 0, ascending: true },
@@ -340,6 +360,7 @@ impl Gallery {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(t.surface.app).inner_margin(egui::Margin::same(12))).show(ui, |ui| {
             match self.page {
                 Page::Inputs => self.inputs(ui),
+                Page::Controls => self.controls(ui),
                 Page::Lists => self.lists(ui),
                 Page::Overlays => self.overlays(ui),
                 Page::Commands => self.commands_page(ui),
@@ -430,6 +451,106 @@ impl Gallery {
                 SearchField::new("inputs.search.filled", &mut prefilled).width(260.0).show(ui);
                 let mut empty = String::new();
                 ui.add_enabled_ui(false, |ui| SearchField::new("inputs.search.disabled", &mut empty).hint("Disabled").width(260.0).show(ui));
+            });
+        });
+    }
+
+    fn controls(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        let reduced = self.reduce_motion;
+        egui::ScrollArea::vertical().id_salt("gallery.controls").show(ui, |ui| {
+            section(ui, &t, "Buttons", |ui| {
+                ui.horizontal(|ui| {
+                    for (id, label, variant) in [
+                        ("controls.button.primary", "Save", Variant::Primary),
+                        ("controls.button.secondary", "Duplicate", Variant::Secondary),
+                        ("controls.button.ghost", "Rename", Variant::Ghost),
+                        ("controls.button.destructive", "Delete", Variant::Destructive),
+                    ] {
+                        if Button::new(id, label).variant(variant).show(ui).clicked() {
+                            self.button_clicks += 1;
+                        }
+                    }
+                    let plus = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+                        let s = egui::Stroke::new(1.5, c);
+                        let (m, h) = (r.center(), r.width() * 0.35);
+                        p.line_segment([m - egui::vec2(h, 0.0), m + egui::vec2(h, 0.0)], s);
+                        p.line_segment([m - egui::vec2(0.0, h), m + egui::vec2(0.0, h)], s);
+                    };
+                    if Button::new("controls.button.icon", "New layer").icon(&plus).show(ui).clicked() {
+                        self.button_clicks += 1;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    Button::new("controls.button.small", "Small").size(Size::Sm).show(ui);
+                    Button::new("controls.button.medium", "Medium").show(ui);
+                    Button::new("controls.button.large", "Large").size(Size::Lg).show(ui);
+                    Button::new("controls.button.disabled", "Disabled").enabled(false).show(ui);
+                    let label = if self.exporting { "Exporting…" } else { "Export" };
+                    let r = Button::new("controls.button.loading", label)
+                        .variant(Variant::Primary)
+                        .loading(self.exporting)
+                        .reduced_motion(reduced)
+                        .min_width(110.0)
+                        .show(ui);
+                    if r.clicked() {
+                        self.exporting = true;
+                    }
+                    if self.exporting && Button::new("controls.button.stop", "Stop").variant(Variant::Ghost).show(ui).clicked() {
+                        self.exporting = false;
+                    }
+                });
+            });
+            section(ui, &t, "Switches and choices", |ui| {
+                ui.horizontal(|ui| {
+                    Switch::new("controls.switch.sync", "Sync", &mut self.sync).reduced_motion(reduced).show(ui);
+                    ui.add_space(t.space.lg);
+                    Switch::new("controls.switch.notify", "Notifications", &mut self.notify).reduced_motion(reduced).show(ui);
+                    ui.add_space(t.space.lg);
+                    let mut locked = true;
+                    ui.add_enabled_ui(false, |ui| Switch::new("controls.switch.locked", "Locked", &mut locked).show(ui));
+                    ui.add_space(t.space.lg);
+                    Switch::new("controls.switch.reduce", "Reduce motion", &mut self.reduce_motion).reduced_motion(reduced).show(ui);
+                });
+                ui.add_space(t.space.sm);
+                Segmented::new("controls.view", "View", &["List", "Grid", "Columns"], &mut self.view).show(ui);
+                ui.add_space(t.space.sm);
+                ui.horizontal_top(|ui| {
+                    RadioGroup::new("controls.quality", "Quality", &["Draft", "Good", "Best"], &mut self.quality).show(ui);
+                    ui.add_space(t.space.xl);
+                    RadioGroup::new("controls.align", "Alignment", &["Left", "Center", "Right"], &mut self.align).horizontal(true).show(ui);
+                });
+            });
+            section(ui, &t, "Badges and keycaps", |ui| {
+                ui.horizontal(|ui| {
+                    for (id, text, tone) in [
+                        ("controls.badge.neutral", "Draft", Tone::Neutral),
+                        ("controls.badge.accent", "12", Tone::Accent),
+                        ("controls.badge.info", "Beta", Tone::Info),
+                        ("controls.badge.success", "Synced", Tone::Success),
+                        ("controls.badge.warning", "Offline", Tone::Warning),
+                        ("controls.badge.danger", "3 errors", Tone::Danger),
+                    ] {
+                        Badge::new(id, text).tone(tone).show(ui);
+                    }
+                    ui.add_space(t.space.xl);
+                    if let Ok(chord) = Chord::parse("Mod+Shift+P") {
+                        Keycap::chord("controls.keys.palette", chord, Platform::current()).show(ui);
+                    }
+                    Keycap::new("controls.keys.escape", "Esc").show(ui);
+                });
+            });
+            section(ui, &t, "Progress", |ui| {
+                ui.horizontal(|ui| {
+                    Progress::bar("controls.progress.bar", "Export", Some(0.62)).width(200.0).show(ui);
+                    ui.add_space(t.space.lg);
+                    Progress::bar("controls.progress.indeterminate", "Indexing", None).width(200.0).reduced_motion(reduced).show(ui);
+                });
+                ui.horizontal(|ui| {
+                    Progress::circle("controls.progress.circle", "Upload", Some(0.3)).show(ui);
+                    Progress::circle("controls.progress.circle.busy", "Connecting", None).reduced_motion(reduced).show(ui);
+                    Spinner::new("controls.spinner", "Loading").reduced_motion(reduced).show(ui);
+                });
             });
         });
     }

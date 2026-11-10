@@ -24,9 +24,10 @@
 //! # }
 //! ```
 
-use egui::{Align2, Color32, Id, Key, Margin, Modifiers, Sense, Stroke, StrokeKind, Ui, vec2};
+use egui::{Color32, Id, Key, Margin, Modifiers, Stroke, Ui};
 
 use crate::automation::{self, Details, Role};
+use crate::controls::{Button, Size, Variant};
 use crate::tokens::{self, Tokens};
 
 /// What a button does in the dialog's keyboard model and how it looks.
@@ -168,43 +169,18 @@ fn button_row(ui: &mut Ui, t: &Tokens, id: &str, buttons: &[DialogButton<'_>]) -
 }
 
 fn dialog_button(ui: &mut Ui, t: &Tokens, id: &str, index: usize, b: &DialogButton<'_>) -> egui::Response {
-    let font = Tokens::font(t.type_scale.button);
-    let galley = crate::cache::galley(ui, ("ashlar_ui::dialog_button", id, index), crate::cache::hash_of(&(b.label, font.size.to_bits())), || {
-        egui::text::LayoutJob::simple_singleline(b.label.to_owned(), font, Color32::PLACEHOLDER)
-    });
-    let width = (galley.size().x + 2.0 * t.space.lg).max(t.control_height * 3.0);
-    let sense = if b.enabled { Sense::click() } else { Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, t.control_height + 4.0), sense);
-    let hot = resp.hovered() && b.enabled;
-    let (fill, text, border) = match (b.default, b.kind) {
-        (_, ButtonKind::Destructive) => (if hot { t.status.danger.gamma_multiply(0.85) } else { t.status.danger }, Color32::WHITE, t.status.danger),
-        (true, _) => (if hot { t.accent_hover } else { t.accent }, t.text.on_accent, t.accent),
-        (false, _) => (if hot { t.surface.hover } else { t.surface.sunken }, t.text.primary, t.border),
+    let variant = match (b.default, b.kind) {
+        (_, ButtonKind::Destructive) => Variant::Destructive,
+        (true, _) => Variant::Primary,
+        (false, _) => Variant::Secondary,
     };
-    let (fill, text) = if b.enabled { (fill, text) } else { (t.surface.sunken, t.text.disabled) };
-    let painter = ui.painter();
-    painter.rect_filled(rect, t.radius.md, fill);
-    painter.rect_stroke(rect, t.radius.md, Stroke::new(1.0, border), StrokeKind::Inside);
-    if resp.has_focus() {
-        painter.rect_stroke(rect.expand(2.0), t.radius.md, Stroke::new(1.5, t.focus), StrokeKind::Outside);
-    }
-    painter.galley(Align2::CENTER_CENTER.align_size_within_rect(galley.size(), rect).min, galley, text);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, b.enabled, b.label));
-    automation::register_fmt(
-        ui,
-        rect,
-        format_args!("{id}.button.{index}"),
-        b.label,
-        Role::Button,
-        b.enabled,
-        Details { value: None, selected: Some(b.default) },
-    );
-    resp
+    Button::new(id, b.label).indexed("button", index).variant(variant).size(Size::Lg).min_width(t.control_height * 3.0).enabled(b.enabled).show(ui)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::vec2;
     use egui_kittest::Harness;
 
     struct State {

@@ -8,6 +8,8 @@
 
 #[path = "visual/fixtures.rs"]
 mod fixtures;
+#[path = "visual/kit.rs"]
+mod kit;
 
 use std::cell::RefCell;
 use std::io::Write as _;
@@ -218,6 +220,54 @@ fn controls_match_their_references() {
         }
     }
     assert_eq!(pairs, 372);
+}
+
+#[test]
+fn kit_controls_match_their_references() {
+    let shared = renderer();
+    let report = Report::new("kit");
+    let mut pairs = 0;
+    for k in kit::Kit::ALL {
+        for state in k.states() {
+            for theme in THEMES {
+                for scale in SCALES {
+                    let case = format!("{}-{}-{}-{scale}x", k.name(), state.name(), theme_name(theme));
+                    let at = k.center();
+                    let after = capture(&shared, theme, scale, Some((state, at)), move |ui, probe| kit::production(ui, k, state, probe));
+                    let before = capture(&shared, theme, scale, Some((state, at)), move |ui, _| kit::reference(ui, k, state, theme, false));
+                    assert_state(&case, Component::Button, state, &after.probe);
+                    let changed = changed_pixels(&before.image, &after.image);
+                    let mesh_equal = meshes_equal(&before.meshes, &after.meshes);
+                    report.row(&case, &before.image, &after.image, changed, Some(mesh_equal), false);
+                    assert_eq!(changed, 0, "{case}: {changed} pixels differ");
+                    assert!(mesh_equal, "{case}: meshes differ");
+                    pairs += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(pairs, 222);
+}
+
+#[test]
+fn kit_mutations_are_detected() {
+    let shared = renderer();
+    let report = Report::new("kit-negative");
+    let mut pairs = 0;
+    for k in [kit::Kit::Button(ashlar_ui::controls::Variant::Primary), kit::Kit::Switch, kit::Kit::Radio, kit::Kit::Bar(Some(0.25))] {
+        for theme in THEMES {
+            let case = format!("{}-fill-{}", k.name(), theme_name(theme));
+            let after = capture(&shared, theme, 1.0, None, move |ui, probe| kit::production(ui, k, State::Normal, probe));
+            let before = capture(&shared, theme, 1.0, None, move |ui, _| kit::reference(ui, k, State::Normal, theme, true));
+            let changed = changed_pixels(&before.image, &after.image);
+            let mesh_equal = meshes_equal(&before.meshes, &after.meshes);
+            report.row(&case, &before.image, &after.image, changed, Some(mesh_equal), true);
+            assert!(changed > 0, "{case}: the mutation changed no pixel");
+            assert!(!mesh_equal, "{case}: the mutation left the meshes equal");
+            pairs += 1;
+        }
+    }
+    assert_eq!(pairs, 8);
 }
 
 #[test]

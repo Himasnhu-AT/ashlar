@@ -8,7 +8,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+
+- `ashlar-ui`: a controls kit (`controls`): `Button` (primary, secondary, ghost and destructive
+  variants, three sizes, an icon, a loading state that shows a spinner and reports busy),
+  `Switch`, `Segmented` and `RadioGroup` (one Tab stop; arrows, Home and End move the choice),
+  `Badge` with tones, `Keycap` (a cap per key of a shortcut), `Progress::bar` and
+  `Progress::circle` (determinate or indeterminate) and `Spinner`. Each registers a dotted
+  automation id and fills its AccessKit node; indeterminate indicators ask for frames
+  (`wake::Reason::ANIMATION`) only while on screen and hold a static pose with
+  `reduced_motion(true)`. New automation roles: `switch`, `radio`, `radio_group`, `progress`,
+  `label`, `group`, `disclosure`, `alert`. The gallery has a Controls page, and the visual
+  regression suite compares the kit against reference painters (222 pairs).
+
 ### Changed
+
+- `ashlar-ui`: dialog buttons are `controls::Button`s (primary for the default, destructive for
+  a destructive one); a disabled one is drawn at the disabled opacity instead of in the sunken
+  colours, and its automation entry no longer reports the default button as `selected`.
 
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
