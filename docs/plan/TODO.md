@@ -50,7 +50,7 @@ a task's state.
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | done (b9070cb) |
-| IMP-2.19 | Idle memory is bimodal between runs (40 MB/94 MB peak vs 66 MB/192 MB) while the reference framework is steady at 29 MB: find the cause | todo |
+| IMP-2.19 | Idle memory is bimodal between runs (40 MB/94 MB peak vs 66 MB/192 MB) while the reference framework is steady at 29 MB: find the cause | done |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
 
@@ -112,7 +112,7 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
-| IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
+| IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | done |
 | IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | done (20c65d9, 68be0d6) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | done (320b57e; Windows compile-checked only) |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |

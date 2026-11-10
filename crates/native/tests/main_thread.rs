@@ -144,7 +144,27 @@ fn mac_shell() {
     }
 }
 
+/// On the main thread, before any window: the monitors, the primary first at the origin. A
+/// headless machine may list none; what is listed must be usable.
+#[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "display"))]
+fn monitors() {
+    let list = ashlar_native::display::monitors();
+    for m in &list {
+        assert!(m.width >= 1.0 && m.height >= 1.0 && m.scale > 0.0 && m.x.is_finite() && m.y.is_finite(), "{list:?}");
+    }
+    if let Some(first) = list.first() {
+        assert_eq!((first.x, first.y), (0.0, 0.0), "{list:?}");
+    }
+    // a desktop session (not CI) has at least the built-in or main display
+    if std::env::var_os("CI").is_none() {
+        assert!(!list.is_empty(), "no monitors listed on a desktop");
+    }
+    println!("monitors: {list:?}");
+}
+
 fn main() {
+    #[cfg(all(any(target_os = "macos", target_os = "windows"), feature = "display"))]
+    monitors();
     #[cfg(all(target_os = "macos", feature = "menu"))]
     menu();
     #[cfg(all(target_os = "macos", feature = "open-files"))]

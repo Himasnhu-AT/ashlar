@@ -183,14 +183,15 @@ impl FrameStats {
 }
 
 /// This process, for `app.stats` → `process`. A field is `null` where the platform cannot say:
-/// `threads` is read on Linux only, and everything is `null` on the web.
+/// everything is `null` on the web.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct ProcessStats {
     /// What the system charges the process for: macOS physical footprint, Linux private resident
     /// + swap, Windows private commit (`ashlar_native::memory`).
     pub footprint_bytes: Option<u64>,
-    /// The highest footprint seen: sampled at most once a second while frames run, and at every
-    /// reading.
+    /// The highest footprint since the process started: the OS's own lifetime peak where it keeps
+    /// one (macOS, Windows), so a spike between samples counts; on Linux the highest footprint
+    /// sampled (at most once a second while frames run, and at every reading).
     pub peak_bytes: Option<u64>,
     /// CPU time used by every thread since the process started, in seconds.
     pub cpu_s: Option<f64>,
@@ -217,11 +218,10 @@ impl ProcessProbe {
     }
 
     fn footprint(&mut self) -> Option<u64> {
-        let f = ashlar_native::memory::process_memory().map(|m| m.footprint);
-        if let Some(f) = f {
-            self.peak = Some(self.peak.map_or(f, |p| p.max(f)));
-        }
-        f
+        let m = ashlar_native::memory::process_memory()?;
+        let seen = m.peak.map_or(m.footprint, |p| p.max(m.footprint));
+        self.peak = Some(self.peak.map_or(seen, |p| p.max(seen)));
+        Some(m.footprint)
     }
 
     /// Read the process now.
@@ -243,20 +243,7 @@ fn process_cpu_s() -> Option<f64> {
 }
 
 fn threads() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        threads_in_status(&std::fs::read_to_string("/proc/self/status").ok()?)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        None
-    }
-}
-
-/// The `Threads:` field of a `/proc/<pid>/status` text.
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
-fn threads_in_status(text: &str) -> Option<u64> {
-    text.lines().find_map(|l| l.strip_prefix("Threads:")).and_then(|v| v.trim().parse().ok())
+    ashlar_native::memory::thread_count()
 }
 
 #[cfg(test)]
@@ -273,11 +260,9 @@ mod tests {
             assert!(f > 0 && s.peak_bytes.unwrap() >= f, "{s:?}");
             assert!(s.cpu_s.unwrap() > 0.0, "{s:?}");
         }
-        if cfg!(target_os = "linux") {
+        if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
             assert!(s.threads.unwrap() >= 1, "{s:?}");
         }
-        assert_eq!(threads_in_status("Name:\tx\nThreads:\t7\nVmRSS: 1 kB\n"), Some(7));
-        assert_eq!(threads_in_status("Name: x\n"), None);
         let v = serde_json::to_value(s).unwrap();
         for k in ["footprint_bytes", "peak_bytes", "cpu_s", "threads"] {
             assert!(v.get(k).is_some(), "{k} in {v}");
@@ -295,6 +280,8 @@ mod tests {
         }
         if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
             assert!(p["footprint_bytes"].as_u64().is_some_and(|f| f > 0), "{p}");
+            assert!(p["peak_bytes"].as_u64() >= p["footprint_bytes"].as_u64(), "{p}");
+            assert!(p["threads"].as_u64().is_some_and(|t| t >= 1), "{p}");
         }
     }
 

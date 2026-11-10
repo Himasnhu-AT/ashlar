@@ -47,6 +47,18 @@ impl Monitor {
     }
 }
 
+impl From<ashlar_native::display::Monitor> for Monitor {
+    fn from(m: ashlar_native::display::Monitor) -> Self {
+        Self { rect: Rect::from_min_size(Pos2::new(m.x, m.y), Vec2::new(m.width, m.height)) }
+    }
+}
+
+/// The monitors the OS lists before any window exists, the primary first (macOS and Windows;
+/// empty elsewhere, where [`clamp`] only bounds the state).
+pub fn monitors_now() -> Vec<Monitor> {
+    ashlar_native::display::monitors().into_iter().map(Monitor::from).collect()
+}
+
 fn finite(v: [f32; 2]) -> Option<Vec2> {
     let v = Vec2::new(v[0], v[1]);
     (v.x.is_finite() && v.y.is_finite()).then_some(v)
@@ -177,6 +189,25 @@ mod tests {
 
     fn screen(x: f32, y: f32, w: f32, h: f32) -> Monitor {
         Monitor { rect: Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)) }
+    }
+
+    #[test]
+    fn the_os_monitor_list_brings_a_window_back_at_launch() {
+        use ashlar_native::display::Monitor as Native;
+        // as the OS lists them: a 2x laptop (points) and a monitor left of it
+        let native = [
+            Native { x: 0.0, y: 0.0, width: 1512.0, height: 982.0, scale: 2.0 },
+            Native { x: -1920.0, y: 0.0, width: 1920.0, height: 1080.0, scale: 1.0 },
+        ];
+        let monitors: Vec<Monitor> = native.into_iter().map(Monitor::from).collect();
+        // saved on the left monitor, now unplugged: the list without it moves the window home
+        let saved = at(-1500.0, 100.0, 800.0, 600.0);
+        assert_eq!(clamp(saved, &monitors), saved);
+        let s = clamp(saved, &monitors[..1]);
+        assert!(s.pos.is_some_and(|p| p[0] >= 0.0 && p[0] + 800.0 <= 1512.0), "{s:?}");
+        // whatever this machine lists is usable as is (empty on test threads and headless)
+        let now = monitors_now();
+        assert!(now.iter().all(|m| m.rect.is_finite() && m.rect.width() >= 1.0), "{now:?}");
     }
 
     #[test]

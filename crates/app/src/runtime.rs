@@ -2078,9 +2078,10 @@ fn window_builder<D: Document>(shared: &Shared<D>, window: crate::app::WindowSpe
     {
         let settings = Settings::load(Arc::new(DirConfig::new(d.config.clone())), "settings.json", &[]);
         if let Some(saved) = settings.get::<WindowState>(window_state::KEY) {
-            // the monitors are not known before the window exists: sizes and coordinates are
-            // bounded here, and the first frame moves a window no monitor shows
-            b = window_state::apply(b, &window_state::clamp(saved, &[]));
+            // checked against the monitors the OS lists now (macOS, Windows); where it lists none,
+            // sizes and coordinates are only bounded and the first frame moves a window no monitor
+            // shows
+            b = window_state::apply(b, &window_state::clamp(saved, &window_state::monitors_now()));
         }
     }
     if let Some(png) = window.icon {

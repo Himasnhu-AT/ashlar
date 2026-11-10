@@ -41,6 +41,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   The menu bar, trays and later popups now share one process-wide menu-event router, so a tray's
   items never reach the menu bar. `App::tray(spec)` (feature `tray` of `ashlar-app`) runs the
   chosen item's command and shows the window on a click.
+- `cargo xtask launch --memory` launches 5 times (`--runs N`) and prints the min and max idle and
+  peak footprint and how many runs fell in the high group; one launch landed in either of the two
+  macOS groups at random (IMP-2.19).
+- `ashlar_native::memory` reports the OS's lifetime peak footprint (`ProcessMemory::peak`: macOS
+  lifetime max phys footprint, Windows peak private commit) and `thread_count()` (macOS, Windows,
+  Linux); `app.stats` → `process.peak_bytes` uses the OS peak, so spikes between samples count, and
+  `process.threads` is filled on macOS and Windows too (IMP-6.18).
+- `ashlar_native::display::monitors()` lists the monitors before any window exists (macOS,
+  Windows); a restored window placement is checked against them at launch instead of only on the
+  first frame (IMP-6.18).
 - Web (IMP-6.8): `App::canvas_id`; when a web app cannot start (no such canvas, no WebGL) a
   visible error (`role="alert"`) appears next to the canvas or at the top of the page;
   `examples/web-hello` (with an `index.html` for trunk) is checked for wasm32 by `cargo xtask wasm`.

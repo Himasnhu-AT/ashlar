@@ -227,9 +227,18 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   so there is no white flash.
 - `cargo xtask launch` builds `examples/hello` in release, launches it 9 times (`--runs N`) and
   prints `bench: launch_to_present_p50/p95` and `spawn_to_ready_p50/p95` (from spawning the
-  process). `cargo xtask launch --memory` lets it idle 10 s (`--settle SECS`) and prints the RSS
-  and the physical footprint and its peak (`vmmap`, macOS). Both open real windows, so they are
-  manual and never run in CI; results swing with machine load, so compare runs made back to back.
+  process). `cargo xtask launch --memory` launches it 5 times (`--runs N`), lets each idle 10 s
+  (`--settle SECS`) and prints the lowest and highest RSS, physical footprint and peak (`vmmap`,
+  macOS), with how many runs fell in the high group. Both open real windows, so they are manual
+  and never run in CI; results swing with machine load, so compare runs made back to back.
+- macOS idle memory comes in two groups (IMP-2.19). A window whose occlusion state never changed
+  idles at about 40 MB (94 MB peak). Once it changes (another window covers it, it is minimized,
+  a Space switch, also by chance right after launch), the system maps two swapchain drawables
+  (`CAMetalLayer Display Drawable`, shared with WindowServer, 9.5 MB each at 960×640 points 2x)
+  into the process for good, and Metal allocates a second set of about 13 × 4 MB purgeable
+  blocks (the ~95 MB peak jump): about 66 MB idle, 193 MB peak. It persists after 40 s idle and
+  does not depend on present mode or frame latency; nothing in ashlar's eframe/wgpu options
+  changes it. Compare `_max` figures, which are what users see.
 
 ## Frame performance
 
