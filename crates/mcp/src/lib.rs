@@ -8,7 +8,8 @@
 //!   that crashes takes down the child, not the server.
 //!
 //! Tools are one fixed vocabulary (`list_commands`, `describe_command`, `execute`, `batch`, plus
-//! `screenshot` and `ui_*` when the backend answers them), optionally one tool per command
+//! `screenshot`, `ui_*`, `app_stats` and `app_logs` when the backend answers them), optionally one
+//! tool per command
 //! ([`ToolMode::PerCommand`]). See `docs/control-protocol.md`.
 //!
 //! ```no_run

@@ -119,11 +119,15 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,
-`ui_get`, `ui_wait`, `ui_scroll_into_view`, `ui_highlight` and `screenshot` (with `annotate`,
-`highlight`, `target`) when the app reports these methods in `app.version`. Targets are ref
-strings (`"@e3"`, `"id=file.save"`) or objects. `ui_snapshot` returns the outline as text and adds
-the element list as JSON when you pass `elements: true`. A typical loop is: snapshot, act on a ref,
-wait, then snapshot or `ui_get` to check.
+`ui_get`, `ui_wait`, `ui_scroll_into_view`, `ui_highlight` and `screenshot` (with `target`,
+`annotate`, `highlight`, `pad` and `raise`) when the app reports these methods in `app.version`,
+along with `ui_inspect`, `ui_drag`, `ui_scroll`, `ui_key`, `ui_type`, `ui_menu_list`,
+`ui_menu_invoke` and `ui_set`. `app_stats {reset?}` and `app_logs {limit?, level?}` are the CLI's
+`stats` and `logs`. The full table with every argument is in
+[control-protocol.md](control-protocol.md#mcp-tools). Targets are ref strings (`"@e3"`,
+`"id=file.save"`) or objects. `ui_snapshot` returns the outline as text and adds the element list
+as JSON when you pass `elements: true`. A typical loop is: snapshot, act on a ref, wait, then
+snapshot or `ui_get` to check.
 
 ## The control key
 
