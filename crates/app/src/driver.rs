@@ -400,6 +400,14 @@ impl<D: Document> Driver<D> {
     pub fn run_ui(&mut self, script: &str) -> Result<ashlar_debug::Report, ashlar_debug::ScriptError> {
         ashlar_debug::run_script(self, "script", script)
     }
+
+    /// Apply the app's scene `name` ([`crate::App::scene`]) through the `ui.scene` control
+    /// method, then run the frames it asks for.
+    pub fn scene(&mut self, name: &str) -> Result<(), String> {
+        self.call(ashlar_control::UI_SCENE, serde_json::json!({"name": name}))?;
+        self.settle(60);
+        Ok(())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

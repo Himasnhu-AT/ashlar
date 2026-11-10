@@ -9,6 +9,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Named scenes: `App::scene(name, |s| ..)`, `--scene NAME` (in a window or `--headless`),
+  `--list-scenes`, `Driver::scene`, the `ui.scene` control method and the MCP tool `ui_scene`
+  (listed only for apps with scenes) (IMP-4.9).
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.

@@ -18,6 +18,8 @@ use crate::telemetry::TelemetryConfig;
 pub type ViewFn<D> = Box<dyn FnMut(&mut egui::Ui, &mut Cx<'_, D>)>;
 /// Runs once with the egui context before the first frame (fonts, tokens).
 pub type SetupFn = Box<dyn FnOnce(&egui::Context)>;
+/// A named starting state ([`App::scene`]).
+pub type SceneFn<D> = Arc<dyn Fn(&mut Session<D>) + Send + Sync>;
 
 /// Why the app could not start.
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +55,20 @@ pub(crate) struct Shared<D: Document> {
     pub motion: Option<ashlar_motion::MotionPrefs>,
     pub single_instance: bool,
     pub accept_drops: bool,
+    /// Named starting states, in declaration order.
+    pub scenes: Vec<(String, SceneFn<D>)>,
+}
+
+impl<D: Document> Shared<D> {
+    /// The scene called `name`.
+    pub(crate) fn scene(&self, name: &str) -> Option<&SceneFn<D>> {
+        self.scenes.iter().find(|(n, _)| n == name).map(|(_, f)| f)
+    }
+
+    /// Every scene's name, in declaration order.
+    pub(crate) fn scene_names(&self) -> Vec<String> {
+        self.scenes.iter().map(|(n, _)| n.clone()).collect()
+    }
 }
 
 /// An app: name, document type and format, commands, views. `run()` opens the window; the same
@@ -103,6 +119,7 @@ pub struct App<D: Document> {
     motion: Option<ashlar_motion::MotionPrefs>,
     single_instance: bool,
     accept_drops: Option<bool>,
+    scenes: Vec<(String, SceneFn<D>)>,
 }
 
 impl<D: Document> App<D> {
@@ -129,6 +146,7 @@ impl<D: Document> App<D> {
             motion: None,
             single_instance: false,
             accept_drops: None,
+            scenes: Vec::new(),
         }
     }
 
@@ -247,6 +265,33 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// A named starting state: `setup` runs on the session (load a fixture, fill a list, set the
+    /// theme…) when the scene is applied, with `--scene NAME` (in a window or `--headless`), the
+    /// `ui.scene {name}` control method, the MCP tool `ui_scene` or [`crate::Driver::scene`].
+    /// `--list-scenes` prints the names. A name declared twice keeps the first.
+    ///
+    /// ```no_run
+    /// # use ashlar_app::{App, Session};
+    /// # #[derive(Clone, Default, serde::Serialize, serde::Deserialize)] struct Doc { notes: Vec<String> }
+    /// App::<Doc>::new("notes", "0.1.0").scene("two-notes", |s: &mut Session<Doc>| {
+    ///     s.edit("Two notes", |d| d.notes = vec!["a".into(), "b".into()]);
+    /// });
+    /// ```
+    pub fn scene(mut self, name: impl Into<String>, setup: impl Fn(&mut Session<D>) + Send + Sync + 'static) -> Self {
+        let name = name.into();
+        if self.scenes.iter().any(|(n, _)| *n == name) {
+            log::warn!("scene `{name}` is declared twice; the first one wins");
+        } else {
+            self.scenes.push((name, Arc::new(setup)));
+        }
+        self
+    }
+
+    /// The names of the app's scenes, in declaration order.
+    pub fn scene_names(&self) -> Vec<String> {
+        self.scenes.iter().map(|(n, _)| n.clone()).collect()
+    }
+
     pub(crate) fn split(self) -> (Arc<Shared<D>>, Option<ViewFn<D>>, Option<SetupFn>) {
         let env_prefix: String = self.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
         let accept_drops = self.accept_drops.unwrap_or(self.format.is_some() || !self.extensions.is_empty());
@@ -277,6 +322,7 @@ impl<D: Document> App<D> {
             motion: self.motion,
             single_instance: self.single_instance,
             accept_drops,
+            scenes: self.scenes,
         };
         (Arc::new(shared), self.view, self.setup)
     }
@@ -324,11 +370,24 @@ impl<D: Document> App<D> {
     /// With `--headless` on the command line, run with no window instead: a virtual-clock
     /// [`crate::Driver`] in a temporary folder that writes `--snap out.png` and `--tree tree.json`
     /// (after `--script file.ui` and `--at SECONDS`, at `--size WxH`, `--scale S`, `--theme
-    /// light|dark`), then exits with 0 (done), 1 (a step failed) or 2 (bad arguments).
+    /// light|dark`, `--scene NAME`), then exits with 0 (done), 1 (a step failed) or 2 (bad
+    /// arguments). `--scene NAME` also works with a window; `--list-scenes` prints the scenes.
     pub fn run(self) -> Result<(), Error> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let args: Vec<String> = std::env::args().skip(1).collect();
+            if args.iter().any(|a| a == "--list-scenes") {
+                for name in self.scene_names() {
+                    println!("{name}");
+                }
+                std::process::exit(0);
+            }
+            if let Some(name) = crate::headless_run::scene_arg(&args)
+                && !self.scenes.iter().any(|(n, _)| *n == name)
+            {
+                eprintln!("error: no scene `{name}` (scenes: {})", self.scene_names().join(", "));
+                std::process::exit(i32::from(ashlar_debug::Exit::Usage.code()));
+            }
             if crate::headless_run::requested(&args) {
                 let code = crate::headless_run::run(self, &args);
                 std::process::exit(i32::from(code));
