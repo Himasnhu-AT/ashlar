@@ -98,7 +98,7 @@ a task's state.
 | IMP-5.12 | Rolling numbers | doing (wt-motion2) |
 | IMP-5.13 | Small content components | done (05f44af) |
 | IMP-5.14 | Sidebar / source list | todo |
-| IMP-5.15 | Accessibility goldens | todo |
+| IMP-5.15 | Accessibility goldens | doing (wt-a11ygold) |
 | IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | doing (wt-md2) |
@@ -110,6 +110,7 @@ a task's state.
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
+| IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
@@ -122,7 +123,7 @@ a task's state.
 | IMP-6.10 | Open command-line document after first frame | done (wt/launch, 4356a62) |
 | IMP-6.11 | Tray / status item | todo |
 | IMP-6.12 | Rich clipboard, secret copy | doing (wt-native2) |
-| IMP-6.13 | `ashlar-i18n` | doing (wt-i18n) |
+| IMP-6.13 | `ashlar-i18n` | done (186ecf4) |
 | IMP-6.14 | macOS shell shims | todo |
 | IMP-6.15 | Drag-out and native context menus | todo |
 | IMP-6.16 | Global shortcuts and bring-to-front | todo |

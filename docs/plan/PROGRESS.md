@@ -3,6 +3,22 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/i18n merged (CI green)
+
+- **IMP-6.13:** `ashlar-i18n` (rank 0, wasm32; depends on serde_json, log, thiserror).
+  - Flat JSON catalogs, stackable, parsed on first use. A bad catalog is reported and treated as
+    empty.
+  - Plural rules for about 50 languages, number separators per locale, and the fallback order locale
+    → language → source; `zh-TW` resolves to `zh-Hant`.
+  - Key checks run in tests: `I18n::check` and `missing_source_keys`.
+- **`ashlar_ui::labels::UiLabels`** covers toasts, form, chat, diff view, keymap editor, tab strip and
+  print panel. Explicit labels still win. English and German catalogs live in `crates/ui/i18n/`.
+  - System locale comes from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG`. There is no native list
+    yet (IMP-6.19).
+  - Changed: `ToastLabels`, `FormLabels` and the chat labels now default to the installed labels.
+  - Changed: `KeymapEditor.labels` uses the installed labels when it equals the English default.
+- Started: wt-a11ygold (IMP-5.15).
+
 ## 2026-11-10: wt/window merged (CI green)
 
 - **IMP-6.5:** a file dialog opens on the frame after the one that asks for it, parented to the
