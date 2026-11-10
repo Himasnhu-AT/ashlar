@@ -12,6 +12,8 @@ use super::parse::{Doc, parse_doc};
 use super::{MAX_BYTES, MarkdownResponse, MarkdownStyle, Marker, MdBlock, Span, safe_link};
 use crate::automation::{self, Details, Role};
 use crate::cache::{self, hash_of};
+use crate::code_view::{SyntaxTheme, highlight_job};
+use crate::tokens;
 
 /// What one `show` call keeps between frames.
 #[derive(Default)]
@@ -481,12 +483,19 @@ fn code_block(ui: &mut Ui, id: &str, n: usize, lang: &str, text: &str, key: Gall
                     }
                 });
             });
+            // a known language is coloured from the theme's syntax colours
+            let theme = ashlar_syntax::Lang::from_name(lang).map(|_| SyntaxTheme::from_tokens(&tokens::current(ui.ctx())));
+            let key = match &theme {
+                Some(th) => GalleyKey { key: key.key, revision: hash_of(&(key.revision, th.revision())) },
+                None => key,
+            };
             egui::ScrollArea::horizontal().id_salt((id, "md-code", n)).show(ui, |ui| {
-                let galley = block_galley(ui, key, f32::INFINITY, || {
-                    LayoutJob::single_section(
+                let galley = block_galley(ui, key, f32::INFINITY, || match &theme {
+                    Some(th) => highlight_job(Some(lang), text, style.mono.clone(), th),
+                    None => LayoutJob::single_section(
                         text.to_string(),
                         TextFormat { font_id: style.mono.clone(), color: style.code_text, ..Default::default() },
-                    )
+                    ),
                 });
                 ui.add(egui::Label::new(galley).selectable(true));
             });

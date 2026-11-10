@@ -1,0 +1,17 @@
+[package]
+name = "ashlar-syntax"
+description = "Headless syntax highlighting: forward-only, linear-time lexers for common languages, with a line-state API for incremental views"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["syntax", "highlighting", "lexer", "code", "editor"]
+categories = ["text-processing", "parser-implementations"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
