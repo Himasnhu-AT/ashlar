@@ -3,6 +3,39 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/i18n merged (CI green)
+
+- **IMP-6.13:** `ashlar-i18n` (rank 0, wasm32; depends on serde_json, log, thiserror).
+  - Flat JSON catalogs, stackable, parsed on first use. A bad catalog is reported and treated as
+    empty.
+  - Plural rules for about 50 languages, number separators per locale, and the fallback order locale
+    → language → source; `zh-TW` resolves to `zh-Hant`.
+  - Key checks run in tests: `I18n::check` and `missing_source_keys`.
+- **`ashlar_ui::labels::UiLabels`** covers toasts, form, chat, diff view, keymap editor, tab strip and
+  print panel. Explicit labels still win. English and German catalogs live in `crates/ui/i18n/`.
+  - System locale comes from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG`. There is no native list
+    yet (IMP-6.19).
+  - Changed: `ToastLabels`, `FormLabels` and the chat labels now default to the installed labels.
+  - Changed: `KeymapEditor.labels` uses the installed labels when it equals the English default.
+- Started: wt-a11ygold (IMP-5.15).
+
+## 2026-11-10: wt/window merged (CI green)
+
+- **IMP-6.5:** a file dialog opens on the frame after the one that asks for it, parented to the
+  window (`FileDialog::parent`), and acts on the pick then.
+  - `after_save` carries "Save" in the confirm dialog on to the held-back open or quit.
+  - Fixed: a failed save left `quit_after_save` set.
+  - Four Driver tests.
+- **IMP-6.4:** `window_state.rs` provides a pure `clamp` (10 unit tests) and a `Tracker` that saves
+  under `"window"` only when the viewport changes. New: `App::viewport`, `App::icon`,
+  `App::remember_window`.
+  - Gap: no monitor list exists before the window does, so the launch-time clamp only bounds sizes;
+    on Windows an off-screen window can stay off-screen (IMP-6.18).
+- Process note: removing a merged worktree while its agent's gate is still running kills that gate,
+  and one gate fell back to the main checkout and ran against a merge in progress. Merges now wait
+  until the agent has reported its last `ci:` line.
+- Started: wt-motion2 (IMP-5.12, 3.7), wt-native2 (IMP-6.7, 6.12), wt-flakes (IMP-0.8, 1.10).
+
 ## 2026-11-10: wt/notify and wt/perfwarn merged (CI green)
 
 - **IMP-6.6:** `Notification { id, silent, info }`, `notify::show`, `remove`, `on_click`,

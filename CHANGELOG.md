@@ -23,6 +23,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   launch opens the window there, sizes bounded and a window left on no monitor moved back
   (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
   (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
+- `ashlar-i18n` (new crate, rank 0, builds for wasm32): translations without a full Unicode
+  library. Flat JSON catalogs per locale, parsed on first use and layered (later catalogs override
+  key by key); a bad catalog is reported and acts as empty, never a panic. `I18n::{text, format,
+  plural, integer, decimal, set_locale, negotiate}`: `{name}` templates, CLDR plural categories
+  for about 50 languages (`key.one`, `key.few`, …), per-locale group and decimal separators
+  (including Indian grouping), fallback locale → language → source (`zh-TW` → `zh-Hant`), POSIX
+  and BCP 47 tags (`de_DE.UTF-8` → `de-DE`), `system_locales()` from `LANGUAGE`/`LC_ALL`/`LANG`,
+  and `I18n::check()` for missing keys and mismatched placeholders.
+- `ashlar_ui::labels`: one `UiLabels` installed on the context holds every built-in component
+  string (toasts, form, chat, diff view, keymap editor, tab strip, print panel). Components use it
+  unless the app passes its own labels, which still win. English and German catalogs ship for the
+  `ui.*` keys; `UiLabels::from_i18n` builds the labels for any locale.
 - Perf warnings in debug builds (`ashlar_app::perf_warn`): one stderr line per site when a frame
   waits (≥ 8 ms wall at ≥ 4× its CPU time; names the command or wake reason) or when 60 identical
   frames in a row are drawn for non-input wakes. `ASHLAR_FRAME_BUDGET_MS=N` (any build) prints at
