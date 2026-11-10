@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- CodeView and DiffView follow-ups (IMP-5.20): unwrapped long lines scroll sideways (horizontal
+  wheel or Shift+wheel, and a draggable bar along the bottom; a split diff's sides move together);
+  both views register the new automation role `Role::Document` (`"document"` in `ui.inspect`). The
+  gallery has a Code page. An open dialog no longer copies its shapes for the exit animation on
+  frames where they did not change, and reuses the copy's buffer when they did
+  (`perf_dialog_open_frame_allocs`: per-frame overhead over a plain area 173 → 21 allocations,
+  24.9 → 5.5 KB).
 - Controls follow-ups (IMP-5.19): `controls::Skeleton` placeholder rows (pulse while visible,
   static and frame-free under reduced motion, a busy progress node named by the new
   `UiLabels::controls.loading`, English and German); `content::Accordion` keeps at most one

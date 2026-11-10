@@ -67,6 +67,8 @@ pub enum Role {
     ListOption,
     /// Help text shown on hover.
     Tooltip,
+    /// A read-only document: a code view, a diff, rendered text.
+    Document,
     #[default]
     Other,
 }

@@ -6,6 +6,9 @@
 //! Each line's galley is cached by `(id, line)` and rebuilt only when the revision, its start
 //! state, the width, the font or the theme changes.
 //!
+//! Unwrapped (`wrap(false)`), lines wider than the view scroll sideways: the horizontal wheel
+//! (Shift+wheel) over the view, or a drag on the thin bar along its bottom.
+//!
 //! ```
 //! # use ashlar_ui::code_view::CodeView;
 //! # fn ui(ui: &mut egui::Ui, source: &str, revision: u64) {
@@ -16,7 +19,7 @@
 //! # }
 //! ```
 //!
-//! Automation: the view registers as `<id>` (a group) and each visible line as `<id>.line.<n>`
+//! Automation: the view registers as `<id>` (a document) and each visible line as `<id>.line.<n>`
 //! (1-based, labelled with its text). AccessKit: the view is a read-only document, each visible
 //! line a paragraph labelled with its text.
 
@@ -30,6 +33,7 @@ use egui::{Color32, Event, FontId, Galley, Key, Pos2, Rect, TextFormat, Ui, Visu
 
 use crate::automation::{self, Details, Role};
 use crate::cache::{self, hash_of};
+use crate::hscroll::HScroll;
 use crate::tokens::{self, Tokens};
 use crate::virtual_list::{self, MAX_ROWS, RowHeights, VirtualList};
 
@@ -237,6 +241,8 @@ struct Doc {
     starts: Vec<usize>,
     /// The lexer state at the start of lines `0..states.len()`.
     states: Vec<State>,
+    /// The line with the most bytes (its width starts the horizontal scroll range).
+    longest: usize,
 }
 
 impl Doc {
@@ -250,7 +256,8 @@ impl Doc {
             starts.push(i + 1);
         }
         starts.push(text.len());
-        Doc { key, starts, states: vec![State::START] }
+        let longest = starts.windows(2).enumerate().max_by_key(|(_, w)| w.get(1).zip(w.first()).map_or(0, |(b, a)| b - a)).map_or(0, |(i, _)| i);
+        Doc { key, starts, states: vec![State::START], longest }
     }
 }
 
@@ -383,6 +390,11 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
     } else {
         RowHeights::Uniform(line_h)
     };
+    // unwrapped: long lines scroll sideways; the range starts at the longest line
+    let longest = text.get(line_range(&doc.starts, text, doc.longest)).map_or(0, |l| l.chars().count());
+    let area = ui.available_rect_before_wrap();
+    let mut hs = (!view.wrap).then(|| HScroll::begin(ui, base.with("hx"), area, longest as f32 * char_w + pad, text_w));
+    let hx = hs.as_ref().map_or(0.0, |h| h.offset);
     let mut list = VirtualList::new(view.id, lines, heights).scroll_to(view.scroll_to_line);
     if let Some(h) = view.max_height {
         list = list.max_height(h);
@@ -393,7 +405,8 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
     let mut mark_visuals: Option<Visuals> = None;
     let mut scratch = Vec::new();
     let mut known = Lines { starts: &doc.starts, states: &mut states, text, lang, hl: view.highlighter };
-    let kind = virtual_list::Kind { role: Role::Group, rows: false, node: egui::accesskit::Role::Document, item: egui::accesskit::Role::Paragraph };
+    let kind =
+        virtual_list::Kind { role: Role::Document, rows: false, node: egui::accesskit::Role::Document, item: egui::accesskit::Role::Paragraph };
     let out = virtual_list::show_rows(ui, base, &mut list, kind, None, |ui, row| {
         let i = row.index;
         let range = line_range(known.starts, text, i);
@@ -408,7 +421,10 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
             job
         });
         let rect = row.rect;
-        let origin = pos2(rect.left() + pad + gutter_w, rect.top());
+        let origin = pos2(rect.left() + pad + gutter_w - hx, rect.top());
+        if let Some(h) = hs.as_mut() {
+            h.see(galley.size().x + 2.0 * pad);
+        }
 
         // pointer: press starts a selection, a drag extends it
         if let Some(p) = pointer {
@@ -459,7 +475,8 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
             });
             painter.galley(pos2(gutter.right() - pad - num.size().x, rect.top()), num, t.text.disabled);
         }
-        painter.galley(origin, galley, theme.color(Kind::Plain));
+        let text_clip = Rect::from_min_max(pos2(rect.left() + gutter_w, rect.top()), rect.max).intersect(ui.clip_rect());
+        painter.with_clip_rect(text_clip).galley(origin, galley, theme.color(Kind::Plain));
 
         let label = short(line);
         let row_id = base.with(("row", i));
@@ -470,6 +487,10 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
         automation::register_fmt(ui, rect, format_args!("{}.line.{}", view.id, i + 1), label, Role::Label, true, Details::default());
     });
     doc.states = states;
+    if let Some(h) = hs {
+        let r = out.response.rect;
+        h.end(ui, Rect::from_min_max(pos2(r.left() + gutter_w, r.top()), pos2(r.right() - ui.spacing().scroll.bar_width, r.bottom())), &t);
+    }
 
     // keyboard: select all and copy, while the view has the focus
     let focused = out.response.has_focus();

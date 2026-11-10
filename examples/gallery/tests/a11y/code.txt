@@ -1,0 +1,60 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Code" [toggled=true]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Code view"
+  Switch "Wrap long lines" [toggled=false]
+  Switch "Line numbers" [toggled=true]
+  Label value="Long lines scroll sideways: Shift+wheel or the bar below."
+  Document [read-only]
+    Paragraph "//! A tiny inventory: items, counts and a report." [1/223]
+    Paragraph [2/223]
+    Paragraph "use std::collections::BTreeMap;" [3/223]
+    Paragraph [4/223]
+    Paragraph "/// One stock item." [5/223]
+    Paragraph "#[derive(Clone, Debug)]" [6/223]
+    Paragraph "pub struct Item {" [7/223]
+    Paragraph "    pub name: String," [8/223]
+    Paragraph "    pub count: u32," [9/223]
+    Paragraph "}" [10/223]
+    Paragraph [11/223]
+    Paragraph "/// Items by name, sorted." [12/223]
+    Paragraph "pub fn index(items: &[Item]) -> BTreeMap<&str, u32> {" [13/223]
+    Paragraph "    let mut map = BTreeMap::new();" [14/223]
+    Paragraph "    for item in items {" [15/223]
+    Paragraph "        *map.entry(item.name.as_str()).or_insert(0) += item.count;" [16/223]
+    Paragraph "    }" [17/223]
+    Paragraph "    map" [18/223]
+    Paragraph "}" [19/223]
+    Paragraph [20/223]
+    Paragraph "pub const REPORT_HEADER: &str = \"column 0 | column 1 | column 2 | column 3 | column 4 | column 5 | column 6 | column 7 | column 8 | column 9 | column 10 | column 11 | column 12 | column 13 | column 14 | column 15 | column 16 | column 17 | column 18 | colum" [21/223]
+    Paragraph [22/223]
+    Paragraph "/// Restock rule 0: order more below 10 items." [23/223]
+    Paragraph "pub fn rule_0(count: u32) -> bool {" [24/223]
+    Paragraph "    count < 10" [25/223]
+    Paragraph "}" [26/223]
+    Paragraph [27/223]
+    Paragraph "/// Restock rule 1: order more below 11 items." [28/223]
+    Paragraph "pub fn rule_1(count: u32) -> bool {" [29/223]
+    Paragraph "    count < 11" [30/223]
+    Paragraph "}" [31/223]
+    ScrollBar
+  Unknown

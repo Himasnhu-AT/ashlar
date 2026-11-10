@@ -75,11 +75,12 @@ fn expected(page: Page) -> &'static [&'static str] {
         Page::Overlays => &["overlays.dialog", "overlays.dialog.button.2", "overlays.size", "overlays.font"],
         Page::Commands => &["palette", "palette.search", "palette.results.row.0", "keymap.search", "keymap.file.save.shortcut"],
         Page::Chat => &["chat.transcript", "chat.tool.read", "chat.tool.read.approve", "chat.tool.read.deny", "chat.input"],
+        Page::Code => &["code.wrap", "code.numbers", "code.view", "code.view.line.1", "code.view.line.12"],
         Page::Settings => &["settings.search", "general", "general.launch", "general.updates", "appearance.theme", "appearance.icons"],
     }
 }
 
-const SHELL: &[&str] = &["menu.0", "gallery.status", "gallery.status.export", "gallery.page.lists", "gallery.scale"];
+const SHELL: &[&str] = &["menu.0", "gallery.status", "gallery.status.export", "gallery.page.lists", "gallery.page.code", "gallery.scale"];
 
 #[test]
 fn every_page_in_light_and_dark_shows_its_components() {

@@ -37,6 +37,7 @@ pub mod docking;
 pub mod edit;
 pub mod fonts;
 pub mod form;
+pub(crate) mod hscroll;
 pub mod icons;
 pub mod idle;
 pub mod labels;

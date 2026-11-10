@@ -90,6 +90,7 @@ fn rows_register_automation_and_accesskit() {
     let removed = automation::find(&h.ctx, "diff.file.0.hunk.0.line.3").unwrap();
     assert_eq!(removed.label, "removed 20: let v20 = 20;");
     assert_eq!(automation::find(&h.ctx, "diff.header").unwrap().label, "src/lib.rs");
+    assert_eq!(automation::find(&h.ctx, "diff").unwrap().role, automation::Role::Document);
     let doc = h.get_by_role(Role::Document);
     assert!(doc.accesskit_node().is_read_only());
     assert_eq!(h.get_by_label("added 20: let v20 = 2000;").accesskit_node().role(), Role::Paragraph);
@@ -214,5 +215,38 @@ fn hostile_input_does_not_panic() {
         let mut empty = harness(Vec::new(), mode, 300.0);
         empty.run();
         key(&mut empty, Key::N, Modifiers::NONE);
+    }
+}
+
+#[test]
+fn long_lines_scroll_sideways_in_both_modes() {
+    let long = "x".repeat(600);
+    let patch = format!("--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n context\n-old {long}\n+new {long}\n");
+    for mode in [DiffMode::Unified, DiffMode::Split] {
+        let files = parse_patch(&patch).unwrap();
+        let mut h = harness(files, mode, 300.0);
+        h.run();
+        let x = |h: &Harness<'_, App>, prefix: &str| {
+            h.output()
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text.starts_with(prefix) => Some(t.pos.x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("`{prefix}` not painted"))
+        };
+        let (old0, new0) = (x(&h, "old "), x(&h, "new "));
+        let at = rect(&h, "diff.file.0.hunk.0.line.1").center();
+        h.input_mut().events.push(Event::PointerMoved(at));
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(-300.0, 0.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.run_steps(30);
+        assert!(x(&h, "old ") < old0 - 100.0, "{mode:?}: the old line moved");
+        assert!(x(&h, "new ") < new0 - 100.0, "{mode:?}: the new line moved with it");
     }
 }

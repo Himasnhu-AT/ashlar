@@ -11,6 +11,7 @@ use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use ashlar::ui::chat::{Approval, ChatMessage, ChatRole, Composer, Message, ToolCard, ToolStatus, Transcript};
+use ashlar::ui::code_view::CodeView;
 use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
 use ashlar::ui::content::{Accordion, Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Skeleton, Spinner, Switch, Tone, Variant};
@@ -43,11 +44,22 @@ pub enum Page {
     Tabs,
     Settings,
     Chat,
+    Code,
 }
 
 impl Page {
-    pub const ALL: [Page; 9] =
-        [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings, Page::Chat];
+    pub const ALL: [Page; 10] = [
+        Page::Inputs,
+        Page::Controls,
+        Page::Content,
+        Page::Lists,
+        Page::Tabs,
+        Page::Overlays,
+        Page::Commands,
+        Page::Settings,
+        Page::Chat,
+        Page::Code,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -59,8 +71,28 @@ impl Page {
             Page::Tabs => "Tabs",
             Page::Settings => "Settings",
             Page::Chat => "Chat",
+            Page::Code => "Code",
         }
     }
+}
+
+/// The code page's sample: a small Rust module with one very long line.
+fn demo_code() -> &'static str {
+    static CODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CODE.get_or_init(|| {
+        let mut s = String::from(
+            "//! A tiny inventory: items, counts and a report.\n\nuse std::collections::BTreeMap;\n\n/// One stock item.\n#[derive(Clone, Debug)]\npub struct Item {\n    pub name: String,\n    pub count: u32,\n}\n\n/// Items by name, sorted.\npub fn index(items: &[Item]) -> BTreeMap<&str, u32> {\n    let mut map = BTreeMap::new();\n    for item in items {\n        *map.entry(item.name.as_str()).or_insert(0) += item.count;\n    }\n    map\n}\n\n",
+        );
+        s.push_str("pub const REPORT_HEADER: &str = \"");
+        for i in 0..24 {
+            s.push_str(&format!("column {i} | "));
+        }
+        s.push_str("\";\n\n");
+        for i in 0..40 {
+            s.push_str(&format!("/// Restock rule {i}: order more below {} items.\npub fn rule_{i}(count: u32) -> bool {{\n    count < {}\n}}\n\n", 10 + i, 10 + i));
+        }
+        s
+    })
 }
 
 /// A long demo conversation for the chat page.
@@ -213,6 +245,10 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    /// The code page wraps long lines.
+    pub code_wrap: bool,
+    /// The code page shows line numbers.
+    pub code_numbers: bool,
     /// The toast demo's export progress, in quarters (0 = not started).
     pub toast_progress: u8,
     // settings
@@ -307,6 +343,8 @@ impl Gallery {
             dialog_open: false,
             dialog_opener: None,
             toasts: Toasts::new(),
+            code_wrap: false,
+            code_numbers: true,
             toast_progress: 0,
             last_dialog: None,
             font_size: 1,
@@ -480,6 +518,7 @@ impl Gallery {
                 Page::Tabs => self.tabs_page(ui),
                 Page::Settings => self.settings(ui),
                 Page::Chat => self.chat(ui),
+                Page::Code => self.code_page(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
@@ -835,6 +874,28 @@ impl Gallery {
                     });
                 }
             });
+        });
+    }
+
+    fn code_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        section(ui, &t, "Code view", |ui| {
+            ui.horizontal(|ui| {
+                Switch::new("code.wrap", "Wrap long lines", &mut self.code_wrap).show(ui);
+                ui.add_space(t.space.lg);
+                Switch::new("code.numbers", "Line numbers", &mut self.code_numbers).show(ui);
+            });
+            ui.add_space(t.space.sm);
+            let hint =
+                if self.code_wrap { "Long lines wrap at the view's width." } else { "Long lines scroll sideways: Shift+wheel or the bar below." };
+            ui.label(egui::RichText::new(hint).color(t.text.secondary));
+            ui.add_space(t.space.sm);
+            CodeView::new("code.view", demo_code())
+                .lang(Some("rust"))
+                .wrap(self.code_wrap)
+                .line_numbers(self.code_numbers)
+                .max_height(420.0)
+                .show(ui);
         });
     }
 

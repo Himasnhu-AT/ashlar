@@ -230,6 +230,7 @@ pub fn ak_role(r: ak::Role) -> &'static str {
         R::Status => "status",
         R::Alert => "alert",
         R::Tooltip => "tooltip",
+        R::Document => "document",
         R::GenericContainer | R::Group => "group",
         _ => "generic",
     }
@@ -269,6 +270,7 @@ pub fn ashlar_role(r: Role) -> Option<&'static str> {
         Role::ListBox => "listbox",
         Role::ListOption => "option",
         Role::Tooltip => "tooltip",
+        Role::Document => "document",
         Role::Other => return None,
     })
 }

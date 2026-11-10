@@ -18,6 +18,9 @@
 //! # }
 //! ```
 //!
+//! Lines wider than the view scroll sideways (both sides of a split together): the horizontal
+//! wheel (Shift+wheel) over the view, or a drag on the thin bar along its bottom.
+//!
 //! Input: click selects a row, Shift-click and Shift+arrows extend, ⌘-click toggles. `N` / `F7`
 //! moves to the next hunk, `P` / Shift+`F7` to the previous one. Clicking (or Enter on) a
 //! collapsed range shows [`EXPAND_STEP`] more lines, Alt-click shows all of them. Clicking a file
@@ -43,6 +46,7 @@ use egui::{Color32, FontId, Galley, Key, Rect, Sense, TextFormat, Ui, pos2, vec2
 use crate::automation::{self, Details, Role};
 use crate::cache::{self, hash_of};
 use crate::code_view::SyntaxTheme;
+use crate::hscroll::HScroll;
 use crate::selection::Selection;
 use crate::tokens::{self, Tokens};
 use crate::virtual_list::{self, Header, MAX_ROWS, RowHeights, VirtualList};
@@ -257,6 +261,8 @@ struct Model {
     stats: Vec<(usize, usize)>,
     /// Digits of the largest line number.
     digits: usize,
+    /// Bytes in the longest hunk line (starts the horizontal scroll range).
+    widest: usize,
 }
 
 fn to_u32(x: usize) -> u32 {
@@ -301,6 +307,7 @@ impl Model {
                 m.rows.push(RowRef { kind: RowKind::Hunk, file, item, a: 0, b: 0 });
                 let line = |a: usize, b: Option<usize>| RowRef { kind: RowKind::Line, file, item, a: to_u32(a), b: b.map_or(NONE, to_u32) };
                 let lines = &h.lines;
+                m.widest = lines.iter().map(|l| l.text.len()).fold(m.widest, usize::max);
                 let kind = |i: usize| lines.get(i).map(|l| l.kind);
                 let mut i = 0usize;
                 while i < lines.len() && m.rows.len() < MAX_ROWS {
@@ -600,6 +607,14 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
         }
     }
 
+    // long lines scroll sideways, both sides of a split together
+    let area = ui.available_rect_before_wrap();
+    let text_view = match mode {
+        DiffMode::Unified => area.width() - 2.0 * num_w - sign_w,
+        DiffMode::Split => area.width() / 2.0 - num_w - sign_w,
+    } - ui.spacing().scroll.bar_width;
+    let mut hs = HScroll::begin(ui, base.with("hx"), area, model.widest as f32 * char_w + pad, text_view);
+    let hx = hs.offset;
     let mut list = VirtualList::new(id, rows, RowHeights::Uniform(line_h)).scroll_to(scroll_to).selection(&mut state.selection);
     if let Some(h) = max_height {
         list = list.max_height(h);
@@ -607,7 +622,7 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
     let mut header_rect = None;
     let mut record_header = |_: &mut Ui, r: Rect| header_rect = Some(r);
     let header = Header { height: line_h + 2.0, paint: &mut record_header };
-    let kind = virtual_list::Kind { role: Role::List, rows: false, node: NodeRole::Document, item: NodeRole::Paragraph };
+    let kind = virtual_list::Kind { role: Role::Document, rows: false, node: NodeRole::Document, item: NodeRole::Paragraph };
     let mut top_row: Option<usize> = None;
     let mut shown_rows = 0usize;
     let mut scratch = Vec::new();
@@ -777,7 +792,9 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
                         let _ = highlighter.highlight_line(lang, shown, *lex, &mut scratch);
                         line_job(shown, &scratch, emphasis, &font, theme, emph_bg)
                     });
-                    painter.with_clip_rect(cell.intersect(ui.clip_rect())).galley(pos2(nx + sign_w, text_y), g, theme.color(Kind::Plain));
+                    hs.see(g.size().x + pad);
+                    let text_cell = Rect::from_min_max(pos2(nx + sign_w, cell.top()), cell.max);
+                    painter.with_clip_rect(text_cell.intersect(ui.clip_rect())).galley(pos2(nx + sign_w - hx, text_y), g, theme.color(Kind::Plain));
                     if !spoken.is_empty() {
                         spoken.push_str(" | ");
                     }
@@ -801,6 +818,8 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
             }
         }
     });
+    let r = out.response.rect;
+    hs.end(ui, Rect::from_min_max(r.min, pos2(r.right() - ui.spacing().scroll.bar_width, r.bottom())), &t);
     let top = top_row.unwrap_or(last_top);
     let top_file = model.rows.get(top).map(|r| r.file as usize);
 

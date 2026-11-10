@@ -52,7 +52,7 @@ fn document_and_lines_are_accessible() {
     let doc = h.get_by_role(Role::Document);
     assert!(doc.accesskit_node().is_read_only());
     assert_eq!(automation::find(&h.ctx, "code.line.2").unwrap().label, "    let answer = 42;");
-    assert!(automation::find(&h.ctx, "code").is_some());
+    assert_eq!(automation::find(&h.ctx, "code").map(|e| e.role), Some(automation::Role::Document));
 }
 
 #[test]
@@ -158,4 +158,57 @@ fn markdown_code_fences_still_render() {
     });
     h.run();
     assert!(automation::find(&h.ctx, "md.code.0").is_some() || !automation::query(&h.ctx, "md.code.").is_empty());
+}
+
+/// Left edge of the painted text that starts with `prefix`.
+fn text_x(h: &Harness<'_, Out>, prefix: &str) -> f32 {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text.starts_with(prefix) => Some(t.pos.x),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`{prefix}` not painted"))
+}
+
+fn wheel_x(h: &mut Harness<'_, Out>, at: Pos2, dx: f32) {
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(dx, 0.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(30);
+}
+
+#[test]
+fn unwrapped_long_lines_scroll_sideways() {
+    let long = format!("let long = \"{}\";\nshort\n", "x".repeat(400));
+    let mut h = harness(long.clone(), false);
+    h.run();
+    let start = text_x(&h, "let long");
+    let mid = line_rect(&h, 1).center();
+    wheel_x(&mut h, mid, -200.0);
+    let moved = text_x(&h, "let long");
+    assert!(moved < start - 50.0, "the line moved left: {start} → {moved}");
+    assert!(text_x(&h, "short") < start, "every line moves together");
+    // never past the end of the longest line
+    for _ in 0..40 {
+        wheel_x(&mut h, mid, -400.0);
+    }
+    let end = text_x(&h, "let long");
+    let width = 400.0 * 7.6; // at least the run of x's in a 12.5-point mono font
+    assert!(end > start - width - 480.0, "clamped at the end: {end}");
+    wheel_x(&mut h, mid, 1.0e9);
+    assert_eq!(text_x(&h, "let long"), start, "back at the start");
+
+    // wrapped text does not scroll sideways
+    let mut h = harness(long, true);
+    h.run();
+    let start = text_x(&h, "let long");
+    let mid = line_rect(&h, 1).center();
+    wheel_x(&mut h, mid, -200.0);
+    assert_eq!(text_x(&h, "let long"), start);
 }
