@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use ashlar_trace_proto::{
-    Breadcrumb, CatalogEvent, Crash, CrashKind, Device, Envelope, Event, FRAME_BUCKETS, FrameStats, Gpu, ItemBody, MAX_NAME_LEN, MAX_PROP_STR_LEN,
-    MAX_PROPS, Perf, PropValue, SessionEnd, SessionStatus, SessionTotals, validate_name,
+    Breadcrumb, CatalogEvent, Crash, CrashKind, DISPLAY_BUDGET_US, Device, Envelope, Event, FRAME_BUCKETS, FrameStats, Gpu, ItemBody, MAX_NAME_LEN,
+    MAX_PROP_STR_LEN, MAX_PROPS, Perf, PropValue, SessionEnd, SessionStatus, SessionTotals, validate_name,
 };
 
 pub const DAY_MS: i64 = 86_400_000;
@@ -305,14 +305,19 @@ fn sanitize_perf(perf: Perf) -> Perf {
     let frames = perf.frames.map(|frames| {
         let mut buckets: Vec<u64> = frames.buckets.into_iter().map(|count| count.min(COUNTER_MAX)).take(FRAME_BUCKETS).collect();
         buckets.resize(FRAME_BUCKETS, 0);
-        FrameStats {
+        let mut frames = FrameStats {
             count: frames.count.min(COUNTER_MAX),
             sum_us: frames.sum_us.min(COUNTER_MAX * 1_000),
             max_us: frames.max_us,
             slow: frames.slow.min(COUNTER_MAX),
             frozen: frames.frozen.min(COUNTER_MAX),
             buckets,
-        }
+            over_budget: None,
+        };
+        // counted from the buckets, whatever the client sent: older clients send none, and the
+        // buckets are what the server stores
+        frames.over_budget = Some(frames.frames_over(DISPLAY_BUDGET_US).min(COUNTER_MAX));
+        frames
     });
     Perf {
         window_s: perf.window_s.min(86_400),
@@ -639,7 +644,22 @@ mod tests {
         let frames = cleaned.frames.unwrap();
         assert_eq!(frames.buckets.len(), FRAME_BUCKETS);
         assert_eq!(frames.count, COUNTER_MAX);
+        assert_eq!(frames.over_budget, Some(COUNTER_MAX));
         assert_eq!(cleaned.cpu_pct, None);
+    }
+
+    #[test]
+    fn over_budget_frames_are_counted_from_the_buckets() {
+        let mut sent = FrameStats::empty();
+        for us in [4_000, 9_000, 20_000] {
+            sent.record(us);
+        }
+        // an older client sends no count, a confused one a wrong count: both read from the buckets
+        for claimed in [None, Some(99)] {
+            let frames = FrameStats { over_budget: claimed, ..sent.clone() };
+            let cleaned = sanitize_perf(Perf { frames: Some(frames), ..Perf::default() }).frames.unwrap();
+            assert_eq!(cleaned.over_budget, Some(2));
+        }
     }
 
     #[test]

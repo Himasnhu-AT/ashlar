@@ -48,7 +48,7 @@
       "ts": 1791900060000,
       "type": "perf",
       "window_s": 60,
-      "frames": { "count": 3, "sum_us": 724000, "max_us": 710000, "slow": 1, "frozen": 1, "buckets": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0] },
+      "frames": { "count": 3, "sum_us": 724000, "max_us": 710000, "slow": 1, "frozen": 1, "buckets": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0], "over_budget": 2 },
       "cpu_pct": 42.5,
       "rss_mb": 512,
       "rss_peak_mb": 640,

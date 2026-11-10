@@ -80,6 +80,8 @@ pub struct PerfSummary {
     pub p90_us: Option<u32>,
     pub p99_us: Option<u32>,
     pub max_us: u32,
+    /// Share of frames over the 120 Hz budget ([`ashlar_trace_proto::DISPLAY_BUDGET_US`]).
+    pub over_budget_rate: Option<f64>,
     pub slow_rate: Option<f64>,
     pub frozen_rate: Option<f64>,
     pub startup_ms: Option<f64>,
@@ -127,6 +129,7 @@ impl PerfAcc {
             p90_us: f.quantile_us(0.90),
             p99_us: f.quantile_us(0.99),
             max_us: f.max_us,
+            over_budget_rate: fmt::ratio(i64::try_from(f.over_budget_frames()).unwrap_or(i64::MAX), count),
             slow_rate: fmt::ratio(i64::try_from(f.slow).unwrap_or(i64::MAX), count),
             frozen_rate: fmt::ratio(i64::try_from(f.frozen).unwrap_or(i64::MAX), count),
             startup_ms: fmt::ratio(self.startup_sum, self.startup_n),
@@ -271,6 +274,7 @@ mod tests {
         assert_eq!(summary.p90_us, Some(6_000));
         assert_eq!(summary.p99_us, Some(30_000));
         assert_eq!(summary.slow_rate, Some(0.1));
+        assert_eq!(summary.over_budget_rate, Some(0.1));
         assert_eq!(summary.cpu_pct, Some(10.0));
         assert_eq!(summary.startup_ms, Some(300.0));
         let grouped = perf_grouped(&rows, |r| r.os_name.as_str());

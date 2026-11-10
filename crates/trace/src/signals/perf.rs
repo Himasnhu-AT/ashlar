@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use ashlar_trace_proto::{FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
+use ashlar_trace_proto::{DISPLAY_BUDGET_US, FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
 
 use super::{Shared, lock, sys};
 
@@ -27,9 +27,9 @@ impl Frames {
         self.max_us.fetch_max(us, Ordering::Relaxed);
     }
 
-    /// Takes what has been recorded and starts again from nothing. The count and the slow and frozen
-    /// counts are worked out from the buckets, whose bounds include both thresholds, so the three always
-    /// agree with the histogram. A frame recorded at this very moment lands in this window or the next.
+    /// Takes what has been recorded and starts again from nothing. The count and the over-budget, slow
+    /// and frozen counts are worked out from the buckets, whose bounds include every threshold, so they
+    /// always agree with the histogram. A frame recorded at this very moment lands in this window or the next.
     fn take(&self) -> FrameStats {
         let buckets: Vec<u64> = self.buckets.iter().map(|bucket| bucket.swap(0, Ordering::Relaxed)).collect();
         let above = |threshold: u32| buckets.iter().skip(FrameStats::bucket_index(threshold) + 1).sum();
@@ -39,6 +39,7 @@ impl Frames {
             max_us: self.max_us.swap(0, Ordering::Relaxed),
             slow: above(SLOW_FRAME_US),
             frozen: above(FROZEN_FRAME_US),
+            over_budget: Some(above(DISPLAY_BUDGET_US)),
             buckets,
         }
     }
@@ -189,7 +190,7 @@ mod tests {
     #[test]
     fn window_holds_a_frame_histogram() {
         let fixture = Fixture::new(|_| {});
-        for ms in [4, 4, 20, 800] {
+        for ms in [4, 4, 9, 20, 800] {
             fixture.signals.frame(Duration::from_millis(ms));
         }
         fixture.signals.tick_at(fixture.at(WINDOW));
@@ -198,13 +199,14 @@ mod tests {
         let perf = &items[0];
         assert_eq!(perf.window_s, 60);
         let frames = perf.frames.as_ref().expect("frames");
-        assert_eq!(frames.count, 4);
-        assert_eq!(frames.sum_us, 4_000 + 4_000 + 20_000 + 800_000);
+        assert_eq!(frames.count, 5);
+        assert_eq!(frames.sum_us, 4_000 + 4_000 + 9_000 + 20_000 + 800_000);
         assert_eq!(frames.max_us, 800_000);
+        assert_eq!(frames.over_budget, Some(3), "over the 120 Hz budget: 9, 20 and 800 ms");
         assert_eq!(frames.slow, 2);
         assert_eq!(frames.frozen, 1);
         assert_eq!(frames.buckets.len(), FRAME_BUCKETS);
-        assert_eq!(frames.buckets.iter().sum::<u64>(), 4);
+        assert_eq!(frames.buckets.iter().sum::<u64>(), 5);
         let sent = fixture.sink.items.lock().expect("lock");
         assert_eq!(sent[0].0, Signal::Perf);
         assert!(!sent[0].2, "perf must not use submit_now");
