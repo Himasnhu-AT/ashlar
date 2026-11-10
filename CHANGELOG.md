@@ -27,9 +27,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   value moves, and settled values are exactly their target. `prefs`/`set_prefs` set reduced
   motion (also turning off egui's widget animations) and a time scale; `active` counts moving
   values.
+- `ashlar_ui::tokens`: `motion` (spring per kind of change), `elevation` (popup and window
+  shadows, no longer hard-coded in `visuals()`) and `stroke` (hairline, focus) tokens;
+  `Tokens::high_contrast()`; `contrast_ratio`; `TOKEN_SPEC`, the OKLCH source of every built-in
+  colour, checked against the hex values by a test.
 
 ### Changed
 
+- `Tokens::with_accent` derives hover, focus, selection and selection text in OKLCH (same hue,
+  lightness steps, capped chroma) instead of sRGB mixing, flips `text.on_accent` dark when white
+  falls below 4.5:1 and pushes the focus ring to 3:1 on every surface. The dark theme's accent is
+  darker (`#276ee0`, was `#3b82f6`) so white text on it reaches 4.5:1; its derived states follow.
 - `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
   asks for a `document` frame: the frame that ran it already shows the change. The runtime also
   stops copying and comparing the view state and formatting the window title on frames that did
