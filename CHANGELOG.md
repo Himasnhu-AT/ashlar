@@ -48,6 +48,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-mcp`: `app_stats {reset?}` and `app_logs {limit?, level?}` tools over the runtime's
+  `app.stats` and `app.logs`, listed only when the app reports those methods.
 - `ashlar-assistant`: `HistoryStore::offload_images` keeps only a chat's newest pictures in
   memory (older ones stay in its history folder as file references, which saving keeps, loading
   reads back and requests leave out); `HistoryStore::read_image` and `Image::is_offloaded` for

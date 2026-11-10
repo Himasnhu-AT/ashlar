@@ -275,6 +275,40 @@ fn ui_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Va
     ]
 }
 
+/// `(tool, method, title, description, schema, access)` for the runtime's own methods (answered by
+/// `ashlar-app`, listed in `app.version` when the app has them).
+fn app_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Value, Access)> {
+    vec![
+        (
+            "app_stats",
+            "app.stats",
+            "App stats",
+            "Frame times, layout passes, background jobs and wakes (frames and repaint requests per reason) since the window began. `reset` starts a new window after this reading, e.g. reset, act, read again.",
+            obj(json!({"reset": {"type": "boolean", "description": "Start a new measurement window after this reading"}}), &[]),
+            Access::Read,
+        ),
+        (
+            "app_logs",
+            "app.logs",
+            "App logs",
+            "The app's recent log lines, newest last: {lines: [{unix, level, target, message}]}. `level` keeps that level and more severe ones; `limit` is how many lines (default 200, the app caps it).",
+            obj(
+                json!({"limit": {"type": "integer", "minimum": 0, "description": "Most lines returned (default 200)"},
+                    "level": {"type": "string", "enum": ["error", "warn", "info", "debug", "trace"], "description": "Least severe level kept (default trace: everything)"}}),
+                &[],
+            ),
+            Access::Read,
+        ),
+    ]
+}
+
+/// Every passthrough tool: the UI vocabulary, then the runtime's methods.
+fn method_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, Value, Access)> {
+    let mut t = ui_table();
+    t.extend(app_table());
+    t
+}
+
 /// A target written as a string (`"@e3"`, `"e3"`, `"id=…"`, `"text=…"`) as the protocol's object;
 /// objects pass through.
 pub fn target_value(v: &Value) -> Result<Value, String> {
@@ -327,14 +361,16 @@ pub fn snapshot_result(r: Reply, with_elements: bool) -> ToolResult {
     }
 }
 
-/// The UI tools for the methods a backend answers.
+/// The UI tools (and `app_stats`/`app_logs`) for the methods a backend answers: a tool is listed
+/// only when `app.version` reports its method.
 pub fn ui_tools(methods: &[String]) -> Vec<Value> {
-    ui_table().into_iter().filter(|t| methods.iter().any(|m| m == t.1)).map(|(n, _, title, d, s, ro)| tool(n, title, d, s, ro)).collect()
+    method_table().into_iter().filter(|t| methods.iter().any(|m| m == t.1)).map(|(n, _, title, d, s, ro)| tool(n, title, d, s, ro)).collect()
 }
 
-/// Every control method the UI tools use (to know their names whatever the backend answers).
+/// Every control method the passthrough tools use (to know their names whatever the backend
+/// answers).
 pub fn all_ui_methods() -> Vec<String> {
-    ui_table().into_iter().map(|t| t.1.to_string()).collect()
+    method_table().into_iter().map(|t| t.1.to_string()).collect()
 }
 
 /// The definition of an app's own tool.
@@ -342,9 +378,10 @@ pub fn custom_tool(name: &str, title: &str, description: &str, schema: Value, ac
     tool(name, title, description, schema, access)
 }
 
-/// The control method behind a UI tool name.
+/// The control method behind a passthrough tool name (`ui_*`, `screenshot`, `app_stats`,
+/// `app_logs`).
 pub fn ui_method(tool: &str) -> Option<&'static str> {
-    ui_table().into_iter().find(|t| t.0 == tool).map(|t| t.1)
+    method_table().into_iter().find(|t| t.0 == tool).map(|t| t.1)
 }
 
 /// A command id as a tool name: `[A-Za-z0-9_-]`, at most 64 characters.
@@ -437,7 +474,12 @@ mod tests {
             assert_eq!(ui_method(name), Some(method));
             assert!(ashlar_control::UI_METHODS.contains(&method) || ashlar_control::DEBUG_METHODS.contains(&method), "{method}");
         }
+        for (name, method, ..) in app_table() {
+            assert_eq!(ui_method(name), Some(method));
+            assert!(method.starts_with("app."), "{method}");
+        }
         assert_eq!(ui_tools(&[]).len(), 0);
+        assert_eq!(ui_tools(&["app.stats".into()]).len(), 1);
         assert_eq!(ui_tools(&["ui.screenshot".into()]).len(), 1);
         // Every debugger method has a tool (devtools.* are for humans, not agents).
         for m in ashlar_control::DEBUG_METHODS.iter().filter(|m| m.starts_with("ui.")) {
