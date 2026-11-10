@@ -4,7 +4,8 @@
 //! nothing.
 //!
 //! There is no GPU: `ui.screenshot` gets a blank image of the screen size (the PNG plumbing is
-//! real, the pixels are not).
+//! real, the pixels are not). Each frame is still tessellated, as a window would, so the frame
+//! stats ([`Runtime::stats`]) hold the whole CPU frame: `pass`, `tessellate` and `frame_cpu`.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -15,7 +16,7 @@ use egui::{Event, Rect, ViewportCommand, ViewportId, pos2, vec2};
 use serde_json::Value;
 
 use crate::runtime::Runtime;
-use crate::session::Document;
+use crate::session::{Document, now};
 
 /// Repaint requests made outside a pass (another thread: a job, the control server).
 #[derive(Default)]
@@ -41,6 +42,8 @@ pub struct Driver<D: Document> {
     screenshots: bool,
     /// The window is minimized: frames run only [`Runtime::logic`], as eframe does.
     hidden: bool,
+    /// The display's pixels per point (`None`: egui's default, 1).
+    pixels_per_point: Option<f32>,
 }
 
 impl<D: Document> Driver<D> {
@@ -67,6 +70,7 @@ impl<D: Document> Driver<D> {
             close_requested: false,
             screenshots: true,
             hidden: false,
+            pixels_per_point: None,
         }
     }
 
@@ -82,6 +86,16 @@ impl<D: Document> Driver<D> {
     pub fn set_screen(&mut self, width: f32, height: f32) {
         self.screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height));
         self.next = Some(self.time);
+    }
+
+    /// Draw as on a display with `ppp` pixels per point (2 on a Retina display), from the next
+    /// frame on. Values that are not finite or not positive are ignored; others are clamped to
+    /// 0.25–8.
+    pub fn pixels_per_point(&mut self, ppp: f32) {
+        if ppp.is_finite() && ppp > 0.0 {
+            self.pixels_per_point = Some(ppp.clamp(0.25, 8.0));
+            self.next = Some(self.time);
+        }
     }
 
     /// Virtual seconds since the start.
@@ -140,13 +154,31 @@ impl<D: Document> Driver<D> {
         if std::mem::take(&mut self.close_requested) {
             raw.viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
         }
+        if let Some(ppp) = self.pixels_per_point {
+            raw.viewports.entry(ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
+        }
         let ctx = self.ctx.clone();
+        let started = now();
         self.runtime.raw_input_hook(&ctx, &mut raw);
         let rt = &mut self.runtime;
         let mut out = ctx.run_ui(raw, |ui| {
             rt.logic(ui.ctx());
             rt.ui(ui);
         });
+        let passed = now();
+        // a real frame turns the shapes into meshes next (the copy stays out of the timing)
+        let shapes = out.shapes.clone();
+        let tess_start = now();
+        let meshes = ctx.tessellate(shapes, out.pixels_per_point);
+        let tess_end = now();
+        drop(meshes);
+        if let (Some(s), Some(p), Some(ts), Some(te)) = (started, passed, tess_start, tess_end) {
+            let (pass, tess) = (p.duration_since(s), te.duration_since(ts));
+            let stats = self.runtime.stats_mut();
+            stats.record_pass(pass);
+            stats.record_tessellate(tess);
+            stats.record_frame_cpu(pass.saturating_add(tess));
+        }
         out.textures_delta.clear();
         self.frames = self.frames.saturating_add(1);
         let done = self.ctx.cumulative_pass_nr();
@@ -176,7 +208,9 @@ impl<D: Document> Driver<D> {
     /// A frame of a hidden window: `logic` only, and the viewport commands it gave.
     fn logic_only(&mut self) {
         let mut raw = egui::RawInput { screen_rect: Some(self.screen), time: Some(self.time), focused: false, ..Default::default() };
-        raw.viewports.entry(ViewportId::ROOT).or_default().minimized = Some(true);
+        let vp = raw.viewports.entry(ViewportId::ROOT).or_default();
+        vp.minimized = Some(true);
+        vp.native_pixels_per_point = self.pixels_per_point;
         // screenshots the last pass asked for arrive with this one (a hidden window has none to
         // present; this stands in for the debugger's off-screen renderer)
         let (shots, rest): (Vec<Event>, Vec<Event>) = self.input.drain(..).partition(|e| matches!(e, Event::Screenshot { .. }));
@@ -286,5 +320,31 @@ impl<D: Document> Driver<D> {
     /// [`Driver::request`] expecting success.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.request(method, params).into_result().map_err(|(e, _)| e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::App;
+
+    fn driver() -> Driver<i64> {
+        Driver::new(App::<i64>::new("drivertest", "0.0.0").view(|ui, _cx| drop(ui.label("hello"))).runtime())
+    }
+
+    #[test]
+    fn frames_are_measured_by_phase_at_the_display_scale() {
+        let mut d = driver();
+        d.pixels_per_point(2.0);
+        d.pixels_per_point(f32::NAN);
+        d.pixels_per_point(-1.0);
+        let out = d.frame();
+        assert_eq!(out.pixels_per_point, 2.0);
+        assert!(!out.shapes.is_empty(), "the shapes are still handed back");
+        assert_eq!(d.ctx().pixels_per_point(), 2.0);
+        let s = d.runtime.stats().summary();
+        assert_eq!((s.window, s.pass.window, s.tessellate.window, s.frame_cpu.window), (1, 1, 1, 1));
+        assert!(s.frame_cpu.max_ms >= s.pass.max_ms && s.frame_cpu.max_ms >= s.tessellate.max_ms, "{s:?}");
+        assert!(s.pass.max_ms >= s.max_ms, "the pass holds the UI: {s:?}");
     }
 }

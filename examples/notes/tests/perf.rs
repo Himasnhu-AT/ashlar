@@ -35,6 +35,7 @@ fn perf_frame_p95_scrolling_100k_notes() {
     let dir = tempfile::tempdir().unwrap();
     let rt: Runtime<Notes> = notes::app().dirs(AppDirs::under(dir.path())).autosave(None).runtime();
     let mut d = Driver::new(rt);
+    d.pixels_per_point(2.0); // a Retina display
     d.settle(10);
     let t = Instant::now();
     d.call("engine.execute", json!({"command": "note.generate", "params": {"count": 100_000}})).unwrap();
@@ -76,8 +77,12 @@ fn perf_frame_p95_scrolling_100k_notes() {
     println!("bench: frame_p50_scroll_100k {:.3} ms", s.p50_ms);
     println!("bench: frame_p95_scroll_100k {:.3} ms", s.p95_ms);
     println!("bench: frame_max_scroll_100k {:.3} ms", s.max_ms);
+    println!("bench: pass_p95_scroll_100k {:.3} ms", s.pass.p95_ms);
+    println!("bench: tessellate_p95_scroll_100k {:.3} ms", s.tessellate.p95_ms);
+    println!("bench: frame_cpu_p95_scroll_100k_x2 {:.3} ms", s.frame_cpu.p95_ms);
     assert!(s.window >= 600, "every scroll step drew a frame ({} frames)", s.window);
     if !cfg!(debug_assertions) {
         assert!(s.p95_ms < 4.0, "frame p95 budget is 4 ms (got {:.3})", s.p95_ms);
+        assert!(s.frame_cpu.p95_ms < 8.3, "the whole frame at 2x fits 120 Hz: 8.3 ms (got {:.3})", s.frame_cpu.p95_ms);
     }
 }

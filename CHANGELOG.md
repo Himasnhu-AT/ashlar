@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+
+- `ashlar-app`: frame stats split the frame into phases: `app.stats` keeps the UI time as
+  `p50_ms`/`p95_ms`/`max_ms` and adds `pass`, `tessellate` and `frame_cpu` (the whole frame on the
+  CPU: eframe's own figure in a window). `Driver` tessellates every frame like a window and
+  takes the display scale (`Driver::pixels_per_point`).
+
 ### Changed
 
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,

@@ -1211,6 +1211,10 @@ impl<D: Document> eframe::App for EframeApp<D> {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.install_offscreen(ui.ctx(), frame);
+        // the previous frame's whole CPU time, painting included
+        if let Some(d) = frame.info().cpu_usage.and_then(|s| Duration::try_from_secs_f32(s).ok()) {
+            self.rt.stats.record_frame_cpu(d);
+        }
         self.rt.ui(ui);
     }
 
