@@ -265,3 +265,19 @@ fn an_unchanged_revision_skips_the_text() {
     h.run();
     assert_eq!(painted_text(&h), "gamma");
 }
+
+#[test]
+fn installed_ui_labels_reach_code_blocks() {
+    let mut i18n = ashlar_i18n::I18n::new("en");
+    ashlar_ui::labels::add_catalogs(&mut i18n);
+    i18n.set_locale("de");
+    let mut h = Harness::builder().with_size((400.0, 200.0)).build_ui(|ui| {
+        let style = style();
+        markdown::show(ui, "md", "```\nx\n```\n", &style);
+    });
+    ashlar_ui::labels::install(&h.ctx, ashlar_ui::labels::UiLabels::from_i18n(&i18n));
+    automation::install(&h.ctx);
+    h.run();
+    assert_eq!(automation::find(&h.ctx, "md.code.0.copy").unwrap().label, "Kopieren");
+    assert_eq!(ashlar_ui::labels::UiLabels::from_i18n(&i18n).markdown.copied, "Kopiert");
+}

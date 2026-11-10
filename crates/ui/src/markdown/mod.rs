@@ -117,8 +117,6 @@ impl MarkdownLabels {
     };
 }
 
-static ENGLISH: MarkdownLabels = MarkdownLabels::ENGLISH;
-
 impl Default for MarkdownLabels {
     fn default() -> Self {
         Self::ENGLISH
@@ -305,7 +303,8 @@ impl<'a> Markdown<'a> {
         self
     }
 
-    /// The words drawn (English by default).
+    /// The words drawn (by default the context's [`crate::labels::UiLabels`], English unless the
+    /// app installed others).
     pub fn labels(mut self, labels: &'a MarkdownLabels) -> Self {
         self.labels = Some(labels);
         self
@@ -313,15 +312,17 @@ impl<'a> Markdown<'a> {
 
     pub fn show(self, ui: &mut Ui) -> MarkdownResponse {
         let Markdown { id, source, style, labels, query, mut on_task, streaming, revision } = self;
-        let opts = view::Opts {
-            id,
-            style,
-            labels: labels.unwrap_or(&ENGLISH),
-            query,
-            on_task: on_task.as_deref_mut().map(|f| f as &mut dyn FnMut(usize, bool)),
-            streaming,
-            revision,
+        // the app's labels for this view win; otherwise the ones installed on the context
+        let installed;
+        let labels = match labels {
+            Some(l) => l,
+            None => {
+                installed = crate::labels::current(ui.ctx());
+                &installed.markdown
+            }
         };
+        let opts =
+            view::Opts { id, style, labels, query, on_task: on_task.as_deref_mut().map(|f| f as &mut dyn FnMut(usize, bool)), streaming, revision };
         match source {
             Source::Text(md) => view::show(ui, md, opts),
             Source::Blocks(blocks) => view::show_blocks(ui, blocks, opts),
