@@ -3,6 +3,22 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/a11yfix merged (CI green)
+
+- **IMP-5.21:** no `Unknown` nodes remain in any gallery outline.
+  - Lists, tables and trees take `.label(text)`. Table cells have the `Cell` role and headers
+    `ColumnHeader` (with sort direction). Resize handles and tree arrows are hidden from AccessKit.
+  - The keymap editor's third column is "Actions", and its table is "Keyboard shortcuts".
+  - Search fields are named "Search" (`SearchField::label` overrides it), and the palette input is
+    "Command palette".
+  - Banners say their text once.
+  - **Breaking:** new fields on `KeymapLabels` and `UiLabels` break code that builds them field by
+    field.
+- **IMP-5.22, a real bug:** `VirtualList::scroll_to` (and the fling) read the scroll offset under the
+  wrong id, so the offset always read 0. It never scrolled up to a row above the view and moved
+  the list for rows already in view. Fixed; `crates/ui/tests/list_scroll_to.rs` failed before the
+  fix.
+
 ## 2026-11-10: wt/a11ygold and wt/motion2 merged (CI green)
 
 - **IMP-5.15:** `examples/gallery/tests/a11y_goldens.rs` covers all 9 pages.
