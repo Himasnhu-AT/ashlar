@@ -3,6 +3,23 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/window merged (CI green)
+
+- **IMP-6.5:** a file dialog opens on the frame after the one that asks for it, parented to the
+  window (`FileDialog::parent`), and acts on the pick then.
+  - `after_save` carries "Save" in the confirm dialog on to the held-back open or quit.
+  - Fixed: a failed save left `quit_after_save` set.
+  - Four Driver tests.
+- **IMP-6.4:** `window_state.rs` provides a pure `clamp` (10 unit tests) and a `Tracker` that saves
+  under `"window"` only when the viewport changes. New: `App::viewport`, `App::icon`,
+  `App::remember_window`.
+  - Gap: no monitor list exists before the window does, so the launch-time clamp only bounds sizes;
+    on Windows an off-screen window can stay off-screen (IMP-6.18).
+- Process note: removing a merged worktree while its agent's gate is still running kills that gate,
+  and one gate fell back to the main checkout and ran against a merge in progress. Merges now wait
+  until the agent has reported its last `ci:` line.
+- Started: wt-motion2 (IMP-5.12, 3.7), wt-native2 (IMP-6.7, 6.12), wt-flakes (IMP-0.8, 1.10).
+
 ## 2026-11-10: wt/notify and wt/perfwarn merged (CI green)
 
 - **IMP-6.6:** `Notification { id, silent, info }`, `notify::show`, `remove`, `on_click`,
