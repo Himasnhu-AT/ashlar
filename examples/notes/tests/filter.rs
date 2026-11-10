@@ -58,3 +58,29 @@ fn editing_a_note_moves_it_in_and_out_of_the_filter() {
     assert_eq!(list["notes"].as_array().unwrap().len(), 11);
     assert_eq!(rows(&mut d).len(), 11);
 }
+
+#[test]
+fn a_click_on_a_notes_title_selects_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt: Runtime<Notes> = notes::app().dirs(AppDirs::under(dir.path())).autosave(None).runtime();
+    let mut d = Driver::new(rt);
+    d.settle(10);
+    d.call("engine.execute", json!({"command": "note.generate", "params": {"count": 20}})).unwrap();
+    d.settle(10);
+    let row = |d: &mut Driver<Notes>| {
+        let ins = d.call("ui.inspect", json!({})).unwrap();
+        ins["elements"].as_array().unwrap().iter().find(|e| e["id"] == "notes.list.row.3").unwrap().clone()
+    };
+    let r = row(&mut d)["rect"].clone();
+    let at = |i: usize| r[i].as_f64().unwrap() as f32;
+    // on the title's text ("Note 4"), not on the empty end of the row
+    let p = ashlar::egui::pos2(at(0) + 20.0, at(1) + at(3) / 2.0);
+    for pressed in [true, false] {
+        d.push_event(ashlar::egui::Event::PointerMoved(p));
+        let button = ashlar::egui::PointerButton::Primary;
+        d.push_event(ashlar::egui::Event::PointerButton { pos: p, button, pressed, modifiers: ashlar::egui::Modifiers::NONE });
+        d.advance(0.05);
+    }
+    d.settle(10);
+    assert_eq!(row(&mut d)["selected"], true, "the click on the title selected the note");
+}

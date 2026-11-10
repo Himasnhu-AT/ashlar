@@ -271,6 +271,12 @@ struct ViewState {
     sel_key: Option<(u64, Option<u64>)>,
     /// The list itself changed the selection last frame (no need to scroll to it).
     picked_in_list: bool,
+    /// "N notes" for `count_of` notes, rebuilt only when the count changes.
+    count_text: String,
+    count_of: Option<usize>,
+    /// The undo merge key of `merge_of` (`note-<id>`), rebuilt only when the edited note changes.
+    merge_key: String,
+    merge_of: Option<u64>,
 }
 
 impl ViewState {
@@ -338,12 +344,16 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
 
         egui::Panel::left("notes.sidebar").default_size(280.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                let r = ui.button("New Note");
+                let r = ui.button(ashlar::ui::cache::button_text(ui, "notes.add", "New Note"));
                 automation::register(ui, &r, "notes.add", "New Note", Role::Button);
                 if r.clicked() {
                     cx.dispatch("note.add", json!({}));
                 }
-                ui.label(format!("{} notes", doc.notes.len()));
+                if st.count_of != Some(doc.notes.len()) {
+                    st.count_text = format!("{} notes", doc.notes.len());
+                    st.count_of = Some(doc.notes.len());
+                }
+                ashlar::ui::cache::label(ui, "notes.count", &st.count_text);
             });
             if SearchField::new("notes.search", &mut st.query).hint("Search notes").show(ui).changed {
                 st.refilter(&doc, rev);
@@ -366,8 +376,11 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
                 .scroll_to(st.scroll_to.take())
                 .row_label(&label)
                 .show(ui, |ui, row| {
+                    // a cached galley per note (a steady frame lays out nothing); not selectable, so a
+                    // click on the title selects the note
+                    let id = filtered.get(row.index).and_then(|&i| doc.notes.get(i)).map_or(u64::MAX, |n| n.id);
                     let title = label(row.index);
-                    ui.label(if title.is_empty() { "Untitled" } else { title });
+                    ashlar::ui::cache::row_label(ui, ("notes.row", id), if title.is_empty() { "Untitled" } else { title });
                 });
             if let Some(row) = out.select
                 && let Some(n) = filtered.get(row).and_then(|&i| doc.notes.get(i))
@@ -395,8 +408,12 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
         if t.changed() || b.changed() {
             let (title, body) = (st.title.clone(), st.body.clone());
             let before = cx.revision();
+            if st.merge_of != Some(id) {
+                st.merge_key = format!("note-{id}");
+                st.merge_of = Some(id);
+            }
             // typing in one note is one undo step until something else happens
-            cx.edit_merged("Edit Note", &format!("note-{id}"), |d| {
+            cx.edit_merged("Edit Note", &st.merge_key, |d| {
                 // `index` is where the note was in the snapshot this frame drew
                 let i = if d.notes.get(index).is_some_and(|n| n.id == id) { Some(index) } else { d.index_of(id) };
                 // a new note rather than `make_mut`, which would copy the old text first
