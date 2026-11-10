@@ -35,6 +35,7 @@ use crate::app::{App, Error, SetupFn, Shared, ViewFn};
 use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
+use crate::open::Inbox;
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
@@ -58,6 +59,12 @@ pub struct Launch {
     pub control_port: Option<u16>,
     pub(crate) guard: Option<LaunchGuard>,
     pub(crate) telemetry: Telemetry,
+    /// Files from the OS and later launches, set up before the window opened.
+    pub(crate) inbox: Option<Inbox>,
+    /// Held while this is the app's only instance ([`App::single_instance`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code, reason = "held for its drop, which stops listening")]
+    pub(crate) instance: Option<ashlar_native::single_instance::PrimaryGuard>,
 }
 
 /// Which file dialog a command asked for.
@@ -80,6 +87,7 @@ pub struct Cx<'a, D: Document> {
     /// App settings (debounced, saved in the config folder).
     pub settings: &'a mut Settings,
     queued: &'a mut Vec<(String, Value)>,
+    dropped: &'a [PathBuf],
     ctx: egui::Context,
 }
 
@@ -109,6 +117,12 @@ impl<D: Document> Cx<'_, D> {
 
     pub fn ctx(&self) -> &egui::Context {
         &self.ctx
+    }
+
+    /// Files dropped on the window this frame that the runtime did not open as the document
+    /// (another extension, or a second document). Empty with [`App::accept_drops`] off.
+    pub fn dropped_files(&self) -> &[PathBuf] {
+        self.dropped
     }
 
     /// Run a command after the view returns (menus, buttons). Errors are shown as toasts.
@@ -218,6 +232,14 @@ pub struct Runtime<D: Document> {
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
     os_prefs: prefs::OsPrefs,
+    /// Files from the OS and later launches.
+    inbox: Inbox,
+    /// Paths dropped since the last [`Runtime::logic`] (when drops are accepted).
+    drops: Vec<PathBuf>,
+    /// Dropped files left for the view this frame ([`Cx::dropped_files`]).
+    dropped: Vec<PathBuf>,
+    /// A file from outside waiting for open dialogs to close; a newer one replaces it.
+    open_next: Option<PathBuf>,
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -229,7 +251,8 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 impl<D: Document> Runtime<D> {
-    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, launch: Launch) -> Self {
+    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, mut launch: Launch) -> Self {
+        let inbox = launch.inbox.take().unwrap_or_default();
         let mut session = Session::new(Arc::clone(&shared.format));
         session.set_windowed(true);
         session.telemetry = launch.telemetry.clone();
@@ -289,6 +312,10 @@ impl<D: Document> Runtime<D> {
             native_menu_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
+            inbox,
+            drops: Vec::new(),
+            dropped: Vec::new(),
+            open_next: None,
             launch,
             shared,
         };
@@ -411,6 +438,7 @@ impl<D: Document> Runtime<D> {
         }
         self.started = true;
         devtools::install(ctx);
+        self.inbox.set_ctx(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
         // OS accent, contrast and reduced motion; tokens the setup below installs win
         let (light, dark) = self.os_prefs.startup(ctx);
@@ -465,6 +493,7 @@ impl<D: Document> Runtime<D> {
             }
         }
         self.apply_effects(ctx);
+        self.open_from_outside(ctx);
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
         if let Some(m) = &self.native_menu {
             self.native_picks.extend(m.drain());
@@ -523,6 +552,54 @@ impl<D: Document> Runtime<D> {
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
+        // on the web a dropped file has no path to open: the view reads it from egui's input
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.shared.accept_drops {
+            self.drops.extend(raw.dropped_files.iter().map(|f| f.path().to_path_buf()));
+        }
+    }
+
+    /// Open what the OS, a later launch or a drop asked for: one document at a time, after any
+    /// open dialog, through `file.open` (a dirty document asks to save first). A forwarded launch
+    /// brings the window to the front.
+    fn open_from_outside(&mut self, ctx: &egui::Context) {
+        let (items, focus) = self.inbox.drain();
+        if focus {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        let mut files = items.into_iter().filter_map(|item| match item {
+            ashlar_native::open_files::Opened::File(p) => Some(p),
+            ashlar_native::open_files::Opened::Url(u) => {
+                log::info!("asked to open {u}: URLs are not handled");
+                None
+            }
+        });
+        if let Some(p) = files.next() {
+            self.open_next = Some(p);
+        }
+        let skipped = files.count();
+        if skipped > 0 {
+            log::info!("{skipped} more file(s) to open ignored: one document at a time");
+        }
+        if !self.drops.is_empty() {
+            let (open, rest) = crate::open::split_drops(std::mem::take(&mut self.drops), &self.shared.extensions);
+            if open.is_some() {
+                self.open_next = open;
+            }
+            self.dropped = rest;
+        }
+        if self.modal_open() {
+            return;
+        }
+        if let Some(p) = self.open_next.take() {
+            self.run_ui_command(ctx, "file.open", json!({"path": p.to_string_lossy()}));
+        }
+    }
+
+    /// Queue a later launch's arguments, as [`App::single_instance`] receives them (tests).
+    pub(crate) fn forwarded(&self, f: ashlar_native::single_instance::Forwarded) {
+        self.inbox.forward(f);
     }
 
     /// Draw the frame.
@@ -559,6 +636,7 @@ impl<D: Document> Runtime<D> {
             }
         }
         self.draw_view(ui);
+        self.dropped.clear();
         for (id, params) in std::mem::take(&mut self.queued) {
             self.run_ui_command(&ctx, &id, params);
         }
@@ -596,14 +674,14 @@ impl<D: Document> Runtime<D> {
     }
 
     fn draw_view(&mut self, ui: &mut egui::Ui) {
-        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, .. } = self;
+        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, .. } = self;
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(err) = view_error.as_deref() {
                 ui.centered_and_justified(|ui| ui.label(format!("This view stopped after an internal error:\n{err}")));
                 return;
             }
             let Some(view) = view.as_mut() else { return };
-            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, ctx: ui.ctx().clone() };
+            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone() };
             let r = catch_unwind(AssertUnwindSafe(|| view(ui, &mut cx)));
             if let Err(p) = r {
                 let msg = crash::last_panic().map_or_else(|| panic_text(p.as_ref()), |r| format!("{} ({})", r.message, r.location));
@@ -1443,6 +1521,17 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     {
         eprintln!("{}: could not create its folders: {e}", shared.name);
     }
+    // before anything else: a second launch hands its files to the first and exits
+    let inbox = Inbox::default();
+    let mut instance = None;
+    if shared.single_instance {
+        let launch_args: Vec<String> = std::env::args().skip(1).collect();
+        match ashlar_native::single_instance::SingleInstance::new(&shared.name).claim(&launch_args, inbox.forwarder()) {
+            Ok(ashlar_native::single_instance::Launch::Forwarded) => return Ok(()),
+            Ok(ashlar_native::single_instance::Launch::Primary(g)) => instance = Some(g),
+            Err(e) => eprintln!("{}: running without the single-instance check: {e}", shared.name),
+        }
+    }
     let env_var = format!("{}_LOG", shared.env_prefix);
     let filter = crate::logging::filter_from_env(&[env_var.as_str(), "RUST_LOG"], "info");
     let level = filter.max_level();
@@ -1473,7 +1562,11 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     if safe_mode {
         log::warn!("starting in safe mode ({previous:?})");
     }
-    let launch = Launch { safe_mode, previous: Some(previous), open: args.open, control_port: args.control, guard, telemetry };
+    // main thread, before the event loop: Finder's launch documents arrive as Apple events
+    #[cfg(target_os = "macos")]
+    inbox.listen_os();
+    let launch =
+        Launch { safe_mode, previous: Some(previous), open: args.open, control_port: args.control, guard, telemetry, inbox: Some(inbox), instance };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(shared.title.clone())

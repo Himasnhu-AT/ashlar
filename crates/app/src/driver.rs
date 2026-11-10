@@ -37,6 +37,9 @@ pub struct Driver<D: Document> {
     /// Virtual time of the next frame egui asked for.
     next: Option<f64>,
     input: VecDeque<Event>,
+    /// Files dropped on the window in the next frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    dropped: Vec<std::path::PathBuf>,
     screen: Rect,
     frames: u64,
     closed: bool,
@@ -75,6 +78,8 @@ impl<D: Document> Driver<D> {
             wakes,
             next: Some(0.0),
             input: VecDeque::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            dropped: Vec::new(),
             screen: Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 800.0)),
             frames: 0,
             closed: false,
@@ -183,6 +188,18 @@ impl<D: Document> Driver<D> {
         self.runtime.push_native_pick(id);
     }
 
+    /// Drop files on the window in the next frame, as the OS reports a drag and drop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn drop_files(&mut self, paths: impl IntoIterator<Item = impl Into<std::path::PathBuf>>) {
+        self.dropped.extend(paths.into_iter().map(Into::into));
+    }
+
+    /// A second launch of the app forwards its arguments, as with
+    /// [`App::single_instance`](crate::App::single_instance). The next frame opens its first file.
+    pub fn forward_launch(&mut self, forwarded: crate::Forwarded) {
+        self.runtime.forwarded(forwarded);
+    }
+
     /// Run one frame now, whether or not one was asked for.
     pub fn frame(&mut self) -> egui::FullOutput {
         if self.hidden {
@@ -191,6 +208,8 @@ impl<D: Document> Driver<D> {
         }
         let mut raw = egui::RawInput { screen_rect: Some(self.screen), time: Some(self.time), focused: true, ..Default::default() };
         raw.events.extend(self.input.drain(..));
+        #[cfg(not(target_arch = "wasm32"))]
+        raw.dropped_files.extend(self.dropped.drain(..).map(|p| -> egui::DroppedFileHandle { Arc::new(PathDrop(p)) }));
         if std::mem::take(&mut self.close_requested) {
             raw.viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
         }
@@ -394,6 +413,21 @@ impl<D: Document> ashlar_debug::Transport for Driver<D> {
 
     fn pause(&mut self, ms: u64) {
         self.advance(ms as f64 / 1000.0);
+    }
+}
+
+/// A file the driver drops on the window.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+struct PathDrop(std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl egui::DroppedFile for PathDrop {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
     }
 }
 
