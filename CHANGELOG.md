@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::rolling::RollingText`: counters and readouts that roll instead of jumping. Only the
+  changed characters move (prefix/suffix, then LCS for short text), up when `.value(..)` rises and
+  down when it falls; the width follows; `.tabular(true)` gives digits one width. Reduced motion
+  crossfades. The accessible value is the whole new text at once; nothing animates once settled.
 - Windows reopen where they were: `App::remember_window(bool)` (default on) saves position, size,
   maximized and full screen state in the settings under `"window"` when they change, and the next
   launch opens the window there, sizes bounded and a window left on no monitor moved back
