@@ -378,6 +378,35 @@ impl<D: Document> Driver<D> {
         self.frames - start
     }
 
+    /// Play a recording made with `ASHLAR_RECORD` or [`Runtime::record_to`] into this driver
+    /// (normally a fresh one for the same app): each recorded frame runs at its time, with its
+    /// screen, input events and control requests (their replies are dropped). Returns the number
+    /// of frames run. See [`crate::record`].
+    pub fn replay(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<usize> {
+        let frames = crate::record::read(path.as_ref())?;
+        for f in &frames {
+            if self.closed {
+                break;
+            }
+            if f.time.is_finite() {
+                self.time = f.time.max(self.time);
+            }
+            if let Some((w, h)) = f.screen.filter(|(w, h)| *w >= 1.0 && *h >= 1.0 && *w <= 100_000.0 && *h <= 100_000.0) {
+                self.set_screen(w, h);
+            }
+            if let Some(ppp) = f.ppp {
+                self.pixels_per_point(ppp);
+            }
+            self.input.extend(f.events.iter().cloned());
+            for (method, params) in &f.requests {
+                let (req, _reply) = Request::new(method.as_str(), params.clone());
+                self.runtime.inject_request(req);
+            }
+            self.frame();
+        }
+        Ok(frames.len())
+    }
+
     /// Send a control request (as the control port would) and run frames until it is answered:
     /// one frame for the request, then only the frames something asks for, on the virtual clock
     /// (a request that needs frames nobody asks for is reported, not papered over by polling).

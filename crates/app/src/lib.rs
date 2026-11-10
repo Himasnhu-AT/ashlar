@@ -38,6 +38,7 @@ mod native_menu;
 mod offscreen;
 mod open;
 pub mod perf_warn;
+pub mod record;
 mod renderer;
 pub mod runtime;
 pub mod session;

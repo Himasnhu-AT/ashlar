@@ -277,6 +277,8 @@ pub struct Runtime<D: Document> {
     passes: u64,
     /// Times each pass for the perf warnings (`None`: nothing uses it).
     probe: Option<crate::perf_warn::Probe>,
+    /// `ASHLAR_RECORD`: input and control requests appended for replay ([`crate::record`]).
+    recorder: Option<crate::record::Recorder>,
     probe_installed: bool,
     /// `app.stats` → `process`.
     process: crate::stats::ProcessProbe,
@@ -377,6 +379,7 @@ impl<D: Document> Runtime<D> {
             picker: None,
             passes: 0,
             probe: crate::perf_warn::Probe::from_env(),
+            recorder: crate::record::Recorder::from_env(),
             probe_installed: false,
             process: crate::stats::ProcessProbe::default(),
             probe_wakes: ashlar_ui::wake::WakeStats::default(),
@@ -475,6 +478,14 @@ impl<D: Document> Runtime<D> {
     pub fn log_frames(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let log = crate::frame_log::FrameLog::create(path.as_ref(), crate::frame_log::MAX_BYTES)?;
         self.probe.get_or_insert_with(crate::perf_warn::Probe::default).set_log(log);
+        Ok(())
+    }
+
+    /// Record every frame's input and time, and every control request, to `path` (what
+    /// `ASHLAR_RECORD=path` does; see [`crate::record`]), from the next frame on. Replaces an
+    /// earlier recording. [`crate::Driver::replay`] plays it back.
+    pub fn record_to(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.recorder = Some(crate::record::Recorder::create(path.as_ref(), crate::record::MAX_BYTES)?);
         Ok(())
     }
 
@@ -681,6 +692,12 @@ impl<D: Document> Runtime<D> {
     /// frame's time (`app.clock` may hold it), then credit the frame to the wake reasons that were
     /// due. (Injected agent input is handed to egui by the debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // the host's time and input, before `app.clock` changes them: what replay hands back
+        if let Some(r) = &mut self.recorder
+            && !r.frame(raw)
+        {
+            self.recorder = None;
+        }
         self.clock.begin_frame(raw);
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
@@ -1537,6 +1554,11 @@ impl<D: Document> Runtime<D> {
         let info = self.info();
         let mut queue = UiQueue { scenes: !self.shared.scenes.is_empty(), ..UiQueue::default() };
         for req in reqs {
+            if let Some(r) = &mut self.recorder
+                && !r.request(req.method(), req.params())
+            {
+                self.recorder = None;
+            }
             let outer = self.session.swap_source(Some(Origin::Agent));
             let mut bound = self.shared.registry.bind(&mut self.session);
             ashlar_control::handle(req, &mut bound, &mut queue, &info);

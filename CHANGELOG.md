@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Record and replay (IMP-4.11): `ASHLAR_RECORD=path` (or `Runtime::record_to`) records each
+  frame's time, screen and input events plus the control requests served to a JSONL ring of at
+  most 64 MiB (written off the UI thread), and `Driver::replay(path)` plays it into a fresh driver;
+  see docs/debugging-uis.md.
 - `Cx` polish (IMP-3.8): `cx.tokens()`; `cx.motion(id, target, curve)`, which animates unless
   the document just changed by the user's own hand; `Origin` (`User`, `Drag`, `Undo`, `Agent`,
   `Job`) recorded per change (`Session::origin`, `Session::with_origin`, `Cx::origin`), with control
