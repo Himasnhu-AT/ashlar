@@ -18,6 +18,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   thread and capped at 64 MiB with a final `"end"` line (`ashlar_app::frame_log`).
 - `app.stats` (and the MCP `app_stats` tool) reports `process`: `footprint_bytes`, `peak_bytes`,
   `cpu_s` and `threads` (`ProcessStats`; `null` where the platform cannot say).
+- `ashlar-diff` (new crate, rank 0, no dependencies, builds for wasm32): line diffs with Myers'
+  algorithm under a cost cap (past the cap, a split at lines unique to both sides, then a coarse
+  delete/insert, flagged `coarse`), word-level emphasis for paired changed lines, hunks with
+  context and the unchanged ranges between them (`FileDiff::gaps`, expandable when the new text is
+  known), and `parse_patch` / `write_patch` for unified and `git diff` patches (renames, copies,
+  modes, binary markers, quoted paths, `\ No newline at end of file`); malformed patches are an
+  error, never a panic. About 2 ms for a 10k-line file.
+- `ashlar_ui::diff_view::DiffView`: unified and split diffs, virtualized (about 0.4 ms per
+  scrolled frame at 50k lines), syntax-coloured per file language, word-level emphasis, "expand N
+  lines" on collapsed ranges, foldable files, a sticky file header, line selection, `N`/`P` (or
+  `F7`) between hunks. Automation `<id>.file.<f>.hunk.<h>` and friends for visible rows; AccessKit
+  document, headings and labelled lines.
 - `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
   counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
 - `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
@@ -167,6 +179,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
   window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
+- `ashlar_ui::list::Row` gains `indent`, `text_style` and `weak`. The devtools Elements list draws
+  its rows with it (about 6.7× cheaper per row than its old selectable labels: 0.10 ms against
+  0.67 ms for 1k rows), and the tab strip's overflow menu runs inside `list::checked`.
 - `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
   arrow keys, an AccessKit tab list, and the animated selection underline.
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about

@@ -22,6 +22,7 @@ layers` and `cargo xtask wasm` enforce this; the table below must match
 | 0 | `ashlar-obfuscate` | Compile-time string obfuscation: build-time values kept out of a strings dump of the binary | yes | yes |
 | 0 | `ashlar-motion` | Motion maths: closed-form springs, curves, animated values that keep their velocity on retarget, reduced-motion rules per value class, motion tokens, OKLab/OKLCH colour, gesture helpers | yes | yes |
 | 0 | `ashlar-syntax` | Syntax highlighting: linear-time lexers for 18 languages, line states for incremental views, a `Highlighter` trait for bigger engines | yes | yes |
+| 0 | `ashlar-diff` | Text diffs: Myers with a cost cap, word-level changes, hunks with collapsible context, a unified-patch parser and writer | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |

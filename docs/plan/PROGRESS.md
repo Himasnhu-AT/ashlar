@@ -3,6 +3,59 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/rowuse and wt/diff merged (CI green)
+
+- **IMP-0.5:** `deny.toml` has a `[licenses]` allow list: MIT, Apache-2.0 (and the LLVM exception),
+  BSD-2/3, BSL-1.0, ISC, MPL-2.0, Unicode-3.0, Zlib, CDLA-Permissive-2.0 (webpki-roots), and OFL-1.1
+  plus Ubuntu-font-1.0 (egui's fonts). No GPL or LGPL. `cargo deny check licenses` passes.
+- **IMP-2.17:** the devtools Elements list was ashlar's only list of selectable labels. It now uses
+  `list::Row` (which gained `indent`, `text_style` and `weak`): 1k rows p50 0.67 → 0.10 ms.
+  - The palette, keymap editor and notes list already draw through `VirtualList`, where `Row` would add
+    a second click target.
+  - `list::checked` wraps the tab strip's overflow menu.
+- **IMP-5.6:** `ashlar-diff` (rank 0, no dependencies, wasm32): Myers with a cost cap, word emphasis,
+  and `parse_patch`/`write_patch`, which round-trip real `git diff` fixtures and never panic on
+  mutated input. `DiffView` adds unified and split modes, a sticky header and hunk navigation.
+  - `myers_10k_lines` 2.08 ms, `diff_50k_lines_frame` 0.41 ms.
+  - **CI after the merge:** `crates/app/tests/wake_scan.rs` (all repaints go through `wake`) caught two
+    direct `request_repaint` calls in `diff_view.rs`. They were fixed on `imp`. Agents now run the
+    full `cargo xtask ci` before reporting, because repo-wide checks live in other crates.
+- New: IMP-1.10 (the allocation counter is per process; it fails when tests run in parallel).
+- Started: wt-window (IMP-6.4, 6.5), wt-notify (IMP-6.6).
+
+## 2026-11-10: wt/launch merged (CI green)
+
+- **IMP-6.9 / 1.8:** `app.stats.launch.{to_window_ms, to_first_frame_ms, launch_to_present_ms}`,
+  measured from the first line of `run_native`. `<PREFIX>_READY_FILE` gets `{pid, ready_ms}` after
+  the first present. `cargo xtask launch [--runs N] [--memory]` is a manual probe that opens windows.
+  - Baseline over 9 launches (heavily loaded machine): p50 144–186 ms, p95 188–516 ms.
+  - Breakdown of one launch:
+
+    | Phase | Time |
+    |---|---|
+    | before eframe | ~8 ms |
+    | window and wgpu setup | 80–150 ms |
+    | `Runtime::new` | ~10 ms |
+    | event loop to first frame | ~37 ms |
+    | first `ui` | ~10 ms |
+    | first paint and present | ~35 ms |
+
+- **IMP-6.10:** a command-line document opens on the frame after the first. A `--scene` waits for that
+  open; no test covers this.
+- **IMP-2.11:** dropped. eframe 0.36 already creates the window hidden and shows it after the first
+  paint.
+- **IMP-2.10:** hello's idle memory falls in one of two groups between runs (cause unknown):
+  - about 40 MB footprint / 94 MB peak
+  - about 75 MB footprint / 203 MB peak
+
+  Contributors: about 54 MB of GPU memory during startup (mostly freed afterwards), swapchain 3 × 9.5
+  MB, heap 21 MB, an 8 MB system image buffer, and the font atlas at about 1 MB.
+  - **Default changed:** windows queue at most one frame ahead (`App::frame_latency`, default 1; it
+    was 2). In the high group, idle went 75.5 → 66 MB and peak 203 → 193 MB; the low group didn't
+    change. This also cuts input latency by a frame. Apps with heavy GPU frames can set 2. Flagged to
+    the owner.
+- Started: wt-perfwarn (IMP-2.7, 2.12, the rest of 4.2).
+
 ## 2026-11-10: wt/motiongate and wt/overlays merged (CI green)
 
 - **IMP-4.10:** `ashlar_ui::motion_gate::MotionRecorder` and `Driver::record`.
