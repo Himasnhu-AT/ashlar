@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
+  its exit settles, then `None`), entering and leaving along a token pair as an opacity.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
