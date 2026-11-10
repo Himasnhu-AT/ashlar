@@ -8,6 +8,7 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
+| IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (this commit) |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
