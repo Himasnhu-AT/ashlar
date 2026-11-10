@@ -54,7 +54,7 @@ pub struct Launch {
     /// Start without restoring view settings (after a crash during startup, or `--safe-mode`).
     pub safe_mode: bool,
     pub previous: Option<PreviousLaunch>,
-    /// A file named on the command line.
+    /// A file named on the command line; it opens after the first frame.
     pub open: Option<PathBuf>,
     pub control_port: Option<u16>,
     pub(crate) guard: Option<LaunchGuard>,
@@ -65,6 +65,13 @@ pub struct Launch {
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(dead_code, reason = "held for its drop, which stops listening")]
     pub(crate) instance: Option<ashlar_native::single_instance::PrimaryGuard>,
+    /// The first line of `run()`, and when eframe had built the window (native only).
+    pub(crate) process_start: Option<std::time::Instant>,
+    pub(crate) window_at: Option<std::time::Instant>,
+    /// `<PREFIX>_READY_FILE`: gets `{pid, ready_ms}` once the first frame is presented.
+    pub(crate) ready_file: Option<PathBuf>,
+    /// The first present was recorded.
+    pub(crate) presented: bool,
     /// A scene to apply once the session is set up (`--scene`).
     pub(crate) scene: Option<String>,
 }
@@ -321,23 +328,29 @@ impl<D: Document> Runtime<D> {
             launch,
             shared,
         };
-        rt.start_autosave();
-        if let Some(path) = rt.launch.open.take() {
-            let r = rt.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
-            if let Err(e) = r {
-                rt.toasts.error(e.to_string());
-            }
+        if let (Some(s), Some(w)) = (rt.launch.process_start, rt.launch.window_at) {
+            rt.stats.set_to_window(w.saturating_duration_since(s));
         }
+        rt.start_autosave();
+        // `launch.open` waits for the first frame (open_from_outside): the window shows first
         if rt.launch.safe_mode {
             rt.modals.push(Modal::SafeMode);
         }
-        if let Some(name) = rt.launch.scene.take()
-            && let Err(e) = rt.apply_scene(&name)
-        {
-            log::error!("{e}");
-            rt.toasts.error(e);
+        // with a command-line document, the scene waits for it (open_from_outside)
+        if rt.launch.open.is_none() {
+            rt.apply_launch_scene();
         }
         rt
+    }
+
+    /// The `--scene` named at launch, once.
+    fn apply_launch_scene(&mut self) {
+        if let Some(name) = self.launch.scene.take()
+            && let Err(e) = self.apply_scene(&name)
+        {
+            log::error!("{e}");
+            self.toasts.error(e);
+        }
     }
 
     /// Run the scene called `name` ([`crate::App::scene`]) on the session. Its effects run on
@@ -601,6 +614,13 @@ impl<D: Document> Runtime<D> {
         if let Some(p) = files.next() {
             self.open_next = Some(p);
         }
+        // the command-line document, once the first frame is up (a slow load no longer delays it)
+        if self.first_frame_done
+            && let Some(path) = self.launch.open.take()
+        {
+            self.run_ui_command(ctx, "file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+            self.apply_launch_scene();
+        }
         let skipped = files.count();
         if skipped > 0 {
             log::info!("{skipped} more file(s) to open ignored: one document at a time");
@@ -617,6 +637,42 @@ impl<D: Document> Runtime<D> {
         }
         if let Some(p) = self.open_next.take() {
             self.run_ui_command(ctx, "file.open", json!({"path": p.to_string_lossy()}));
+        }
+    }
+
+    /// Called at the start of every native frame: the frame after the first one finds that frame
+    /// presented. Records `launch_to_present_ms` and writes the ready file.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn note_presented(&mut self) {
+        if !self.first_frame_done || std::mem::replace(&mut self.launch.presented, true) {
+            return;
+        }
+        let Some(start) = self.launch.process_start else { return };
+        let took = start.elapsed();
+        self.stats.set_presented(took);
+        let t = self.stats.launch();
+        let f = |v: Option<f64>| v.map_or_else(|| "-".to_owned(), |v| format!("{v:.1}"));
+        log::info!(
+            "launch: window {} ms, first frame {} ms (runtime {} ms), presented {} ms",
+            f(t.to_window_ms),
+            f(t.to_first_frame_ms),
+            f(self.stats.summary().first_frame_ms),
+            f(t.launch_to_present_ms)
+        );
+        if let Some(path) = self.launch.ready_file.take() {
+            let body = json!({"pid": std::process::id(), "ready_ms": took.as_secs_f64() * 1000.0}).to_string();
+            // off the UI thread; a launcher polls for the file
+            let spawned = std::thread::Builder::new().name("ashlar-ready".into()).spawn(move || {
+                let r = catch_unwind(AssertUnwindSafe(|| ashlar_fs::atomic_write(&path, body.as_bytes())));
+                match r {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => log::warn!("ready file {}: {e}", path.display()),
+                    Err(_) => log::warn!("ready file {}: the writer panicked", path.display()),
+                }
+            });
+            if let Err(e) = spawned {
+                log::warn!("ready file: {e}");
+            }
         }
     }
 
@@ -690,6 +746,13 @@ impl<D: Document> Runtime<D> {
             }
             if let Some(c) = self.created {
                 self.stats.set_first_frame(c.elapsed());
+            }
+            if let Some(s) = self.launch.process_start {
+                self.stats.set_to_first_frame(s.elapsed());
+            }
+            // one more frame: it opens the command-line document and records the present
+            if self.native || self.launch.open.is_some() {
+                wake::wake(&ctx, Reason::STARTUP);
             }
             self.launch.telemetry.first_frame();
         }
@@ -1445,6 +1508,7 @@ impl<D: Document> EframeApp<D> {
 
 impl<D: Document> eframe::App for EframeApp<D> {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.rt.note_presented();
         self.rt.logic(ctx);
         self.install_offscreen(ctx, frame);
         let Some(mut out) = self.rt.hidden_pass(ctx, None, Vec::new()) else { return };
@@ -1548,8 +1612,20 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     Ok(())
 }
 
+/// eframe's wgpu setup with `latency` frames queued at most (IMP-2.10: one swapchain image fewer).
+#[cfg(not(target_arch = "wasm32"))]
+fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
+    let surface = eframe::egui_wgpu::SurfaceConfig {
+        present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: Some(latency),
+    };
+    eframe::egui_wgpu::WgpuConfiguration { surface, ..Default::default() }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
+    // launch timings count from here (IMP-6.9)
+    let process_start = now();
     let (shared, view, setup) = app.split();
     let args = parse_args(&shared.env_prefix);
     let logs = shared.dirs.as_ref().map(|d| d.logs.clone());
@@ -1602,7 +1678,8 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     // main thread, before the event loop: Finder's launch documents arrive as Apple events
     #[cfg(target_os = "macos")]
     inbox.listen_os();
-    let launch = Launch {
+    let ready_file = std::env::var_os(format!("{}_READY_FILE", shared.env_prefix)).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let mut launch = Launch {
         safe_mode,
         previous: Some(previous),
         open: args.open,
@@ -1611,6 +1688,10 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         telemetry,
         inbox: Some(inbox),
         instance,
+        process_start,
+        window_at: None,
+        ready_file,
+        presented: false,
         scene: args.scene,
     };
     let options = eframe::NativeOptions {
@@ -1618,6 +1699,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
             .with_title(shared.title.clone())
             .with_inner_size(shared.window_size)
             .with_app_id(shared.name.clone()),
+        wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
     let title = shared.title.clone();
@@ -1625,6 +1707,8 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         &title,
         options,
         Box::new(move |_cc| {
+            // eframe has built the window and its wgpu surface by now
+            launch.window_at = now();
             let mut rt = Runtime::new(shared, view, setup, launch);
             rt.native = true;
             Ok(Box::new(EframeApp { rt, offscreen: false }))
@@ -1643,6 +1727,67 @@ mod tests {
         assert_eq!(human_age(600), "10 min");
         assert_eq!(human_age(7200), "2 h");
         assert_eq!(human_age(300_000), "3 days");
+    }
+
+    /// A runtime as `run()` builds it, with `launch` filled in.
+    fn launched(app: crate::App<i64>, launch: Launch) -> Runtime<i64> {
+        let (shared, view, setup) = app.split();
+        let mut rt = Runtime::new(shared, view, setup, launch);
+        rt.set_preferences(Preferences::default);
+        rt
+    }
+
+    #[test]
+    fn launch_times_and_the_ready_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ready = dir.path().join("ready.json");
+        let start = std::time::Instant::now().checked_sub(Duration::from_millis(5));
+        let launch = Launch { process_start: start, window_at: now(), ready_file: Some(ready.clone()), ..Default::default() };
+        let mut d = crate::Driver::new(launched(crate::App::new("launchtest", "0.0.0"), launch));
+        d.runtime.note_presented();
+        assert_eq!(d.runtime.stats().launch().launch_to_present_ms, None, "nothing is presented before a frame");
+        d.frame();
+        d.runtime.note_presented();
+        let t = d.runtime.stats().summary().launch;
+        let (w, f, p) = (t.to_window_ms.unwrap(), t.to_first_frame_ms.unwrap(), t.launch_to_present_ms.unwrap());
+        assert!(w >= 5.0 && w <= f && f <= p, "window {w}, first frame {f}, present {p}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let body = loop {
+            if let Ok(text) = std::fs::read_to_string(&ready) {
+                break text;
+            }
+            assert!(std::time::Instant::now() < deadline, "no ready file");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["pid"].as_u64(), Some(u64::from(std::process::id())));
+        assert_eq!(v["ready_ms"].as_f64(), Some(p));
+    }
+
+    #[test]
+    fn headless_runs_report_no_launch_times() {
+        let mut d = crate::Driver::new(crate::App::<i64>::new("launchtest", "0.0.0").runtime());
+        d.frame();
+        d.runtime.note_presented();
+        assert_eq!(d.runtime.stats().launch(), crate::LaunchTimes::default());
+    }
+
+    #[test]
+    fn the_command_line_document_opens_after_the_first_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.num");
+        let mut h = crate::App::<i64>::new("launchtest", "0.0.0").headless();
+        h.session_mut().edit("set", |n| *n = 7);
+        h.session_mut().save_as(&path).unwrap();
+        let app = crate::App::<i64>::new("launchtest", "0.0.0").file_extension("num");
+        let mut d = crate::Driver::new(launched(app, Launch { open: Some(path.clone()), ..Default::default() }));
+        assert_eq!(d.runtime.session().path(), None, "nothing loads before the window");
+        d.frame();
+        assert!(d.runtime.stats().summary().first_frame_ms.is_some(), "the first frame is drawn");
+        assert_eq!(d.runtime.session().path(), None, "with the empty document");
+        d.settle(10);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()), "the next frame opens the file");
+        assert_eq!(*d.runtime.session().doc(), 7);
     }
 
     #[test]

@@ -10,12 +10,13 @@ use ashlar::command::CommandInfo;
 use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use ashlar::ui::commands::{CommandPalette, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
 use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::form::{self, Field};
+use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
 use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
@@ -174,6 +175,12 @@ pub struct Gallery {
     dialog_opener: Option<egui::Id>,
     pub toasts: Toasts,
     pub last_dialog: Option<DialogOutcome>,
+    pub font_size: usize,
+    pub font: ComboboxState,
+    pub filters_open: bool,
+    pub only_errors: bool,
+    context_spec: MenuSpec,
+    pub last_context: Option<String>,
     // commands
     pub commands: Vec<CommandInfo>,
     pub keymap: Keymap,
@@ -200,6 +207,10 @@ impl Default for Gallery {
         Self::new()
     }
 }
+
+const FONT_SIZES: [&str; 5] = ["Small", "Medium", "Large", "Larger", "Largest"];
+
+const FONTS: [&str; 8] = ["Inter", "Iosevka", "JetBrains Mono", "Fira Code", "Source Serif", "Source Sans", "IBM Plex Mono", "Atkinson Hyperlegible"];
 
 const SWATCHES: [Color32; 16] = [
     Color32::from_rgb(0xef, 0x44, 0x44),
@@ -261,6 +272,24 @@ impl Gallery {
             dialog_opener: None,
             toasts: Toasts::new(),
             last_dialog: None,
+            font_size: 1,
+            font: ComboboxState::new(),
+            filters_open: false,
+            only_errors: false,
+            context_spec: MenuSpec {
+                menus: vec![Submenu {
+                    label: "Row".into(),
+                    enabled: true,
+                    role: None,
+                    children: vec![
+                        MenuNode::Item(Item::new("row.copy", "Copy").accelerator("Mod+C")),
+                        MenuNode::Item(Item::new("row.rename", "Rename")),
+                        MenuNode::Separator,
+                        MenuNode::Item(Item::new("row.delete", "Delete")),
+                    ],
+                }],
+            },
+            last_context: None,
             commands,
             keymap,
             palette: CommandPalette::new(),
@@ -800,6 +829,32 @@ impl Gallery {
             if let Some(o) = self.last_dialog {
                 ui.label(format!("Last result: {o:?}"));
             }
+        });
+        section(ui, &t, "Select and combobox", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                Select::new("overlays.size", &FONT_SIZES, &mut self.font_size).label("Size").width(140.0).show(ui);
+                ui.label("Font");
+                Combobox::new("overlays.font", &FONTS, &mut self.font).label("Font").hint("Type to filter").width(200.0).show(ui);
+            });
+        });
+        section(ui, &t, "Popover, tooltip and context menu", |ui| {
+            ui.horizontal(|ui| {
+                let anchor = ashlar::ui::help(ui.button("Filters"), "Narrow the list down");
+                if anchor.clicked() {
+                    self.filters_open = !self.filters_open;
+                }
+                Popover::new("overlays.filters").show(&anchor, &mut self.filters_open, |ui| {
+                    ui.checkbox(&mut self.only_errors, "Only errors");
+                });
+                let row = ui.label("Right-click me");
+                if let Some(id) = menu::context(&row, &self.context_spec) {
+                    self.last_context = Some(id);
+                }
+                if let Some(id) = &self.last_context {
+                    ui.label(format!("Chose {id}"));
+                }
+            });
         });
         section(ui, &t, "Toasts", |ui| {
             ui.horizontal(|ui| {
