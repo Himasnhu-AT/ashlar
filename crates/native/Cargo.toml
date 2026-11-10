@@ -51,10 +51,18 @@ session-end = [
 dialogs = ["dep:rfd", "dep:raw-window-handle"]
 # A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
 menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
-# Whether this process can show a window (Windows: not in a service's window station).
-display = ["windows/Win32_System_StationsAndDesktops"]
+# Whether this process can show a window (Windows: not in a service's window station), and the
+# monitors before any window exists.
+display = [
+    "windows/Win32_System_StationsAndDesktops",
+    "windows/Win32_Graphics_Gdi",
+    "windows/Win32_UI_HiDpi",
+    "dep:objc2",
+    "objc2-app-kit/NSScreen",
+    "objc2-app-kit/objc2-core-foundation",
+]
 # This process's memory footprint, and returning freed allocator pages to the system.
-memory = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
+memory = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading", "windows/Win32_System_Diagnostics_ToolHelp"]
 # Put a bundled command-line tool on PATH (a link in /usr/local/bin, admin prompt, ~/.local/bin
 # fallback), with its commands.
 cli-tool = []

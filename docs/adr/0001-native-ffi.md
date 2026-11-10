@@ -28,9 +28,14 @@ the video editor's platform crate these were adapted from):
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server
      can end its telemetry session when it is asked to stop)
    - `memory` (macOS `proc_pid_rusage`, glibc `malloc_trim`, Windows `GetProcessMemoryInfo`;
-     added for idle apps that report their footprint and hand freed memory back)
+     added for idle apps that report their footprint and hand freed memory back; macOS
+     `proc_pidinfo` and Windows `CreateToolhelp32Snapshot`/`Process32FirstW`/`Process32NextW`/
+     `CloseHandle` added 2026-11-10 for the thread count in `app.stats`)
    - `display` (Windows `GetProcessWindowStation`, `GetUserObjectInformationW`; added 2026-10-27 so an
-     app started where no window can be shown says so and exits instead of panicking)
+     app started where no window can be shown says so and exits instead of panicking; Windows
+     `EnumDisplayMonitors` with its callback, `GetMonitorInfoW` and `GetDpiForMonitor` added
+     2026-11-10 to list the monitors before the window exists, so a saved placement is checked at
+     launch; macOS uses objc2's safe `NSScreen` bindings)
    - `notify::macos` (the `UNUserNotificationCenterDelegate` class, its `init`, and
      `setUserInfo:`) and `notify::windows` (`SetCurrentProcessExplicitAppUserModelID`,
      `CoInitializeEx`); added 2026-11-10 so banners show while the app is frontmost, clicks are

@@ -112,7 +112,7 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
-| IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
+| IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | done |
 | IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo (markdown labels done 68be0d6; rest open) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |

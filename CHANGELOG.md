@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_native::memory` reports the OS's lifetime peak footprint (`ProcessMemory::peak`: macOS
+  lifetime max phys footprint, Windows peak private commit) and `thread_count()` (macOS, Windows,
+  Linux); `app.stats` → `process.peak_bytes` uses the OS peak, so spikes between samples count, and
+  `process.threads` is filled on macOS and Windows too (IMP-6.18).
+- `ashlar_native::display::monitors()` lists the monitors before any window exists (macOS,
+  Windows); a restored window placement is checked against them at launch instead of only on the
+  first frame (IMP-6.18).
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down
