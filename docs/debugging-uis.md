@@ -72,8 +72,11 @@ hint: 5 step(s) passed before line 7
 ```
 
 Each step's result is in the `--json` output (`detail.steps`). If you add `trace start <dir>` at the
-top, every action leaves a screenshot and a snapshot in `<dir>`, numbered in order. That is the
-first place to look when a script fails on a CI machine.
+top, every action leaves a screenshot and a snapshot in `<dir>`, numbered in order
+(`001-click.png`, `001-click.txt`, one line per step in `steps.jsonl`). That is the first place to
+look when a script fails on a CI machine. With `--port` or `--app` (no session) the trace lasts for
+that one batch run; outside a batch they refuse `trace` with a usage error, since there is no session
+to keep it in.
 
 Running a script from Rust gives you the same thing in-process. `ashlar_debug::run(args, &env, &mut io)`
 takes an `Env` that points the state and key search at a temporary folder:
@@ -116,11 +119,15 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,
-`ui_get`, `ui_wait`, `ui_scroll_into_view`, `ui_highlight` and `screenshot` (with `annotate`,
-`highlight`, `target`) when the app reports these methods in `app.version`. Targets are ref
-strings (`"@e3"`, `"id=file.save"`) or objects. `ui_snapshot` returns the outline as text and adds
-the element list as JSON when you pass `elements: true`. A typical loop is: snapshot, act on a ref,
-wait, then snapshot or `ui_get` to check.
+`ui_get`, `ui_wait`, `ui_scroll_into_view`, `ui_highlight` and `screenshot` (with `target`,
+`annotate`, `highlight`, `pad` and `raise`) when the app reports these methods in `app.version`,
+along with `ui_inspect`, `ui_drag`, `ui_scroll`, `ui_key`, `ui_type`, `ui_menu_list`,
+`ui_menu_invoke` and `ui_set`. `app_stats {reset?}` and `app_logs {limit?, level?}` are the CLI's
+`stats` and `logs`. The full table with every argument is in
+[control-protocol.md](control-protocol.md#mcp-tools). Targets are ref strings (`"@e3"`,
+`"id=file.save"`) or objects. `ui_snapshot` returns the outline as text and adds the element list
+as JSON when you pass `elements: true`. A typical loop is: snapshot, act on a ref, wait, then
+snapshot or `ui_get` to check.
 
 ## The control key
 

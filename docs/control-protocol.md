@@ -204,7 +204,8 @@ part of snapshots. Closed, it costs nothing: no frames, no allocations.
 
 ## MCP tools
 
-`ashlar-mcp` exposes the same vocabulary as tools:
+`ashlar-mcp` exposes the same vocabulary as tools. Arguments marked `?` are optional; a target is a
+ref string (`"@e3"`, `"e3"`), `"id=…"`, `"text=…"`, or an object as in the debugger methods.
 
 | Tool | Method |
 |---|---|
@@ -212,12 +213,35 @@ part of snapshots. Closed, it costs nothing: no frames, no allocations.
 | `describe_command {command}` | `engine.commands`, one entry in full, with its parameter schema |
 | `execute {command, params?}` | `engine.execute` |
 | `batch {commands, keepGoing?}` | `engine.batch` |
-| `screenshot {id?}` | `ui.screenshot`, returned as an MCP image |
-| `ui_inspect`, `ui_click`, `ui_drag`, `ui_scroll`, `ui_key`, `ui_type`, `ui_menu_list`, `ui_menu_invoke`, `ui_set` | the `ui.*` method of the same name |
+| `screenshot {target?, annotate?, highlight?, pad?, raise?, id?}` | `ui.screenshot`, returned as an MCP image (plus `{width, height, annotations?}`); `id` is the legacy crop |
+| `ui_snapshot {interactive?, scope?, depth?, compact?, elements?}` | `ui.snapshot`: the outline as text; `elements: true` adds the element list as JSON |
+| `ui_inspect` | `ui.inspect` |
+| `ui_click {target?, id?, x?, y?, button?, count?, modifiers?}` | `ui.click` |
+| `ui_hover {target}` | `ui.hover` |
+| `ui_focus {target}` | `ui.focus` |
+| `ui_fill {target, text, submit?}` | `ui.fill` |
+| `ui_press {keys}` | `ui.press` |
+| `ui_drag {from, to, steps?, modifiers?}` | `ui.drag` |
+| `ui_scroll {dx, dy, target?, x?, y?}` | `ui.scroll` |
+| `ui_scroll_into_view {target}` | `ui.scroll_into_view` |
+| `ui_get {target, what}` | `ui.get` |
+| `ui_wait {for, target?, text?, timeout_ms?}` | `ui.wait` |
+| `ui_highlight {target, ms?}` | `ui.highlight` |
+| `ui_key {key, modifiers?}` | `ui.key` |
+| `ui_type {text}` | `ui.type` |
+| `ui_menu_list` | `ui.menu.list` |
+| `ui_menu_invoke {id}` | `ui.menu.invoke` |
+| `ui_set {…}` | `ui.set` (app-defined keys) |
+| `app_stats {reset?}` | `app.stats` |
+| `app_logs {limit?, level?}` | `app.logs` (`level`: error, warn, info, debug or trace) |
+| `docs_categories {category?}`, `list_docs {category?, query?, recursive?}`, `read_doc {path}` | the app's documentation library (no control method) |
+| `save_doc {path, content, replace_builtin?}`, `append_doc {path, text}`, `delete_doc {path}` | the user's own pages, when the server has a user folder |
 
-The `ui_*` tools and `screenshot` are listed only when the backend's `app.version` reports the
-method. With `ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its
-real input schema.
+`screenshot`, the `ui_*` tools and `app_stats`/`app_logs` are listed only when the backend's
+`app.version` reports their method, so an agent never sees a tool the app cannot serve. The
+documentation tools are listed when the server has a library or a user folder. With
+`ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its real input
+schema. `crates/mcp/tests/protocol_doc.rs` checks this table against the code.
 
 ## CLI reply contract
 
