@@ -3,6 +3,40 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/chat merged
+
+- **IMP-5.7:** `chat::{Transcript, Message, ToolCard, Composer, PopupList}`. It is UI over plain data
+  (the `TranscriptItem` trait or `ChatMessage`); its strings come from `ChatLabels`.
+  - The transcript has its own height index (only visible rows are measured), stays at the bottom
+    unless the user scrolled up (then `<id>.jump` appears), and is a polite AccessKit log.
+  - Typing: Enter is ignored while composing and for one frame after an input-method event.
+  - Performance: `transcript_10k_messages_frame` 0.129 ms (1k: 0.092 ms).
+- **CI after the merge failed** on three direct `request_repaint` calls (the wake scan). The agent
+  hadn't run the full gate. Fixed on `imp`: a new `chat::CHAT_LAYOUT` wake reason and `INPUT` for
+  clicks. Rule from here on: no merge until the agent reports `ci: ok` from a full
+  `cargo xtask ci`.
+- Started: wt-i18n (IMP-6.13).
+
+## 2026-11-10: wt/rowuse and wt/diff merged (CI green)
+
+- **IMP-0.5:** `deny.toml` has a `[licenses]` allow list: MIT, Apache-2.0 (and the LLVM exception),
+  BSD-2/3, BSL-1.0, ISC, MPL-2.0, Unicode-3.0, Zlib, CDLA-Permissive-2.0 (webpki-roots), and OFL-1.1
+  plus Ubuntu-font-1.0 (egui's fonts). No GPL or LGPL. `cargo deny check licenses` passes.
+- **IMP-2.17:** the devtools Elements list was ashlar's only list of selectable labels. It now uses
+  `list::Row` (which gained `indent`, `text_style` and `weak`): 1k rows p50 0.67 → 0.10 ms.
+  - The palette, keymap editor and notes list already draw through `VirtualList`, where `Row` would add
+    a second click target.
+  - `list::checked` wraps the tab strip's overflow menu.
+- **IMP-5.6:** `ashlar-diff` (rank 0, no dependencies, wasm32): Myers with a cost cap, word emphasis,
+  and `parse_patch`/`write_patch`, which round-trip real `git diff` fixtures and never panic on
+  mutated input. `DiffView` adds unified and split modes, a sticky header and hunk navigation.
+  - `myers_10k_lines` 2.08 ms, `diff_50k_lines_frame` 0.41 ms.
+  - **CI after the merge:** `crates/app/tests/wake_scan.rs` (all repaints go through `wake`) caught two
+    direct `request_repaint` calls in `diff_view.rs`. They were fixed on `imp`. Agents now run the
+    full `cargo xtask ci` before reporting, because repo-wide checks live in other crates.
+- New: IMP-1.10 (the allocation counter is per process; it fails when tests run in parallel).
+- Started: wt-window (IMP-6.4, 6.5), wt-notify (IMP-6.6).
+
 ## 2026-11-10: wt/launch merged (CI green)
 
 - **IMP-6.9 / 1.8:** `app.stats.launch.{to_window_ms, to_first_frame_ms, launch_to_present_ms}`,

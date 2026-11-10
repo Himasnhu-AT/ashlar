@@ -1,0 +1,11 @@
+diff --git a/main.rs b/main.rs
+index c226300..c878f04 100644
+--- a/main.rs
++++ b/main.rs
+@@ -1,4 +1,4 @@
+ fn main() {
+-    let x = 1;
+-    println!("{}", x);
++    let y = 2;
++    println!("{}", y);
+ }
