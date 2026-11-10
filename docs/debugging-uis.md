@@ -175,6 +175,9 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 - `<PREFIX>_READY_FILE=path` (the prefix is the app name in capitals, like `<PREFIX>_CONTROL_PORT`)
   makes the app write `{"pid": …, "ready_ms": …}` to `path`, atomically, once its first frame is
   presented: a launcher or a test waits for the file instead of sleeping.
+- A document named on the command line opens on the frame after the first one, so the window
+  shows before a slow load runs. eframe keeps the window hidden until that first frame is painted,
+  so there is no white flash.
 - `cargo xtask launch` builds `examples/hello` in release, launches it 9 times (`--runs N`) and
   prints `bench: launch_to_present_p50/p95` and `spawn_to_ready_p50/p95` (from spawning the
   process). `cargo xtask launch --memory` lets it idle 10 s (`--settle SECS`) and prints the RSS

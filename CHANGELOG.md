@@ -117,6 +117,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- A document named on the command line opens on the frame after the first, so the window shows
+  before the load runs (it used to load before the first paint).
 
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
   0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they

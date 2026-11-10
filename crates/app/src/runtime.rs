@@ -54,7 +54,7 @@ pub struct Launch {
     /// Start without restoring view settings (after a crash during startup, or `--safe-mode`).
     pub safe_mode: bool,
     pub previous: Option<PreviousLaunch>,
-    /// A file named on the command line.
+    /// A file named on the command line; it opens after the first frame.
     pub open: Option<PathBuf>,
     pub control_port: Option<u16>,
     pub(crate) guard: Option<LaunchGuard>,
@@ -330,12 +330,7 @@ impl<D: Document> Runtime<D> {
             rt.stats.set_to_window(w.saturating_duration_since(s));
         }
         rt.start_autosave();
-        if let Some(path) = rt.launch.open.take() {
-            let r = rt.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
-            if let Err(e) = r {
-                rt.toasts.error(e.to_string());
-            }
-        }
+        // `launch.open` waits for the first frame (open_from_outside): the window shows first
         if rt.launch.safe_mode {
             rt.modals.push(Modal::SafeMode);
         }
@@ -588,6 +583,12 @@ impl<D: Document> Runtime<D> {
         if let Some(p) = files.next() {
             self.open_next = Some(p);
         }
+        // the command-line document, once the first frame is up (a slow load no longer delays it)
+        if self.first_frame_done
+            && let Some(path) = self.launch.open.take()
+        {
+            self.run_ui_command(ctx, "file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+        }
         let skipped = files.count();
         if skipped > 0 {
             log::info!("{skipped} more file(s) to open ignored: one document at a time");
@@ -717,8 +718,8 @@ impl<D: Document> Runtime<D> {
             if let Some(s) = self.launch.process_start {
                 self.stats.set_to_first_frame(s.elapsed());
             }
-            // one more frame: it records the present
-            if self.native {
+            // one more frame: it opens the command-line document and records the present
+            if self.native || self.launch.open.is_some() {
                 wake::wake(&ctx, Reason::STARTUP);
             }
             self.launch.telemetry.first_frame();
@@ -1711,6 +1712,24 @@ mod tests {
         d.frame();
         d.runtime.note_presented();
         assert_eq!(d.runtime.stats().launch(), crate::LaunchTimes::default());
+    }
+
+    #[test]
+    fn the_command_line_document_opens_after_the_first_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.num");
+        let mut h = crate::App::<i64>::new("launchtest", "0.0.0").headless();
+        h.session_mut().edit("set", |n| *n = 7);
+        h.session_mut().save_as(&path).unwrap();
+        let app = crate::App::<i64>::new("launchtest", "0.0.0").file_extension("num");
+        let mut d = crate::Driver::new(launched(app, Launch { open: Some(path.clone()), ..Default::default() }));
+        assert_eq!(d.runtime.session().path(), None, "nothing loads before the window");
+        d.frame();
+        assert!(d.runtime.stats().summary().first_frame_ms.is_some(), "the first frame is drawn");
+        assert_eq!(d.runtime.session().path(), None, "with the empty document");
+        d.settle(10);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()), "the next frame opens the file");
+        assert_eq!(*d.runtime.session().doc(), 7);
     }
 
     #[test]
