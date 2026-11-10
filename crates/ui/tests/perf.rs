@@ -132,6 +132,7 @@ fn md_style() -> MarkdownStyle {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_markdown_static_50kb() {
+    let _serial = allocs::serial();
     let doc = markdown_doc(50 * 1024);
     let style = md_style();
     let ctx = egui::Context::default();
@@ -161,6 +162,7 @@ fn perf_markdown_static_50kb() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_markdown_static_50kb_allocs() {
+    let _serial = allocs::serial();
     let doc = markdown_doc(50 * 1024);
     let style = md_style();
     let ctx = egui::Context::default();
@@ -189,6 +191,7 @@ fn perf_markdown_static_50kb_allocs() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_markdown_stream_7kb() {
+    let _serial = allocs::serial();
     let doc = markdown_doc(7 * 1024);
     let style = md_style();
     let ctx = egui::Context::default();
@@ -227,6 +230,7 @@ fn label_job(i: usize) -> LayoutJob {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_galley_cache_hits() {
+    let _serial = allocs::serial();
     const LABELS: usize = 2000;
     let ctx = egui::Context::default();
     let mut per_hit = Vec::new();
@@ -283,6 +287,7 @@ fn perf_galley_cache_hits() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_virtual_list_variable_1m() {
+    let _serial = allocs::serial();
     const ROWS: usize = 1_000_000;
     let ctx = egui::Context::default();
     let draw = |ctx: &egui::Context, t: f64, revision: u64, tall_row: usize, changed: &[usize]| {
@@ -351,6 +356,7 @@ impl TreeModel for BigTree {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_tree_1m_flatten_and_scroll() {
+    let _serial = allocs::serial();
     let model = BigTree { roots: 1000, per_root: 1000, labels: (0..1000).map(|i| format!("Node {i}")).collect() };
     let mut state = TreeState::default();
     for r in 0..model.roots {
@@ -401,6 +407,7 @@ fn command(i: usize) -> CommandInfo {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_palette_filter_5k_commands() {
+    let _serial = allocs::serial();
     let commands: Vec<CommandInfo> = (0..5000).map(command).collect();
     let ctx = egui::Context::default();
     let mut palette = CommandPalette::new();

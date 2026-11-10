@@ -22,6 +22,7 @@ static GLOBAL: &stats_alloc::StatsAlloc<std::alloc::System> = &stats_alloc::INST
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_first_frame() {
+    let _serial = allocs::serial();
     let dir = tempfile::tempdir().unwrap();
     let t0 = Instant::now();
     let rt: Runtime<Notes> = notes::app().dirs(AppDirs::under(dir.path())).runtime();
@@ -39,6 +40,7 @@ fn perf_first_frame() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_frame_p95_scrolling_100k_notes() {
+    let _serial = allocs::serial();
     let dir = tempfile::tempdir().unwrap();
     let rt: Runtime<Notes> = notes::app().dirs(AppDirs::under(dir.path())).autosave(None).runtime();
     let mut d = Driver::new(rt);
@@ -145,6 +147,7 @@ fn note_text(d: &mut Driver<Notes>, id: u64) -> (String, String) {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_select_last_of_100k() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     d.call("engine.execute", json!({"command": "note.select", "params": {"id": 100_000}})).unwrap();
     d.settle(20);
@@ -173,6 +176,7 @@ fn perf_select_last_of_100k() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_typing_with_query_100k() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     // a query that keeps about a tenth of the notes
     d.call("ui.click", json!({"id": "notes.search"})).unwrap();
@@ -192,6 +196,7 @@ fn perf_typing_with_query_100k() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_type_50kb_note() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(1_000);
     let line = "The quick brown fox jumps over the lazy dog, again and again.\n";
     let body = line.repeat(50 * 1024 / line.len());
@@ -211,6 +216,7 @@ fn perf_type_50kb_note() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_live_resize() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     d.call("engine.execute", json!({"command": "note.select", "params": {"id": 100_000}})).unwrap();
     d.set_screen(900.0, 700.0);
@@ -256,6 +262,7 @@ fn scroll_list(d: &mut Driver<Notes>, steps: u32) {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_allocs_scroll_100k() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     d.pixels_per_point(2.0);
     d.call("engine.execute", json!({"command": "note.select", "params": {"id": 50}})).unwrap();
@@ -272,6 +279,7 @@ fn perf_allocs_scroll_100k() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_allocs_idle_wake_frame() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     // a focused field: its caret blink is the only thing that wakes the loop
     d.call("ui.click", json!({"id": "notes.search"})).unwrap();
@@ -296,6 +304,7 @@ fn perf_allocs_idle_wake_frame() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_allocs_typing_with_query_100k() {
+    let _serial = allocs::serial();
     let (mut d, _dir) = with_notes(100_000);
     d.call("ui.click", json!({"id": "notes.search"})).unwrap();
     d.call("ui.type", json!({"text": "note 9"})).unwrap();
