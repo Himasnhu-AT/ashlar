@@ -830,7 +830,7 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
             && let Some(file_row) = model.rows.iter().position(|r| r.file as usize == fi && r.kind == RowKind::File)
         {
             ui.data_mut(|d| d.insert_temp(goto_id, file_row));
-            ui.ctx().request_repaint();
+            crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
         }
     }
 
@@ -857,7 +857,7 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
         }
         if toggled_file.is_some() || expanded.is_some() {
             state.selection.select_only(i);
-            ui.ctx().request_repaint();
+            crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
         }
     }
 
