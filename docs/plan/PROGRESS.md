@@ -3,6 +3,38 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: final wave merged; plan complete
+
+- **wt/tel:** incident rules in telemetry (IMP-2.13), a pipeline shutdown regression test (IMP-0.7),
+  and a perf_warn test without retries (IMP-0.9).
+- **wt/api:**
+  - `cx.tokens()` and `cx.motion()`.
+  - An edit `Origin` (agent edits animate, the user's own edits are instant).
+  - Layout helpers that take space tokens (IMP-3.8).
+  - Record and replay (IMP-4.11).
+  - Plurals and the OS language list on macOS and Windows (IMP-6.19).
+  - The `web-hello` example in the wasm gate (IMP-6.8; not run in a browser).
+- **wt/shell:** tray, global shortcuts, macOS shims, context menus, drag-out (macOS) and Windows
+  menu accelerators (IMP-6.11, 6.14–6.17). Live desktop behaviour was not exercised; the Windows
+  code is compile-checked only.
+- **wt/mem:**
+  - IMP-2.19 found the cause of the two idle-memory groups. Once the window has been covered, macOS
+    maps shared swapchain images into the process and Metal allocates a second set of blocks. This
+    is not a leak, and ashlar's settings can't change it. `cargo xtask launch --memory` reports both
+    groups.
+  - IMP-6.18: the OS peak footprint, thread counts on macOS and Windows, and the monitor list at
+    launch.
+- **wt/ui3:** toasts (F6 into the stack, `App::run_toast_actions`), controls follow-ups,
+  CodeView/DiffView horizontal scroll, `Role::Document`, and a sidebar (IMP-5.17, 5.19, 5.20,
+  5.14). The dialog's per-frame exit copy went from 173 to 21 allocations.
+- **README and docs/benchmarks.md** are written. The umbrella crate passes `tray` and `hotkey`
+  through.
+- **Final state:** 97 tasks done and 4 dropped with reasons (IMP-2.11, 5.16, 7.1, 7.2).
+- **Not verified here:**
+  - every Windows-only path (compile-checked against x86_64-pc-windows-msvc)
+  - live tray, Dock, logout, drag-out and context-menu behaviour
+  - the web example in a browser
+
 ## 2026-11-10: head-to-head measured (IMP-1.9)
 
 - The owner approved building and running the reference framework. A relayed approval didn't satisfy

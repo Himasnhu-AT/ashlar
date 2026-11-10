@@ -98,15 +98,15 @@ a task's state.
 | IMP-5.11 | Dialog focus | done (9fcbdd7) |
 | IMP-5.12 | Rolling numbers | done (14fdc63) |
 | IMP-5.13 | Small content components | done (05f44af) |
-| IMP-5.14 | Sidebar / source list | review (wt/ui3) |
+| IMP-5.14 | Sidebar / source list | done (55f3335) |
 | IMP-5.15 | Accessibility goldens | done (bcdeb0e) |
-| IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | review (wt/ui3; tab indicator done in IMP-5.10; dialog copy: 173 → 21 allocs per frame) |
+| IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | done (8542705) |
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |
 | IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | done (329a6bc) |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | dropped (deferred: low value for the cost) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | done (a3aff34) |
-| IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | review (wt/ui3) |
-| IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | review (wt/ui3) |
+| IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | done (55f3335) |
+| IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | done (55f3335) |
 
 ## Phase 6: platform
 | Id | Task | Status |
