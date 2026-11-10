@@ -47,6 +47,35 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   fixed-seed hasher (`cache::hash_of` values differ from before), reads the shared cache under the
   context's read lock, and when full drops its least recently used half instead of everything, so
   labels in use are not laid out again.
+- `ashlar-ui`: a controls kit (`controls`): `Button` (primary, secondary, ghost and destructive
+  variants, three sizes, an icon, a loading state that shows a spinner and reports busy),
+  `Switch`, `Segmented` and `RadioGroup` (one Tab stop; arrows, Home and End move the choice),
+  `Badge` with tones, `Keycap` (a cap per key of a shortcut), `Progress::bar` and
+  `Progress::circle` (determinate or indeterminate) and `Spinner`. Each registers a dotted
+  automation id and fills its AccessKit node; indeterminate indicators ask for frames
+  (`wake::Reason::ANIMATION`) only while on screen and hold a static pose with
+  `reduced_motion(true)`. New automation roles: `switch`, `radio`, `radio_group`, `progress`,
+  `label`, `group`, `disclosure`, `alert`. The gallery has a Controls page, and the visual
+  regression suite compares the kit against reference painters (222 pairs).
+- `ashlar-ui`: dialogs move the keyboard focus inside when they open (the body's first field,
+  else the default button, else the cancel button; `Dialog::initial_focus` chooses) and give it
+  back to the widget that had it when they close, however they close (`Dialog::return_focus_to`
+  names it for a dialog opened by a click). Screen readers get a modal dialog node named by the
+  title, with `Dialog::description` (also shown under the title) as its description.
+- `ashlar-ui`: content components (`content`): `EmptyState` (icon, title, text, action),
+  `Banner` (a tone, title, action and close button; a live region that screen readers announce,
+  assertively for errors), `Card` (a titled group) and `Collapsible` (a header that shows or hides
+  its content; reports expanded to AccessKit, arrows open and close it). `IconButton::tooltip`
+  gives icon-only buttons a visible name on hover, and `controls::Button::part` registers a
+  component's button as `<id>.<part>`. The gallery has a Content page; the visual regression
+  suite covers the collapsible header and the banner.
+
+### Changed
+
+- `ashlar-ui`: dialog buttons are `controls::Button`s (primary for the default, destructive for
+  a destructive one); a disabled one is drawn at the disabled opacity instead of in the sunken
+  colours, and its automation entry no longer reports the default button as `selected`.
+
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 

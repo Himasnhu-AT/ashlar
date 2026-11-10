@@ -24,6 +24,38 @@ fn expected(page: Page) -> &'static [&'static str] {
             "inputs.search",
             "inputs.search.filled.clear",
         ],
+        Page::Controls => &[
+            "controls.button.primary",
+            "controls.button.destructive",
+            "controls.button.loading",
+            "controls.switch.sync",
+            "controls.switch.locked",
+            "controls.view",
+            "controls.view.option.2",
+            "controls.quality.option.0",
+            "controls.align.option.2",
+            "controls.badge.danger",
+            "controls.keys.palette",
+            "controls.progress.bar",
+            "controls.progress.indeterminate",
+            "controls.progress.circle",
+            "controls.spinner",
+            "controls.icon.add",
+        ],
+        Page::Content => &[
+            "content.banner.info",
+            "content.banner.warning",
+            "content.banner.warning.action",
+            "content.banner.warning.dismiss",
+            "content.banner.danger",
+            "content.card",
+            "content.card.plan",
+            "content.advanced",
+            "content.advanced.logs",
+            "content.about",
+            "content.empty",
+            "content.empty.action",
+        ],
         Page::Lists => &[
             "lists.list",
             "lists.list.row.0",
@@ -147,4 +179,63 @@ fn snapshots_when_requested() {
     for f in files {
         assert!(std::fs::metadata(&f).unwrap().len() > 10_000, "{}", f.display());
     }
+}
+
+#[test]
+fn controls_page_switches_choices_and_motion() {
+    use ashlar::ui::wake::{Reason, Scheduler};
+    let mut h = harness(Page::Controls, ThemeMode::Dark, false);
+    h.run_steps(3);
+    let sync = automation::find(&h.ctx, "controls.switch.sync").unwrap();
+    assert_eq!(sync.selected, Some(true));
+    h.hover_at(sync.center());
+    h.step();
+    h.drag_at(sync.center());
+    h.step();
+    h.drop_at(sync.center());
+    h.run_steps(2);
+    assert!(!h.state().sync);
+    let grid = automation::find(&h.ctx, "controls.view.option.2").unwrap();
+    h.hover_at(grid.center());
+    h.step();
+    h.drag_at(grid.center());
+    h.step();
+    h.drop_at(grid.center());
+    h.run_steps(2);
+    assert_eq!(h.state().view, 2);
+    assert_eq!(automation::find(&h.ctx, "controls.view").unwrap().value, "Columns");
+
+    // spinners and indeterminate bars animate; with reduced motion the page asks for no frames
+    let requests = |h: &mut egui_kittest::Harness<'_, ashlar_example_gallery::Gallery>| {
+        let before = Scheduler::of(&h.ctx).stats().requests_for(Reason::ANIMATION);
+        h.run_steps(4);
+        Scheduler::of(&h.ctx).stats().requests_for(Reason::ANIMATION) - before
+    };
+    assert!(requests(&mut h) > 0);
+    h.state_mut().reduce_motion = true;
+    h.step();
+    assert_eq!(requests(&mut h), 0);
+}
+
+#[test]
+fn content_page_banner_and_sections() {
+    let mut h = harness(Page::Content, ThemeMode::Light, false);
+    h.run_steps(3);
+    let click = |h: &mut egui_kittest::Harness<'_, ashlar_example_gallery::Gallery>, id: &str| {
+        let p = automation::find(&h.ctx, id).unwrap_or_else(|| panic!("{id}")).center();
+        h.hover_at(p);
+        h.step();
+        h.drag_at(p);
+        h.step();
+        h.drop_at(p);
+        h.run_steps(2);
+    };
+    click(&mut h, "content.banner.warning.action");
+    assert_eq!(h.state().retries, 1);
+    click(&mut h, "content.banner.warning.dismiss");
+    assert!(h.state().banner_dismissed);
+    assert!(automation::find(&h.ctx, "content.banner.warning").is_none());
+    click(&mut h, "content.advanced");
+    assert!(!h.state().advanced_open);
+    assert!(automation::find(&h.ctx, "content.advanced.logs").is_none());
 }

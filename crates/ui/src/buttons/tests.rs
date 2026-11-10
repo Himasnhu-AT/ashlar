@@ -274,3 +274,29 @@ fn single_shape_frames_tessellate_like_one_rect() {
         }
     }
 }
+
+#[test]
+fn a_tooltip_names_the_button_on_hover() {
+    let st = style(true);
+    let mut h = Harness::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
+        move |ui, rect: &mut Rect| {
+            ui.add_space(20.0);
+            *rect = IconButton::new("Brush", vec2(28.0, 24.0), &st).tooltip("Brush (B)").show(ui, |_, _, _| {}).rect;
+        },
+        Rect::NOTHING,
+    );
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    h.step();
+    assert!(h.query_by_label("Brush (B)").is_none(), "no tooltip before hover");
+    let c = h.state().center();
+    h.hover_at(c);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Brush (B)").is_some(), "the tooltip shows on hover");
+    h.hover_at(c + vec2(200.0, 150.0));
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.query_by_label("Brush (B)").is_none(), "and hides when the pointer leaves");
+}
