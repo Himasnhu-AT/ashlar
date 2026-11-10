@@ -30,8 +30,23 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
 [features]
-default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display"]
+default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end"]
 full = ["default", "notify", "progress", "secrets"]
+# Dock Quit, logout and shutdown ask the app first (macOS delegate method, Windows session-end
+# messages).
+session-end = [
+    "dep:objc2",
+    "dep:block2",
+    "objc2-app-kit/NSApplication",
+    "objc2-app-kit/NSResponder",
+    "objc2-foundation/NSAppleEventManager",
+    "objc2-foundation/NSAppleEventDescriptor",
+    "objc2-foundation/NSRunLoop",
+    "objc2-foundation/block2",
+    "windows/Win32_UI_WindowsAndMessaging",
+    "windows/Win32_System_LibraryLoader",
+    "windows/Win32_Graphics_Gdi",
+]
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd", "dep:raw-window-handle"]
 # A native menu bar built from a `MenuSpec` (muda; macOS and Windows).

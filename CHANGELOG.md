@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Dock ▸ Quit, logout, restart and shutdown go through the "Save changes?" check and flush
+  settings, autosave and telemetry (`ashlar_native::session_end`, feature `session-end`, on by
+  default): macOS answers `applicationShouldTerminate:` later until the user chooses; Windows
+  handles `WM_QUERYENDSESSION` / `WM_ENDSESSION` and, since it can't wait for a dialog, keeps
+  unsaved changes for recovery. The flow is the pure `session_end::step`.
 - Windows reopen where they were: `App::remember_window(bool)` (default on) saves position, size,
   maximized and full screen state in the settings under `"window"` when they change, and the next
   launch opens the window there, sizes bounded and a window left on no monitor moved back

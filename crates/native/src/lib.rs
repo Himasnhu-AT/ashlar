@@ -58,6 +58,7 @@ pub mod power;
 pub mod progress;
 #[cfg(feature = "secrets")]
 pub mod secrets;
+pub mod session_end;
 #[cfg(feature = "single-instance")]
 pub mod single_instance;
 #[cfg(feature = "system")]

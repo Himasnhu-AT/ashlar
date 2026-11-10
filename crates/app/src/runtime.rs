@@ -40,6 +40,10 @@ use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
 use crate::window_state::{self, WindowState};
+use ashlar_native::session_end::{self, EndKind, EndRequest};
+
+/// Wakes for a quit, logout or shutdown request from the OS (IMP-6.7).
+const SESSION_END: Reason = Reason("session_end");
 
 mod prefs;
 
@@ -220,6 +224,11 @@ pub struct Runtime<D: Document> {
     view_error: Option<String>,
     allow_close: bool,
     quit_after_save: bool,
+    /// Quit, logout and shutdown requests from the OS (native only) and where answering them is.
+    session_end: Option<Receiver<EndRequest>>,
+    end_state: session_end::State,
+    /// The last answer given to the OS: `Some(true)` allowed the end.
+    end_reply: Option<bool>,
     /// A command the confirm dialog's Save holds back until the save (maybe through Save As)
     /// is done.
     after_save: Option<(String, Value)>,
@@ -323,6 +332,9 @@ impl<D: Document> Runtime<D> {
             view_error: None,
             allow_close: false,
             quit_after_save: false,
+            session_end: None,
+            end_state: session_end::State::Idle,
+            end_reply: None,
             after_save: None,
             pending_pick: None,
             window: window_state::Tracker::default(),
@@ -550,6 +562,16 @@ impl<D: Document> Runtime<D> {
                 }
             }
         }
+        // the event loop runs by now, so winit's application delegate exists
+        if self.native {
+            match session_end::listen(Arc::new({
+                let w = wake::waker(ctx, SESSION_END);
+                move || w.wake()
+            })) {
+                Ok(rx) => self.session_end = Some(rx),
+                Err(e) => log::debug!("quit requests from the OS: {e}"),
+            }
+        }
     }
 
     // ------------------------------------------------------------------ the frame
@@ -773,6 +795,7 @@ impl<D: Document> Runtime<D> {
         self.draw_tools(&ctx);
         self.toasts.show(&ctx);
         self.handle_close(&ctx);
+        self.poll_session_end(&ctx);
         self.apply_effects(&ctx);
         self.persist_view();
         self.track_window(&ctx);
@@ -1034,6 +1057,9 @@ impl<D: Document> Runtime<D> {
             (Pick::SaveAs, None) => {
                 self.quit_after_save = false;
                 self.after_save = None;
+                if self.answering_end() {
+                    self.end_step(ctx, session_end::Event::SaveFailed);
+                }
             }
         }
     }
@@ -1066,14 +1092,79 @@ impl<D: Document> Runtime<D> {
         }
     }
 
+    fn poll_session_end(&mut self, ctx: &egui::Context) {
+        let requests: Vec<EndRequest> = self.session_end.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
+        for r in requests {
+            self.end_requested(ctx, r.kind, session_end::CAN_WAIT);
+        }
+    }
+
+    /// The OS asks the app to end (Dock Quit, logout, shutdown): the same dirty check and
+    /// cleanup as closing the window, answered through `session_end::step`.
+    fn end_requested(&mut self, ctx: &egui::Context, kind: EndKind, can_wait: bool) {
+        let dirty = self.session.is_dirty();
+        self.end_step(ctx, session_end::Event::Requested { kind, dirty, can_wait });
+    }
+
+    /// Whether the confirm dialog on screen answers an OS end request.
+    fn answering_end(&self) -> bool {
+        matches!(self.end_state, session_end::State::Asking(_) | session_end::State::Saving(_))
+    }
+
+    fn end_step(&mut self, ctx: &egui::Context, event: session_end::Event) {
+        let (state, effects) = session_end::step(self.end_state, event);
+        self.end_state = state;
+        for effect in effects {
+            match effect {
+                session_end::Effect::Ask => {
+                    if !self.modals.iter().any(|m| matches!(m, Modal::Confirm { quit: true, .. })) {
+                        self.modals.push(Modal::Confirm { quit: true, command: None });
+                    }
+                }
+                session_end::Effect::Save => {
+                    self.quit_after_save = true;
+                    self.after_save = None;
+                    let r = self.execute("file.save", json!({}));
+                    self.report(r);
+                    self.apply_effects(ctx);
+                    // saved in place (or failed); a Save As answers when its dialog closes
+                    if self.pending_pick.is_none() {
+                        self.quit_after_save = false;
+                        let next = if self.session.is_dirty() { session_end::Event::SaveFailed } else { session_end::Event::Saved };
+                        self.end_step(ctx, next);
+                    }
+                }
+                session_end::Effect::Shutdown { keep_recovery } => self.shutdown_inner(keep_recovery),
+                session_end::Effect::Allow => {
+                    self.end_reply = Some(true);
+                    session_end::reply(true);
+                    // macOS ends the process from the reply; elsewhere close the window too
+                    if !cfg!(target_os = "macos") || self.session_end.is_none() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                session_end::Effect::Refuse => {
+                    self.end_reply = Some(false);
+                    session_end::reply(false);
+                }
+            }
+        }
+    }
+
     fn close(&mut self, ctx: &egui::Context, discarded: bool) {
         self.shutdown(discarded);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Settle everything before the process ends: stop jobs, flush settings, end autosave.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn shutdown(&mut self, _discarded: bool) {
+        self.shutdown_inner(false);
+    }
+
+    /// `keep_recovery`: unsaved changes the user wasn't asked about (a logout that can't wait)
+    /// stay in the autosave files for the next launch to offer.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    fn shutdown_inner(&mut self, keep_recovery: bool) {
         if self.allow_close {
             return;
         }
@@ -1090,8 +1181,9 @@ impl<D: Document> Runtime<D> {
                     log::warn!("autosave: {e}");
                 }
             }
-            // a clean exit (saved, or the user chose not to keep the changes)
-            if let Err(e) = a.autosave.close(false) {
+            // a clean exit (saved, or the user chose not to keep the changes), unless the
+            // changes were never offered for saving
+            if let Err(e) = a.autosave.close(keep_recovery && self.session.is_dirty()) {
                 log::warn!("autosave cleanup: {e}");
             }
         }
@@ -1117,7 +1209,10 @@ impl<D: Document> Runtime<D> {
     fn continue_quit(&mut self, ctx: &egui::Context) {
         if self.quit_after_save {
             self.quit_after_save = false;
-            if !self.session.is_dirty() {
+            if self.answering_end() {
+                let next = if self.session.is_dirty() { session_end::Event::SaveFailed } else { session_end::Event::Saved };
+                self.end_step(ctx, next);
+            } else if !self.session.is_dirty() {
                 self.close(ctx, false);
             }
         }
@@ -1286,6 +1381,16 @@ impl<D: Document> Runtime<D> {
         let out = Dialog::new("ashlar.confirm_discard", &title, &buttons).show(ctx, |ui| {
             ui.label("Your changes will be lost if you don't save them.");
         });
+        if quit && self.answering_end() {
+            let event = match out {
+                Some(DialogOutcome::Button(1)) => session_end::Event::Discard,
+                Some(DialogOutcome::Button(2)) => session_end::Event::Save,
+                Some(_) => session_end::Event::Cancel,
+                None => return false,
+            };
+            self.end_step(ctx, event);
+            return true;
+        }
         match out {
             Some(DialogOutcome::Button(1)) => {
                 if quit {
@@ -2034,6 +2139,66 @@ mod tests {
         assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
         assert!(!d.runtime.is_closing(), "cancelled: nothing closes");
         assert!(!d.runtime.quit_after_save, "and a later save does not quit");
+    }
+
+    /// An OS end request (Dock Quit, logout) answered in the next frame.
+    fn os_end(d: &mut crate::Driver<i64>, kind: EndKind, can_wait: bool) {
+        let ctx = d.ctx().clone();
+        d.runtime.end_requested(&ctx, kind, can_wait);
+        d.frame();
+    }
+
+    #[test]
+    fn a_dock_quit_of_a_clean_document_cleans_up_and_allows_at_once() {
+        let (mut d, _) = picking(Vec::new());
+        os_end(&mut d, EndKind::Quit, true);
+        assert_eq!(d.runtime.end_reply, Some(true));
+        assert!(d.runtime.is_closing(), "shut down before answering");
+        assert!(!d.runtime.modal_open());
+    }
+
+    #[test]
+    fn a_dock_quit_of_a_dirty_document_asks_then_saves_then_allows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("q.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Quit, true);
+        assert!(d.runtime.modal_open(), "the confirm dialog asks first");
+        assert_eq!(d.runtime.end_reply, None, "no answer to the OS yet");
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()));
+        assert_eq!(d.runtime.end_reply, Some(true), "saved: the quit goes on");
+        assert!(d.runtime.is_closing());
+    }
+
+    #[test]
+    fn a_cancelled_save_as_refuses_the_os_quit() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Logout, true);
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.end_reply, Some(false), "the logout is cancelled");
+        assert!(!d.runtime.is_closing());
+        assert_eq!(d.runtime.end_state, session_end::State::Idle, "a later quit asks again");
+    }
+
+    #[test]
+    fn a_logout_that_cant_wait_allows_and_keeps_the_changes_for_recovery() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Logout, false);
+        assert!(asked.borrow().is_empty() && !d.runtime.modal_open(), "nothing is asked");
+        assert_eq!(d.runtime.end_reply, Some(true));
+        assert!(d.runtime.is_closing());
     }
 
     #[test]
