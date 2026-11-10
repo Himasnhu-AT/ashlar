@@ -56,6 +56,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::docking`: the drop preview moves quickly (0.1 s) from one drop target to the next
+  while a tab is dragged, and appears in place when a drag first shows it.
 - `ashlar_ui::toasts`: a new toast fades and slides 8 pt in, a dismissed one slides back out and
   is painted until its exit settles, and the toasts behind it glide into the gap. Toasts queued
   before the stack is first shown appear at once; hit testing and automation rects use the resting
