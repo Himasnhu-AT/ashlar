@@ -219,6 +219,9 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
 - `<PREFIX>_READY_FILE=path` (the prefix is the app name in capitals, like `<PREFIX>_CONTROL_PORT`)
   makes the app write `{"pid": …, "ready_ms": …}` to `path`, atomically, once its first frame is
   presented: a launcher or a test waits for the file instead of sleeping.
+- `<PREFIX>_QUIET=1` opens the window without taking the focus (on macOS the app doesn't
+  activate either), so an agent that rebuilds and relaunches the app in a loop doesn't pull the
+  user out of the app they are typing in.
 - A document named on the command line opens on the frame after the first one, so the window
   shows before a slow load runs. eframe keeps the window hidden until that first frame is painted,
   so there is no white flash.

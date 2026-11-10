@@ -22,10 +22,24 @@ the video editor's platform crate these were adapted from):
    - `power` (macOS `endActivity:`, Windows `SetThreadExecutionState`)
    - `open_files` (macOS: the Apple event handler class and its registration)
    - `progress` (Windows `ITaskbarList3`)
-   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`, `GetUserPreferredUILanguages`;
-     the last added 2026-11-10 so apps started from the desktop, which have no `LANG`, find the
-     user's languages)
-   - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)
+   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`, `GetUserPreferredUILanguages`
+     (added 2026-11-10 so apps started from the desktop, which have no `LANG`, find the user's
+     languages); and for `bring_to_front`, added 2026-11-10: `IsIconic`, `ShowWindow`,
+     `SetForegroundWindow`, `BringWindowToTop`, `AttachThreadInput`)
+   - `mac_shell` (macOS: replacing the implementation of winit's window delegate
+     `observeValueForKeyPath:ofObject:change:context:` with a checked wrapper that calls the
+     original, `class_addMethod` of `applicationShouldHandleReopen:hasVisibleWindows:` on winit's
+     application delegate, and the `msg_send!`s that inspect the KVO change); added 2026-11-10 so a
+     nil appearance during screen capture doesn't end the app and the Dock icon shows the window
+   - `menu::popup` (muda's `show_context_menu_for_nsview` / `show_context_menu_for_hwnd` on the
+     window's own view or HWND, retaining the macOS view, and posting the macOS menu to the main
+     run loop) and `drag_out` (macOS: an `NSDraggingSource` class, retaining the window's view, an
+     `NSDraggingItem` frame); added 2026-11-10 for context menus and dragging files out
+   - `single_instance` (Windows `AllowSetForegroundWindow`, one block; added 2026-11-10 so the
+     second launch lets the first come to the front)
+   - `menu::native::attach_window` (muda's `init_for_hwnd`) and `menu::native::accelerators`
+     (Windows: `SetWindowSubclass`, `TranslateAcceleratorW`, `DefSubclassProc`; added 2026-11-10
+     so menu shortcuts work without a hook in winit's message loop)
    - `terminate` (Unix, through `libc`: `pipe`, `fcntl`, `sigaction`, and in the handler only
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server
      can end its telemetry session when it is asked to stop)
@@ -44,7 +58,7 @@ the video editor's platform crate these were adapted from):
      settings, autosave and telemetry flush
 
    Everything else (dialogs, clipboard, secrets, Linux notifications, macOS progress and preferences,
-   single instance) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.
+   single instance off Windows, tray, global shortcuts) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.
 2. Every `unsafe` block has a `// SAFETY:` comment saying why it is sound.
 3. The public API is safe: no `pub unsafe fn`, no raw pointers or FFI types in signatures.
    Window handles come in through `raw_window_handle::HasWindowHandle`, so a caller can't pass

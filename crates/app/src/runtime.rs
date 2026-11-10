@@ -295,6 +295,24 @@ pub struct Runtime<D: Document> {
     /// The OS menu bar was tried (installed and attached, or refused) on the first frame.
     #[cfg_attr(not(all(feature = "native-menu", any(target_os = "macos", target_os = "windows"))), allow(dead_code))]
     native_menu_tried: bool,
+    /// The tray icon ([`App::tray`](crate::App::tray)), installed with the OS menu bar.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray: Option<ashlar_native::tray::Tray>,
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray_tried: bool,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts: Option<ashlar_native::hotkey::GlobalShortcuts>,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts_tried: bool,
+    /// Dock reopen requests (macOS), listened for after the first frame.
+    #[cfg(target_os = "macos")]
+    reopen: Option<std::sync::mpsc::Receiver<ashlar_native::mac_shell::Reopen>>,
+    #[cfg(target_os = "macos")]
+    mac_shell_tried: bool,
+    /// Bring the window to the front on the next frame (a forwarded launch, a tray click, a
+    /// global shortcut), through the OS where the focus request alone may be refused.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    bring_front: bool,
     /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
@@ -391,6 +409,19 @@ impl<D: Document> Runtime<D> {
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
             native_menu_tried: false,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray: None,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray_tried: false,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts: None,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts_tried: false,
+            bring_front: false,
+            #[cfg(target_os = "macos")]
+            reopen: None,
+            #[cfg(target_os = "macos")]
+            mac_shell_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             inbox,
@@ -644,6 +675,16 @@ impl<D: Document> Runtime<D> {
         if let Some(m) = &self.native_menu {
             self.native_picks.extend(m.drain());
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        self.drain_tray(ctx);
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if let Some(g) = &self.global_shortcuts {
+            let pressed = g.drain();
+            if !pressed.is_empty() {
+                self.show_window(ctx);
+            }
+            self.native_picks.extend(pressed);
+        }
         self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
     }
@@ -729,6 +770,7 @@ impl<D: Document> Runtime<D> {
         if focus {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.bring_front = true;
         }
         let mut files = items.into_iter().filter_map(|item| match item {
             ashlar_native::open_files::Opened::File(p) => Some(p),
@@ -935,7 +977,84 @@ impl<D: Document> Runtime<D> {
             // the in-window bar goes (or stays) with the next frame
             wake::wake(ctx, Reason::MENU);
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.tray_tried {
+            self.tray_tried = true;
+            if let Some(spec) = self.shared.tray.clone() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::tray::Tray::new(spec, std::sync::Arc::new(move || wake.wake())) {
+                    Ok(t) => self.tray = Some(t),
+                    Err(e) => log::warn!("no tray icon: {e}"),
+                }
+            }
+        }
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.global_shortcuts_tried {
+            self.global_shortcuts_tried = true;
+            if !self.shared.global_shortcuts.is_empty() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::hotkey::GlobalShortcuts::new(std::sync::Arc::new(move || wake.wake())) {
+                    Ok(mut g) => {
+                        for (command, chord) in &self.shared.global_shortcuts {
+                            let done = ashlar_command::shortcut::Chord::parse(chord)
+                                .map_err(|e| ashlar_native::NativeError::Invalid(e.0))
+                                .and_then(|c| g.register(command.clone(), &c));
+                            if let Err(e) = done {
+                                log::warn!("global shortcut `{chord}` for `{command}` skipped: {e}");
+                            }
+                        }
+                        self.global_shortcuts = Some(g);
+                    }
+                    Err(e) => log::warn!("no global shortcuts: {e}"),
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.native && self.first_frame_done && !self.mac_shell_tried {
+            self.mac_shell_tried = true;
+            if let Err(e) = ashlar_native::mac_shell::guard_appearance() {
+                log::debug!("appearance guard: {e}");
+            }
+            let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+            match ashlar_native::mac_shell::listen_reopen(std::sync::Arc::new(move || wake.wake())) {
+                Ok(rx) => self.reopen = Some(rx),
+                Err(e) => log::debug!("Dock reopen: {e}"),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.reopen.as_ref().is_some_and(|rx| rx.try_iter().count() > 0) {
+            self.show_window(ctx);
+        }
+        if std::mem::take(&mut self.bring_front)
+            && let Err(e) = ashlar_native::system::bring_to_front(window)
+            && !e.is_unsupported()
+        {
+            log::debug!("bring to front: {e}");
+        }
         let _ = (ctx, window);
+    }
+
+    /// Show, restore and focus the window, now through the viewport and on the next frame
+    /// through the OS.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn show_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.bring_front = true;
+        wake::wake(ctx, Reason::MENU);
+    }
+
+    /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    fn drain_tray(&mut self, ctx: &egui::Context) {
+        let Some(t) = &self.tray else { return };
+        for e in t.events() {
+            match e {
+                ashlar_native::tray::TrayEvent::Menu(id) => self.native_picks.push(id),
+                ashlar_native::tray::TrayEvent::Activate => self.show_window(ctx),
+            }
+        }
     }
 
     /// Run the ids picked in the OS menu bar, under the rules key presses follow: nothing runs
@@ -2063,11 +2182,22 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         presented: false,
         scene: args.scene,
     };
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: window_builder(&shared, window, safe_mode),
         wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
+    // `<PREFIX>_QUIET`: open without taking the focus (agents relaunching after each build)
+    if ashlar_native::mac_shell::quiet_requested(&shared.env_prefix) {
+        options.viewport = options.viewport.with_active(false);
+        #[cfg(target_os = "macos")]
+        {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::macos::EventLoopBuilderExtMacOS;
+                b.with_activate_ignoring_other_apps(false);
+            }));
+        }
+    }
     let title = shared.title.clone();
     eframe::run_native(
         &title,

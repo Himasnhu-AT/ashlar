@@ -114,7 +114,7 @@ a task's state.
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
 | IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | done (20c65d9, 68be0d6) |
-| IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
+| IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | done (320b57e; Windows compile-checked only) |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
 | IMP-6.4 | Window placement and viewport hook | done (2f334d7) |
@@ -124,12 +124,12 @@ a task's state.
 | IMP-6.8 | Web target gate | done (766bdf8, 80c2097; browser run not done) |
 | IMP-6.9 | Honest launch timing and ready signal | done (wt/launch, 4356a62) |
 | IMP-6.10 | Open command-line document after first frame | done (wt/launch, 4356a62) |
-| IMP-6.11 | Tray / status item | todo |
+| IMP-6.11 | Tray / status item | done (fe498e9) |
 | IMP-6.12 | Rich clipboard, secret copy | done (42baf45) |
 | IMP-6.13 | `ashlar-i18n` | done (186ecf4) |
-| IMP-6.14 | macOS shell shims | todo |
-| IMP-6.15 | Drag-out and native context menus | todo |
-| IMP-6.16 | Global shortcuts and bring-to-front | todo |
+| IMP-6.14 | macOS shell shims | done (ddd3d84) |
+| IMP-6.15 | Drag-out and native context menus | done (20f707f; drag-out macOS only) |
+| IMP-6.16 | Global shortcuts and bring-to-front | done (8941f6e, 61163e8) |
 
 ## Phase 7: later
 | Id | Task | Status |

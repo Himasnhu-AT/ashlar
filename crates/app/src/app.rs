@@ -69,6 +69,12 @@ pub(crate) struct Shared<D: Document> {
     pub accept_drops: bool,
     /// Save the window's placement and restore it on launch (see [`App::remember_window`]).
     pub remember_window: bool,
+    /// The tray icon to show (see [`App::tray`]).
+    #[cfg(feature = "tray")]
+    pub tray: Option<ashlar_native::tray::TraySpec>,
+    /// System-wide shortcuts: (command id, chord text) (see [`App::global_shortcut`]).
+    #[cfg(feature = "hotkey")]
+    pub global_shortcuts: Vec<(String, String)>,
     /// Named starting states, in declaration order.
     pub scenes: Vec<(String, SceneFn<D>)>,
     /// The web page's `<canvas>` id (see [`App::canvas_id`]).
@@ -138,6 +144,10 @@ pub struct App<D: Document> {
     single_instance: bool,
     accept_drops: Option<bool>,
     remember_window: bool,
+    #[cfg(feature = "tray")]
+    tray: Option<ashlar_native::tray::TraySpec>,
+    #[cfg(feature = "hotkey")]
+    global_shortcuts: Vec<(String, String)>,
     window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
     canvas_id: Option<String>,
@@ -169,6 +179,10 @@ impl<D: Document> App<D> {
             single_instance: false,
             accept_drops: None,
             remember_window: true,
+            #[cfg(feature = "tray")]
+            tray: None,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: Vec::new(),
             window: WindowSpec::default(),
             scenes: Vec::new(),
             canvas_id: None,
@@ -298,6 +312,26 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Show a tray / status-bar icon (feature `tray`; desktop only). Choosing one of its menu items
+    /// runs the command with that id, under the rules the OS menu bar follows; clicking the icon
+    /// shows and focuses the window. It appears after the first frame and goes when the app ends;
+    /// where the desktop has no tray it is skipped with a log line.
+    #[cfg(feature = "tray")]
+    pub fn tray(mut self, spec: ashlar_native::tray::TraySpec) -> Self {
+        self.tray = Some(spec);
+        self
+    }
+
+    /// Run `command` when `chord` (`"Mod+Shift+Space"`, the keymap's syntax) is pressed anywhere,
+    /// even while another app has the focus (feature `hotkey`; macOS, Windows, Linux on X11).
+    /// The window comes to the front first. A chord without Ctrl, Alt or ⌘, or one another app
+    /// holds, is skipped with a log line.
+    #[cfg(feature = "hotkey")]
+    pub fn global_shortcut(mut self, command: impl Into<String>, chord: impl Into<String>) -> Self {
+        self.global_shortcuts.push((command.into(), chord.into()));
+        self
+    }
+
     /// Open files dropped on the window (default on when the app sets a [`App::format`] or a
     /// [`App::file_extension`]). The first file with a known extension opens with `file.open`
     /// (a dirty document asks to save first); the others reach the view as
@@ -408,6 +442,10 @@ impl<D: Document> App<D> {
             single_instance: self.single_instance,
             accept_drops,
             remember_window: self.remember_window,
+            #[cfg(feature = "tray")]
+            tray: self.tray,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: self.global_shortcuts,
             scenes: self.scenes,
             canvas_id: self.canvas_id,
         };

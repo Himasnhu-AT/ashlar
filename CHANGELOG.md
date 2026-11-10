@@ -9,6 +9,38 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Windows menu shortcuts (IMP-6.17): `NativeMenuBar::attach_window` subclasses the window and runs
+  `TranslateAcceleratorW` with the bar's table on key-downs, so a native menu's key equivalents
+  fire as item activations (once; the key press doesn't also reach the window). Compile-checked
+  for `x86_64-pc-windows-msvc`; not run on Windows yet.
+- Context menus and drag-out (IMP-6.15): `ashlar_native::menu::popup::show(window, &spec, at,
+  waker)` opens a `MenuSpec` as a native context menu (macOS: posted to the run loop so it never
+  opens inside the UI pass; Windows: opens at once, call it between frames) and reports
+  `Some(id)` or `None` on a receiver. `ashlar_native::drag_out::start(window, DragItem { files,
+  png, text }, on_end)` (feature `drag-out`, in `full`) drags files, a PNG or text into other
+  apps on macOS; `Unsupported` elsewhere.
+- `ashlar_native::mac_shell` (default feature `mac-shell`, IMP-6.14): `guard_appearance()` checks
+  the window delegate's `effectiveAppearance` changes before winit casts them, so a nil appearance
+  while the screen is captured no longer ends the app; `listen_reopen(waker)` reports Dock reopen
+  clicks; `quiet_requested(prefix)` reads `<PREFIX>_QUIET`. An ashlar app installs both after its
+  first frame, shows and focuses its window on reopen, and with `<PREFIX>_QUIET=1` opens without
+  taking the focus.
+- `ashlar_native::hotkey` (feature `hotkey`, IMP-6.16): system-wide shortcuts on global-hotkey
+  (macOS, Windows, Linux on X11). `GlobalShortcuts::new(waker)`, `register(id, &chord)` with the
+  keymap's chords (a chord without Ctrl, Alt or ⌘ is refused), `unregister`, `drain()`; dropping
+  it releases every chord. `system::bring_to_front(window)` restores and focuses a window through
+  the OS (Windows borrows the foreground thread's input when the foreground lock refuses), and a
+  second launch on Windows now calls `AllowSetForegroundWindow` for the first (its pid travels in
+  the endpoint file). `App::global_shortcut(command, chord)` (feature `hotkey` of `ashlar-app`)
+  runs the command and brings the window forward; forwarded launches and tray clicks also bring
+  it forward through the OS.
+- `ashlar_native::tray` (feature `tray`, IMP-6.11): a tray / status-bar icon with a menu built from
+  a `MenuSpec` (macOS status bar, Windows notification area, Linux StatusNotifierItem over D-Bus
+  with no GTK). `Tray::new(TraySpec { id, tooltip, icon, template, menu }, waker)`, `events()`
+  (`Activate`, `Menu(id)`), `set_tooltip` / `set_icon` / `set_menu`; dropping it removes the icon.
+  The menu bar, trays and later popups now share one process-wide menu-event router, so a tray's
+  items never reach the menu bar. `App::tray(spec)` (feature `tray` of `ashlar-app`) runs the
+  chosen item's command and shows the window on a click.
 - Web (IMP-6.8): `App::canvas_id`; when a web app cannot start (no such canvas, no WebGL) a
   visible error (`role="alert"`) appears next to the canvas or at the top of the page;
   `examples/web-hello` (with an `index.html` for trunk) is checked for wasm32 by `cargo xtask wasm`.

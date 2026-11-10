@@ -302,6 +302,16 @@ mod imp {
     }
 }
 
+/// `port token [pid]`, the Windows endpoint file (the pid is absent in files from older builds).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_endpoint(text: &str) -> Option<(u16, String, Option<u32>)> {
+    let mut parts = text.split_whitespace();
+    let port = parts.next()?.parse().ok()?;
+    let token = parts.next()?.to_string();
+    let pid = parts.next().and_then(|p| p.parse().ok());
+    Some((port, token, pid))
+}
+
 #[cfg(windows)]
 mod imp {
     use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -318,16 +328,26 @@ mod imp {
         format!("{:016x}{:016x}", h.finish(), a)
     }
 
-    fn read_endpoint(endpoint: &Path) -> Option<(u16, String)> {
-        let text = std::fs::read_to_string(endpoint).ok()?;
-        let (port, token) = text.trim().split_once(' ')?;
-        Some((port.parse().ok()?, token.to_string()))
+    fn read_endpoint(endpoint: &Path) -> Option<(u16, String, Option<u32>)> {
+        parse_endpoint(&std::fs::read_to_string(endpoint).ok()?)
+    }
+
+    /// Let the first instance take the foreground: Windows refuses `SetForegroundWindow` to a
+    /// process in the background unless the foreground process (this launch) allows it.
+    #[allow(unsafe_code)]
+    fn allow_foreground(pid: u32) {
+        // SAFETY: a plain Win32 call taking a process id by value; failure only means the first
+        // instance may flash in the taskbar instead of coming to the front.
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid) };
     }
 
     pub fn claim(endpoint: &Path, msg: impl Fn(String) -> Wire, on_forward: OnForward) -> Result<Launch> {
-        if let Some((port, token)) = read_endpoint(endpoint) {
+        if let Some((port, token, pid)) = read_endpoint(endpoint) {
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
             if let Ok(mut s) = TcpStream::connect_timeout(&addr, TIMEOUT) {
+                if let Some(pid) = pid {
+                    allow_foreground(pid);
+                }
                 let _ = s.set_read_timeout(Some(TIMEOUT));
                 let _ = s.set_write_timeout(Some(TIMEOUT));
                 if send(&mut s, &msg(token)).is_ok() {
@@ -339,7 +359,7 @@ mod imp {
         let port = listener.local_addr().map_err(io)?.port();
         let token = token();
         let tmp = endpoint.with_extension("tmp");
-        std::fs::write(&tmp, format!("{port} {token}")).map_err(io)?;
+        std::fs::write(&tmp, format!("{port} {token} {}", std::process::id())).map_err(io)?;
         std::fs::rename(&tmp, endpoint).map_err(io)?;
         let stop = Arc::new(AtomicBool::new(false));
         serve(
@@ -373,6 +393,14 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::channel;
+
+    #[test]
+    fn endpoint_files_carry_an_optional_pid() {
+        assert_eq!(super::parse_endpoint("4242 abc 77\n"), Some((4242, "abc".into(), Some(77))));
+        assert_eq!(super::parse_endpoint("4242 abc"), Some((4242, "abc".into(), None)));
+        assert_eq!(super::parse_endpoint("x abc"), None);
+        assert_eq!(super::parse_endpoint("4242"), None);
+    }
 
     use super::*;
 

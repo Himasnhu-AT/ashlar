@@ -60,7 +60,8 @@ egui_kittest = { version = "0.36" }
 # Without the `wayland` feature (needs the system libwayland at build time): every user inherits
 # this, so feature unification never turns it back on. The portal backend serves Wayland and X11.
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
-muda = "0.21"
+# No GTK: menus are macOS / Windows only, and a Linux tray talks D-Bus (ksni) instead.
+muda = { version = "0.21", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
