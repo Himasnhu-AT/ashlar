@@ -1,0 +1,42 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=true]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  TextInput placeholder="Search settings"
+  Heading "General" value="General"
+  Switch "Launch at login" description="Starts the app when you sign in." [toggled=false]
+  Label value="Launch at login"
+  Label value="Starts the app when you sign in."
+  Switch "Check for updates" description="Looks for a new version once a day." [toggled=true]
+  Label value="Check for updates"
+  Label value="Looks for a new version once a day."
+  Heading "Appearance" value="Appearance"
+  RadioGroup "Theme" description="Light, dark, or follow the system."
+    RadioButton "Light" [toggled=false, 1/3]
+    RadioButton "Dark" [toggled=false, 2/3]
+    RadioButton "System" [toggled=true, 3/3]
+  Label value="Theme"
+  Label value="Light, dark, or follow the system."
+  Switch "Sidebar icons" [toggled=true]
+  Label value="Sidebar icons"
+  Label value="Project name"
+  Label "Required" value="*"
+  TextInput "Project name" value="Untitled" description="Shown in the window title." [required]
+  Label value="Shown in the window title."

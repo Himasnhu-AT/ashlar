@@ -1,0 +1,240 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=true]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="List — 100000 rows"
+  List
+    ListItem [1/100000]
+      Label value="Row 0"
+    ListItem [2/100000]
+      Label value="Row 1"
+    ListItem [3/100000]
+      Label value="Row 2"
+    ListItem [selected, 4/100000]
+      Label value="Row 3"
+    ListItem [5/100000]
+      Label value="Row 4"
+    ListItem [6/100000]
+      Label value="Row 5"
+    ListItem [7/100000]
+      Label value="Row 6"
+    ListItem [8/100000]
+      Label value="Row 7"
+    ListItem [9/100000]
+      Label value="Row 8"
+    ListItem [10/100000]
+      Label value="Row 9"
+    ListItem [11/100000]
+      Label value="Row 10"
+    ListItem [12/100000]
+      Label value="Row 11"
+    ListItem [13/100000]
+      Label value="Row 12"
+    ListItem [14/100000]
+      Label value="Row 13"
+    ListItem [15/100000]
+      Label value="Row 14"
+    ListItem [16/100000]
+      Label value="Row 15"
+    ListItem [17/100000]
+      Label value="Row 16"
+    ListItem [18/100000]
+      Label value="Row 17"
+    ListItem [19/100000]
+      Label value="Row 18"
+    ListItem [20/100000]
+      Label value="Row 19"
+    ListItem [21/100000]
+      Label value="Row 20"
+    ListItem [22/100000]
+      Label value="Row 21"
+    ListItem [23/100000]
+      Label value="Row 22"
+    ListItem [24/100000]
+      Label value="Row 23"
+    ListItem [25/100000]
+      Label value="Row 24"
+    ListItem [26/100000]
+      Label value="Row 25"
+    ListItem [27/100000]
+      Label value="Row 26"
+    ListItem [28/100000]
+      Label value="Row 27"
+    ScrollBar
+  Label value="Table — variable row heights"
+  Table
+    Row [1/100000]
+      Label value="file_000000"
+      Label value="0 KB"
+      Label value="Folder\n(tall row)"
+    Row [selected, 2/100000]
+      Label value="file_000001"
+      Label value="37 KB"
+      Label value="Document"
+    Row [3/100000]
+      Label value="file_000002"
+      Label value="74 KB"
+      Label value="Document"
+    Row [4/100000]
+      Label value="file_000003"
+      Label value="111 KB"
+      Label value="Document"
+    Row [5/100000]
+      Label value="file_000004"
+      Label value="148 KB"
+      Label value="Document"
+    Row [6/100000]
+      Label value="file_000005"
+      Label value="185 KB"
+      Label value="Folder\n(tall row)"
+    Row [7/100000]
+      Label value="file_000006"
+      Label value="222 KB"
+      Label value="Document"
+    Row [8/100000]
+      Label value="file_000007"
+      Label value="259 KB"
+      Label value="Document"
+    Row [9/100000]
+      Label value="file_000008"
+      Label value="296 KB"
+      Label value="Document"
+    Row [10/100000]
+      Label value="file_000009"
+      Label value="333 KB"
+      Label value="Document"
+    Row [11/100000]
+      Label value="file_000010"
+      Label value="370 KB"
+      Label value="Folder\n(tall row)"
+    Row [12/100000]
+      Label value="file_000011"
+      Label value="407 KB"
+      Label value="Document"
+    Row [13/100000]
+      Label value="file_000012"
+      Label value="444 KB"
+      Label value="Document"
+    Row [14/100000]
+      Label value="file_000013"
+      Label value="481 KB"
+      Label value="Document"
+    Row [15/100000]
+      Label value="file_000014"
+      Label value="518 KB"
+      Label value="Document"
+    Row [16/100000]
+      Label value="file_000015"
+      Label value="555 KB"
+      Label value="Folder\n(tall row)"
+    Row [17/100000]
+      Label value="file_000016"
+      Label value="592 KB"
+      Label value="Document"
+    Row [18/100000]
+      Label value="file_000017"
+      Label value="629 KB"
+      Label value="Document"
+    Row [19/100000]
+      Label value="file_000018"
+      Label value="666 KB"
+      Label value="Document"
+    Row [20/100000]
+      Label value="file_000019"
+      Label value="703 KB"
+      Label value="Document"
+    Row [21/100000]
+      Label value="file_000020"
+      Label value="740 KB"
+      Label value="Folder\n(tall row)"
+    Row [22/100000]
+      Label value="file_000021"
+      Label value="777 KB"
+      Label value="Document"
+    Row [23/100000]
+      Label value="file_000022"
+      Label value="814 KB"
+      Label value="Document"
+    Row [24/100000]
+      Label value="file_000023"
+      Label value="851 KB"
+      Label value="Document"
+    ScrollBar
+  Button "Name"
+  Unknown
+  Button "Size"
+  Unknown
+  Button "Kind"
+  Unknown
+  Label value="Tree — 10 041 nodes"
+  Tree
+    TreeItem "Chapter 1" [expanded, 1/40]
+      Unknown
+    TreeItem "Section 1.1" [expanded, 1/25]
+      Unknown
+    TreeItem "Paragraph 1" [1/10]
+    TreeItem "Paragraph 2" [2/10]
+    TreeItem "Paragraph 3" [3/10]
+    TreeItem "Paragraph 4" [4/10]
+    TreeItem "Paragraph 5" [5/10]
+    TreeItem "Paragraph 6" [6/10]
+    TreeItem "Paragraph 7" [7/10]
+    TreeItem "Paragraph 8" [8/10]
+    TreeItem "Paragraph 9" [9/10]
+    TreeItem "Paragraph 10" [10/10]
+    TreeItem "Section 1.2" [selected, collapsed, 2/25]
+      Unknown
+    TreeItem "Section 1.3" [collapsed, 3/25]
+      Unknown
+    TreeItem "Section 1.4" [collapsed, 4/25]
+      Unknown
+    TreeItem "Section 1.5" [collapsed, 5/25]
+      Unknown
+    TreeItem "Section 1.6" [collapsed, 6/25]
+      Unknown
+    TreeItem "Section 1.7" [collapsed, 7/25]
+      Unknown
+    TreeItem "Section 1.8" [collapsed, 8/25]
+      Unknown
+    TreeItem "Section 1.9" [collapsed, 9/25]
+      Unknown
+    TreeItem "Section 1.10" [collapsed, 10/25]
+      Unknown
+    TreeItem "Section 1.11" [collapsed, 11/25]
+      Unknown
+    TreeItem "Section 1.12" [collapsed, 12/25]
+      Unknown
+    TreeItem "Section 1.13" [collapsed, 13/25]
+      Unknown
+    TreeItem "Section 1.14" [collapsed, 14/25]
+      Unknown
+    TreeItem "Section 1.15" [collapsed, 15/25]
+      Unknown
+    TreeItem "Section 1.16" [collapsed, 16/25]
+      Unknown
+    TreeItem "Section 1.17" [collapsed, 17/25]
+      Unknown
+    TreeItem "Section 1.18" [collapsed, 18/25]
+      Unknown
+    TreeItem "Section 1.19" [collapsed, 19/25]
+      Unknown
+    TreeItem "Section 1.20" [collapsed, 20/25]
+      Unknown
+    ScrollBar

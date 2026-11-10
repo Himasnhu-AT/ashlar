@@ -1,0 +1,90 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=true]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Command palette"
+  Label value="Open with the Help menu, the status bar, or its shortcut."
+  Button "Open palette"
+  Label value="Keymap"
+  TextInput placeholder="Search commands or keys"
+  Label value="2 commands share a shortcut"
+  Table
+    Row "New" [1/15]
+      Unknown
+      Label value="Clear"
+    Row "Open…" [2/15]
+      Unknown
+      Label value="Clear"
+    Row "Save" [3/15]
+      Unknown
+      Label value="Clear"
+    Row "PNG Image…" [4/15]
+      Unknown
+    Row "PDF Document…" [5/15]
+      Unknown
+      Label value="Clear"
+    Row "Undo" [6/15]
+      Unknown
+      Label value="Clear"
+    Row "Redo" [7/15]
+      Unknown
+      Label value="Clear"
+    Row "Find…" [8/15]
+      Unknown
+      Label value="Clear"
+    Row "Show Grid" [9/15]
+      Unknown
+      Label value="Clear"
+    Row "Light Theme" [10/15]
+      Unknown
+    Row "Dark Theme" [11/15]
+      Unknown
+    Row "Follow System" [12/15]
+      Unknown
+    Row "Command Palette…" [13/15]
+      Unknown
+      Label value="Clear"
+    Row "Show a Notification" [14/15]
+      Unknown
+    Row "Save As (conflicting key)" [15/15]
+      Unknown
+      Label value="Clear"
+  Button "Command"
+  Unknown
+  Button "Shortcut"
+  Unknown
+  Button
+  Unknown
+  TextInput placeholder="Type a command"
+  List
+    ListItem "New" [selected, 1/15]
+    ListItem "Open…" [2/15]
+    ListItem "Save" [3/15]
+    ListItem "PNG Image…" [4/15]
+    ListItem "PDF Document…" [5/15]
+    ListItem "Find…" [6/15]
+    ListItem "Show Grid" [7/15]
+    ListItem "Light Theme" [8/15]
+    ListItem "Dark Theme" [9/15]
+    ListItem "Follow System" [10/15]
+    ListItem "Command Palette…" [11/15]
+    ListItem "Show a Notification" [12/15]
+    ListItem "Save As (conflicting key)" [13/15]
+    ScrollBar
