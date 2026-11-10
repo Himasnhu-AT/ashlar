@@ -19,6 +19,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   ranges), `.streaming(true)` (an unclosed `**`, `*`, `~~`, `` ` `` or link at the end is drawn as
   already styled, so markers never flash; also `parse_streaming`) and `.labels(&MarkdownLabels)`
   for "Copy", "Copied", "code" and the table footer. `MarkdownStyle` gains `find_bg`.
+- `ashlar_ui::markdown::show_with_revision` and `Markdown::revision`: a caller that keeps a
+  revision of the text skips hashing it each frame. Inline parsing is linear in the paragraph's
+  length (a 50 KB paragraph: `bench: md_long_paragraph_parse`, about 0.4 ms), and a drawing
+  snapshot (`tests/markdown_snapshot.rs`) checks what markdown paints (IMP-5.18).
 - `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
   modified marker and reset button, a filter that hides non-matching rows and empty sections,
   highlights matches and shows "No settings match", and `Field` with a required marker and an

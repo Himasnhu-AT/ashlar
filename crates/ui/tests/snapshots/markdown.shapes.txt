@@ -1,0 +1,78 @@
+rect 8.0,8.0..352.0,331.2 fill=#f8f8f8ff stroke=- r=0
+text @8.0,11.2 122x23 rows=1 "Markdown v2"
+  [0..11] 20.3 Proportional #000000ff
+text @8.0,40.5 340x32 rows=2 "Body with bold, italic, code, gone and a link that wraps ont"
+  [0..10] 14.0 Proportional #505050ff
+  [10..14] 14.0 Proportional #000000ff
+  [14..16] 14.0 Proportional #505050ff
+  [16..22] 14.0 Proportional #505050ff italic
+  [22..24] 14.0 Proportional #505050ff
+  [24..28] 12.9 Monospace #505050ff bg=#ffffffff
+  [28..30] 14.0 Proportional #505050ff
+  [30..34] 14.0 Proportional #505050ff strike=1.0 #505050ff
+  [34..41] 14.0 Proportional #505050ff
+  [41..74] 14.0 Proportional #009bffff underline=1.0 #009bffff
+  [74..80] 14.0 Proportional #505050ff
+  [80..101] 14.0 Proportional #009bffff underline=1.0 #009bffff
+  [101..102] 14.0 Proportional #505050ff
+rect 251.0,38.5..350.2,58.5 fill=#00000000 stroke=1.5 #2563ebff r=2
+rect 6.0,54.5..122.0,74.5 fill=#00000000 stroke=1.5 #2563ebff r=2
+text @10.8,78.8 13x16 rows=1 "☐"
+  [0..3] 14.0 Proportional #30303099
+text @29.4,78.8 61x16 rows=1 "open task"
+  [0..9] 14.0 Proportional #505050ff
+text @9.0,103.3 14x16 rows=1 "☑"
+  [0..3] 14.0 Proportional #30303099
+text @29.4,103.3 61x16 rows=1 "done task"
+  [0..9] 14.0 Proportional #505050ff
+text @28.9,127.8 11x16 rows=1 "1."
+  [0..2] 14.0 Proportional #30303099
+text @46.2,127.8 95x16 rows=1 "nested number"
+  [0..13] 14.0 Proportional #505050ff
+text @18.0,152.3 135x16 rows=1 "a quote with a needle"
+  [0..15] 14.0 Proportional #30303099
+  [15..21] 14.0 Proportional #30303099 bg=#59230059
+line 11.0,152.3..11.0,168.3 2.0 #bebebeff
+line 8.0,177.8..352.0,177.8 1.0 #bebebeff
+rect 8.0,187.2..352.0,240.5 fill=#ffffffff stroke=1.0 #bebebeff r=4
+text @17.0,196.2 21x14 rows=1 "rust"
+  [0..4] 11.9 Proportional #30303099
+rect 316.2,194.2..343.0,212.2 fill=#00000000 stroke=- r=0
+text @316.2,196.2 27x14 rows=1 "Copy"
+  [0..4] 11.9 Proportional #30303099
+rect 17.0,219.0..241.9,234.0 fill=#00000000 stroke=- r=0
+text @17.0,219.0 225x15 rows=1 "fn main() { let needle = 1; }"
+  [0..2] 12.9 Monospace #2563ebff
+  [2..3] 12.9 Monospace #18181bff
+  [3..7] 12.9 Monospace #2563ebff
+  [7..9] 12.9 Monospace #3b3b41ff
+  [9..10] 12.9 Monospace #18181bff
+  [10..11] 12.9 Monospace #3b3b41ff
+  [11..12] 12.9 Monospace #18181bff
+  [12..15] 12.9 Monospace #2563ebff
+  [15..16] 12.9 Monospace #18181bff
+  [16..22] 12.9 Monospace #18181bff bg=#59230059
+  [22..23] 12.9 Monospace #18181bff
+  [23..24] 12.9 Monospace #1d3264ff
+  [24..25] 12.9 Monospace #18181bff
+  [25..26] 12.9 Monospace #b45309ff
+  [26..27] 12.9 Monospace #3b3b41ff
+  [27..28] 12.9 Monospace #18181bff
+  [28..29] 12.9 Monospace #3b3b41ff
+rect 8.0,247.0..272.8,309.0 fill=#00000000 stroke=- r=0
+text @8.0,248.0 35x16 rows=1 "name"
+  [0..4] 14.0 Proportional #000000ff
+text @239.8,248.0 33x16 rows=1 "value"
+  [0..5] 14.0 Proportional #000000ff
+rect 6.0,267.0..274.8,289.0 fill=#05050500 stroke=- r=2
+text @8.0,270.0 34x16 rows=1 "alpha"
+  [0..5] 14.0 Proportional #505050ff
+text @239.8,270.0 8x16 rows=1 "1"
+  [0..1] 14.0 Proportional #505050ff
+text @8.0,292.0 218x16 rows=1 "a much longer cell that has to wrap"
+  [0..35] 14.0 Proportional #505050ff
+text @239.8,292.0 16x16 rows=1 "22"
+  [0..2] 14.0 Proportional #505050ff
+text @8.0,315.2 87x16 rows=1 "Streaming tail"
+  [0..10] 14.0 Proportional #505050ff
+  [10..14] 14.0 Proportional #000000ff
