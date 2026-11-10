@@ -6,11 +6,13 @@
 //! per point; 120 warm-up frames, then 480 wheel steps of 12 pt at 120 Hz with the pointer inside,
 //! reversing direction halfway. Each frame is timed in thread CPU time: the egui pass plus
 //! `tessellate`. Variants: a plain `ScrollArea` holding 1k and 10k selectable labels (and 1k
-//! hand-painted rows, the floor), and `VirtualList` with 1k and 100k rows.
+//! hand-painted rows, the floor, and 1k `ashlar_ui::list::Row`s), and `VirtualList` with 1k and
+//! 100k rows. `perf_plain_scroll_breakdown` splits a selectable-label row into its parts.
 //!
 //! `cargo test -p ashlar-example-notes --release --test scroll_bench -- --ignored --nocapture --test-threads=1`
 
 use ashlar::egui::{self, Color32, Event, MouseWheelUnit, Pos2, RawInput, Rect, Sense, TouchPhase, ViewportId, pos2, vec2};
+use ashlar::ui::list::Row;
 use ashlar::ui::virtual_list::{RowHeights, VirtualList};
 use cpu_time::ThreadTime;
 
@@ -123,6 +125,31 @@ fn plain_painted(n: usize) -> Vec<f64> {
     })
 }
 
+/// `n` rows in a plain `ScrollArea`, each built by `row(ui, index, label, size)`.
+fn rows(n: usize, mut row: impl FnMut(&mut egui::Ui, usize, &str, egui::Vec2)) -> Vec<f64> {
+    let labels = labels(n);
+    run(|ui| {
+        let out = egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let size = vec2(ui.available_width(), ROW);
+            for (i, label) in labels.iter().enumerate() {
+                row(ui, i, label, size);
+            }
+        });
+        out.state.offset.y
+    })
+}
+
+/// The plain list with `ashlar_ui::list::Row`: one allocation, one interact, and text laid out
+/// (from the galley cache) only for visible rows.
+fn plain_rows_widget(n: usize) -> Vec<f64> {
+    rows(n, |ui, i, label, _| {
+        if ui.add(Row::new(i, label).height(ROW)).clicked() {
+            std::hint::black_box(i);
+        }
+    })
+}
+
 /// The same rows through `VirtualList` (selection, hover and click are its own).
 fn virtual_list(n: usize) -> Vec<f64> {
     let labels = labels(n);
@@ -150,6 +177,8 @@ fn perf_plain_scroll() {
     let s10k = plain(10_000);
     report("plain_scroll_10k", &s10k);
     report("plain_scroll_1k_painted", &plain_painted(1_000));
+    report("plain_scroll_1k_rows_widget", &plain_rows_widget(1_000));
+    report("plain_scroll_10k_rows_widget", &plain_rows_widget(10_000));
     let v1k = virtual_list(1_000);
     report("virtual_scroll_1k", &v1k);
     let v100k = virtual_list(100_000);
@@ -158,4 +187,38 @@ fn perf_plain_scroll() {
         // virtualized cost does not grow with the row count
         assert!(pct(&v100k, 0.5) < pct(&v1k, 0.5) * 3.0 + 0.05, "VirtualList is flat in rows");
     }
+}
+
+/// Where a selectable-label row's time goes (IMP-2.8): each variant drops one part of it.
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_plain_scroll_breakdown() {
+    let n = 1_000;
+    // `Button::selectable` without `add_sized`'s child `Ui`
+    let s = rows(n, |ui, _, label, size| {
+        let _ = ui.add(egui::Button::selectable(false, label).min_size(size));
+    });
+    report("breakdown_selectable_no_child_ui", &s);
+    // `add_sized`'s child `Ui` around a bare allocation
+    let s = rows(n, |ui, _, _, size| {
+        let _ = ui.add_sized(size, |ui: &mut egui::Ui| ui.allocate_exact_size(size, Sense::click()).1);
+    });
+    report("breakdown_child_ui_alloc_interact", &s);
+    // one allocation and one interact, nothing painted
+    let s = rows(n, |ui, _, _, size| {
+        let _ = ui.allocate_exact_size(size, Sense::click());
+    });
+    report("breakdown_alloc_interact", &s);
+    // the space only: no widget registered
+    let s = rows(n, |ui, _, _, size| {
+        let _ = ui.allocate_space(size);
+    });
+    report("breakdown_alloc_only", &s);
+    // allocation, interact and text laid out for every row (through egui's own galley cache)
+    let s = rows(n, |ui, _, label, size| {
+        let _ = ui.allocate_exact_size(size, Sense::click());
+        let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::FontId::proportional(14.0), Color32::WHITE);
+        std::hint::black_box(galley);
+    });
+    report("breakdown_alloc_interact_layout_all", &s);
 }

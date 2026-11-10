@@ -10,6 +10,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar_ui::list::Row`: a cheap selectable list row for plain (non-virtual) lists: one allocation,
+  one interact, and a cached galley only while on screen. AccessKit list item with label and
+  selection; focusable, Space and Enter click; opt-in automation id. A 1k-row plain list scrolls in
+  about 0.10 ms per frame with it, against about 0.7 ms with `Button::selectable` rows.
+- `ashlar_ui::list::checked`: wraps a list's content and, in debug builds, warns once per call site
+  when it builds more than 2,000 interactive widgets in a frame, pointing to `VirtualList`
+  (`ASHLAR_QUIET_LISTS` silences it).
 - `ashlar-motion` (new crate, rank 0, no dependencies, builds for wasm32): closed-form springs set
   by duration and bounce (`Spring`, never early `settle_time`), `Curve` (spring, cubic-bezier
   tween, decay, instant), `Animated<T>` values whose retargets keep position and velocity and that
