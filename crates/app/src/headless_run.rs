@@ -2,7 +2,7 @@
 //! tree, for any binary whose `main` calls [`App::run`].
 //!
 //! ```text
-//! notes --headless --size 1024x700 --scale 2 --theme dark --script add.ui --at 1.5 \
+//! notes --headless --size 1024x700 --scale 2 --theme dark --scene two-notes --script add.ui --at 1.5 \
 //!       --snap out.png --tree tree.json
 //! ```
 //!
@@ -17,7 +17,8 @@ use serde_json::json;
 
 use crate::{App, Document, Driver, Renderer};
 
-const USAGE: &str = "--headless [--size WxH] [--scale S] [--theme light|dark] [--script file.ui] [--at SECONDS] [--snap out.png] [--tree tree.json]";
+const USAGE: &str =
+    "--headless [--size WxH] [--scale S] [--theme light|dark] [--scene NAME] [--script file.ui] [--at SECONDS] [--snap out.png] [--tree tree.json]";
 
 /// What `--headless` was asked for.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +26,7 @@ pub(crate) struct Options {
     pub size: (f32, f32),
     pub scale: f32,
     pub theme: Option<String>,
+    pub scene: Option<String>,
     pub script: Option<PathBuf>,
     pub at: f64,
     pub snap: Option<PathBuf>,
@@ -33,7 +35,7 @@ pub(crate) struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { size: (1280.0, 800.0), scale: 1.0, theme: None, script: None, at: 0.0, snap: None, tree: None }
+        Options { size: (1280.0, 800.0), scale: 1.0, theme: None, scene: None, script: None, at: 0.0, snap: None, tree: None }
     }
 }
 
@@ -84,6 +86,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     .filter(|s| s.is_finite() && (0.0..=3600.0).contains(s))
                     .ok_or_else(|| format!("--at {v}: seconds from 0 to 3600"))?;
             }
+            "--scene" => o.scene = Some(value()?),
             "--script" => o.script = Some(PathBuf::from(value()?)),
             "--snap" => o.snap = Some(PathBuf::from(value()?)),
             "--tree" => o.tree = Some(PathBuf::from(value()?)),
@@ -134,6 +137,13 @@ fn drive<D: Document>(app: App<D>, o: &Options, script: Option<&str>) -> Exit {
     d.set_screen(o.size.0, o.size.1);
     d.pixels_per_point(o.scale);
     d.settle(60);
+    // the scene first: an explicit --theme wins over one the scene sets
+    if let Some(scene) = &o.scene
+        && let Err(e) = d.scene(scene)
+    {
+        eprintln!("error: --scene: {e}");
+        return Exit::Usage;
+    }
     if let Some(theme) = &o.theme
         && let Err(e) = d.call("engine.execute", json!({"command": "view.theme", "params": {"mode": theme}}))
     {
@@ -189,6 +199,8 @@ mod tests {
         assert_eq!((o.scale, o.at), (2.0, 1.5));
         assert_eq!(o.theme.as_deref(), Some("dark"));
         assert_eq!(o.snap, Some(PathBuf::from("a.png")));
+        let o = parse(&args("--headless --scene two-notes")).unwrap();
+        assert_eq!(o.scene.as_deref(), Some("two-notes"));
         for bad in ["--size 10", "--size 0x5", "--scale nan", "--theme blue", "--at -1", "--snap", "--frobnicate"] {
             assert!(parse(&args(&format!("--headless {bad}"))).is_err(), "{bad}");
         }

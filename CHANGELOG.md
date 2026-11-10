@@ -14,6 +14,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   highlights matches and shows "No settings match", and `Field` with a required marker and an
   announced error. Row controls get automation ids `<section>.<row>`; strings come from
   `FormLabels`. The gallery has a Settings page.
+- Golden snapshots: `Driver::assert_snapshot(name)` and the `.ui` line `assert screenshot <name>
+  [target] [--tolerance channel=N,pixels=N]` compare with `tests/snapshots/<name>.png`, exact by
+  default; a mismatch writes `-new.png` and a magenta `-diff.png`; `ASHLAR_UPDATE_SNAPSHOTS=1`
+  records baselines with a `.meta.json` (adapter, backend, scale); a baseline from another adapter
+  is skipped with a note. Screenshot replies from a `Driver` now carry `adapter`, `backend` and
+  `scale` (IMP-4.8).
+- Named scenes: `App::scene(name, |s| ..)`, `--scene NAME` (in a window or `--headless`),
+  `--list-scenes`, `Driver::scene`, the `ui.scene` control method and the MCP tool `ui_scene`
+  (listed only for apps with scenes) (IMP-4.9).
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.

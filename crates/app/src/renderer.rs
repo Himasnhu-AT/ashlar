@@ -77,6 +77,17 @@ impl Renderer {
         None
     }
 
+    /// The adapter's name and backend, e.g. `("Apple M2", "Metal")`.
+    pub(crate) fn adapter_parts(&self) -> Option<(String, String)> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.state.as_ref().map(|s| {
+            let i = s.adapter.get_info();
+            (i.name, format!("{:?}", i.backend))
+        });
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
     /// What the last screenshot was rendered with: `"wgpu"`, or `"none"` when there is no GPU
     /// renderer or its last render failed (the grey image was used).
     pub(crate) fn last_used(&self) -> &'static str {

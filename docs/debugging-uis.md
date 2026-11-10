@@ -115,7 +115,7 @@ clock in a fresh temporary folder (never your settings or documents), real pixel
 a GPU (grey otherwise, with a note on stderr):
 
 ```sh
-notes --headless --size 1024x700 --scale 2 --theme dark --script add.ui --at 1.5 \
+notes --headless --size 1024x700 --scale 2 --theme dark --scene two-notes --script add.ui --at 1.5 \
       --snap out.png --tree tree.json
 ```
 
@@ -135,6 +135,46 @@ there is one. On a machine with no adapter, `Renderer::wgpu()` falls back to gre
 `"renderer": "none"`. Renders of the same state are byte-identical on the same machine, but can
 differ between GPUs, so compare pixels across machines only with a tolerance.
 `crates/app/tests/headless_render.rs` shows the pattern, including how to skip without a GPU.
+
+### Named scenes
+
+A scene is a fixed starting state: an empty document, a long list, an error banner, a fake
+service. Declare them on the app:
+
+```rust
+App::<Notes>::new("notes", "0.1.0")
+    .scene("empty", |_: &mut Session<Notes>| {})
+    .scene("two-notes", |s: &mut Session<Notes>| { /* add two notes */ })
+```
+
+- `notes --list-scenes` prints the names, one per line.
+- `notes --scene two-notes` starts the window in it; `notes --headless --scene two-notes --snap
+  x.png` pictures it (an unknown name exits 2). The scene runs before `--theme` and `--script`.
+- `Driver::scene("two-notes")` applies it in a test.
+- Agents use the `ui.scene {name}` control method or the MCP tool `ui_scene` (`{}` lists the
+  scenes). Both are listed only when the app declares scenes.
+
+### Golden snapshots
+
+`Driver::assert_snapshot(name)` and the script line `assert screenshot <name> [target]
+[--tolerance channel=2,pixels=4]` compare a screenshot with `tests/snapshots/<name>.png`
+(relative to the working directory, the package folder under `cargo test`; `ASHLAR_SNAPSHOT_DIR`
+overrides it):
+
+- The comparison is exact by default. A tolerance allows pixels whose channels are off by at
+  most `channel`, and up to `pixels` pixels beyond that. A tolerance given when recording is kept
+  in the baseline's meta and used when a check names none.
+- On a mismatch it writes `<name>-new.png` and `<name>-diff.png` (differing pixels magenta), and
+  fails with both paths.
+- `ASHLAR_UPDATE_SNAPSHOTS=1` records the baselines instead, with `<name>.meta.json` saying what
+  rendered them (`adapter`, `backend`, `scale`, size).
+- A baseline from another adapter or backend is skipped with a note on stderr, not failed: GPUs
+  differ by a few pixels. With no GPU renderer (grey screenshots) it is skipped too.
+
+`examples/notes/tests/snapshots.rs` checks the notes app's `empty` and `two-notes` scenes this way.
+Egui's own test harness has a snapshot feature, but it uses its own renderer and a perceptual
+compare with no adapter metadata, so ashlar keeps a small module (`ashlar_debug::snapshot`) that
+works on any `ui.screenshot` reply, from a `Driver` or a live app.
 
 ## Without an app: the demo
 
