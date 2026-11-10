@@ -24,6 +24,7 @@
 mod batch;
 pub mod demo;
 pub mod session;
+pub mod snapshot;
 pub mod target;
 pub mod transport;
 mod verbs;
@@ -37,6 +38,7 @@ use ashlar_control::{Client, ControlError};
 use serde_json::{Value, json};
 
 pub use session::Env;
+pub use snapshot::{Outcome as SnapshotOutcome, Snapshots, Tolerance};
 pub use transport::{Report, ScriptError, Transport, run_script};
 pub use verbs::save_png;
 use words::Args;

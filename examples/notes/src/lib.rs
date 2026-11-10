@@ -438,6 +438,12 @@ pub fn app() -> App<Notes> {
         .commands(commands())
         .instructions("A note-taking app. Notes have an id, a title and a body. Use note.add, note.edit, note.delete and note.list; file.save_as / file.open with a `path` to save and load.")
         .view(view())
+        .scene("empty", |_: &mut S| {})
+        .scene("two-notes", |s: &mut S| {
+            for (title, body) in [("Groceries", "milk, eggs"), ("Ideas", "a faster list")] {
+                let _ = add(s, &json!({"title": title, "body": body}));
+            }
+        })
 }
 
 #[cfg(test)]

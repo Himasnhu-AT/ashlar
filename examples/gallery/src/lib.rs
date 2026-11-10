@@ -10,15 +10,18 @@ use ashlar::command::CommandInfo;
 use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
-use ashlar::ui::commands::{CommandPalette, KeymapEditor, MenuSpec, dispatch, menu_bar};
+use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
 use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
 use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
+use ashlar::ui::form::{self, Field};
+use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
 use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
 use ashlar::ui::swatches::SwatchGrid;
+use ashlar::ui::tabs::{TabStrip, reorder};
 use ashlar::ui::toasts::{Toast, ToastLevel, Toasts};
 use ashlar::ui::tokens::{self, ThemeMode, Tokens};
 use ashlar::ui::tree::{TreeModel, TreeState, TreeView};
@@ -35,10 +38,12 @@ pub enum Page {
     Lists,
     Overlays,
     Commands,
+    Tabs,
+    Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Overlays, Page::Commands];
+    pub const ALL: [Page; 8] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -47,6 +52,8 @@ impl Page {
             Page::Lists => "Lists",
             Page::Overlays => "Overlays",
             Page::Commands => "Commands",
+            Page::Tabs => "Tabs",
+            Page::Settings => "Settings",
         }
     }
 }
@@ -168,6 +175,12 @@ pub struct Gallery {
     dialog_opener: Option<egui::Id>,
     pub toasts: Toasts,
     pub last_dialog: Option<DialogOutcome>,
+    pub font_size: usize,
+    pub font: ComboboxState,
+    pub filters_open: bool,
+    pub only_errors: bool,
+    context_spec: MenuSpec,
+    pub last_context: Option<String>,
     // commands
     pub commands: Vec<CommandInfo>,
     pub keymap: Keymap,
@@ -175,7 +188,18 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    // settings
+    pub settings_query: String,
+    pub launch_at_login: bool,
+    pub auto_update: bool,
+    pub appearance: usize,
+    pub sidebar_icons: bool,
+    pub project_name: String,
     revision: u64,
+    doc_tabs: Vec<String>,
+    doc_selected: usize,
+    many_tabs: Vec<String>,
+    many_selected: usize,
 }
 
 impl Default for Gallery {
@@ -183,6 +207,10 @@ impl Default for Gallery {
         Self::new()
     }
 }
+
+const FONT_SIZES: [&str; 5] = ["Small", "Medium", "Large", "Larger", "Largest"];
+
+const FONTS: [&str; 8] = ["Inter", "Iosevka", "JetBrains Mono", "Fira Code", "Source Serif", "Source Sans", "IBM Plex Mono", "Atkinson Hyperlegible"];
 
 const SWATCHES: [Color32; 16] = [
     Color32::from_rgb(0xef, 0x44, 0x44),
@@ -244,13 +272,41 @@ impl Gallery {
             dialog_opener: None,
             toasts: Toasts::new(),
             last_dialog: None,
+            font_size: 1,
+            font: ComboboxState::new(),
+            filters_open: false,
+            only_errors: false,
+            context_spec: MenuSpec {
+                menus: vec![Submenu {
+                    label: "Row".into(),
+                    enabled: true,
+                    role: None,
+                    children: vec![
+                        MenuNode::Item(Item::new("row.copy", "Copy").accelerator("Mod+C")),
+                        MenuNode::Item(Item::new("row.rename", "Rename")),
+                        MenuNode::Separator,
+                        MenuNode::Item(Item::new("row.delete", "Delete")),
+                    ],
+                }],
+            },
+            last_context: None,
             commands,
             keymap,
             palette: CommandPalette::new(),
             keymap_editor: KeymapEditor::new(),
             ran: Vec::new(),
             show_grid: true,
+            settings_query: String::new(),
+            launch_at_login: false,
+            auto_update: true,
+            appearance: 2,
+            sidebar_icons: true,
+            project_name: String::from("Untitled"),
             revision: 1,
+            doc_tabs: ["main.rs", "lib.rs", "Cargo.toml", "README.md"].map(String::from).to_vec(),
+            doc_selected: 0,
+            many_tabs: (1..=60).map(|i| format!("Scene {i}")).collect(),
+            many_selected: 30,
         }
     }
 
@@ -378,12 +434,55 @@ impl Gallery {
                 Page::Lists => self.lists(ui),
                 Page::Overlays => self.overlays(ui),
                 Page::Commands => self.commands_page(ui),
+                Page::Tabs => self.tabs_page(ui),
+                Page::Settings => self.settings(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
             self.run(&ctx, &id);
         }
         self.toasts.show(&ctx);
+    }
+
+    fn settings(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        SearchField::new("settings.search", &mut self.settings_query).hint("Search settings").width(280.0).show(ui);
+        ui.add_space(t.space.md);
+        let Gallery { settings_query, launch_at_login, auto_update, appearance, sidebar_icons, project_name, reduce_motion, .. } = self;
+        let reduced = *reduce_motion;
+        egui::ScrollArea::vertical().id_salt("gallery.settings").show(ui, |ui| {
+            ui.set_max_width(560.0);
+            form::filter(ui, "settings", settings_query, |f| {
+                f.section("general", "General", |s| {
+                    s.row("launch", "Launch at login")
+                        .description("Starts the app when you sign in.")
+                        .keywords(&["startup", "boot"])
+                        .bind(launch_at_login, false)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                    s.row("updates", "Check for updates")
+                        .description("Looks for a new version once a day.")
+                        .bind(auto_update, true)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                });
+                f.section("appearance", "Appearance", |s| {
+                    s.row("theme", "Theme")
+                        .description("Light, dark, or follow the system.")
+                        .keywords(&["dark mode", "colors"])
+                        .bind(appearance, 2)
+                        .control(|ui, id, v| Segmented::new(id, "Theme", &["Light", "Dark", "System"], v).show(ui));
+                    s.row("icons", "Sidebar icons")
+                        .bind(sidebar_icons, true)
+                        .control(|ui, id, on| Switch::new(id, "", on).reduced_motion(reduced).show(ui));
+                });
+            });
+            ui.add_space(t.space.md);
+            let error = project_name.trim().is_empty().then_some("A project needs a name.");
+            Field::new("settings.project", "Project name")
+                .required()
+                .description("Shown in the window title.")
+                .error(error)
+                .show(ui, |ui, _id| ui.add(egui::TextEdit::singleline(project_name).desired_width(280.0)));
+        });
     }
 
     fn record(&mut self, edit: Option<Edit>) {
@@ -643,6 +742,37 @@ impl Gallery {
         });
     }
 
+    fn tabs_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        section(ui, &t, "Closable, reorderable", |ui| {
+            let out =
+                TabStrip::new("tabs.documents", &self.doc_tabs, &mut self.doc_selected).label("Documents").closable(true).reorderable(true).show(ui);
+            if let Some(m) = out.moved {
+                reorder(&mut self.doc_tabs, &mut self.doc_selected, m);
+            }
+            if let Some(i) = out.closed
+                && i < self.doc_tabs.len()
+            {
+                self.doc_tabs.remove(i);
+                if self.doc_selected > i || self.doc_selected >= self.doc_tabs.len() {
+                    self.doc_selected = self.doc_selected.saturating_sub(1);
+                }
+            }
+            ui.add_space(t.space.sm);
+            match self.doc_tabs.get(self.doc_selected) {
+                Some(name) => ui.label(format!("Editing {name}. Arrows move, \u{2318}W closes, drag or \u{2318}\u{21e7}+arrow reorders.")),
+                None => ui.label("All tabs closed."),
+            };
+            if ui.button("Reset tabs").clicked() {
+                self.doc_tabs = ["main.rs", "lib.rs", "Cargo.toml", "README.md"].map(String::from).to_vec();
+                self.doc_selected = 0;
+            }
+        });
+        section(ui, &t, "Overflow: 60 tabs", |ui| {
+            TabStrip::new("tabs.many", &self.many_tabs, &mut self.many_selected).label("Scenes").show(ui);
+        });
+    }
+
     fn lists(&mut self, ui: &mut Ui) {
         let t = tokens::current(ui.ctx());
         let h = ui.available_height();
@@ -699,6 +829,32 @@ impl Gallery {
             if let Some(o) = self.last_dialog {
                 ui.label(format!("Last result: {o:?}"));
             }
+        });
+        section(ui, &t, "Select and combobox", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                Select::new("overlays.size", &FONT_SIZES, &mut self.font_size).label("Size").width(140.0).show(ui);
+                ui.label("Font");
+                Combobox::new("overlays.font", &FONTS, &mut self.font).label("Font").hint("Type to filter").width(200.0).show(ui);
+            });
+        });
+        section(ui, &t, "Popover, tooltip and context menu", |ui| {
+            ui.horizontal(|ui| {
+                let anchor = ashlar::ui::help(ui.button("Filters"), "Narrow the list down");
+                if anchor.clicked() {
+                    self.filters_open = !self.filters_open;
+                }
+                Popover::new("overlays.filters").show(&anchor, &mut self.filters_open, |ui| {
+                    ui.checkbox(&mut self.only_errors, "Only errors");
+                });
+                let row = ui.label("Right-click me");
+                if let Some(id) = menu::context(&row, &self.context_spec) {
+                    self.last_context = Some(id);
+                }
+                if let Some(id) = &self.last_context {
+                    ui.label(format!("Chose {id}"));
+                }
+            });
         });
         section(ui, &t, "Toasts", |ui| {
             ui.horizontal(|ui| {

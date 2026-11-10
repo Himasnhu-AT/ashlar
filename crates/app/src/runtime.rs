@@ -72,6 +72,8 @@ pub struct Launch {
     pub(crate) ready_file: Option<PathBuf>,
     /// The first present was recorded.
     pub(crate) presented: bool,
+    /// A scene to apply once the session is set up (`--scene`).
+    pub(crate) scene: Option<String>,
 }
 
 /// Which file dialog a command asked for.
@@ -334,7 +336,32 @@ impl<D: Document> Runtime<D> {
         if rt.launch.safe_mode {
             rt.modals.push(Modal::SafeMode);
         }
+        // with a command-line document, the scene waits for it (open_from_outside)
+        if rt.launch.open.is_none() {
+            rt.apply_launch_scene();
+        }
         rt
+    }
+
+    /// The `--scene` named at launch, once.
+    fn apply_launch_scene(&mut self) {
+        if let Some(name) = self.launch.scene.take()
+            && let Err(e) = self.apply_scene(&name)
+        {
+            log::error!("{e}");
+            self.toasts.error(e);
+        }
+    }
+
+    /// Run the scene called `name` ([`crate::App::scene`]) on the session. Its effects run on
+    /// the next frame.
+    pub fn apply_scene(&mut self, name: &str) -> Result<(), String> {
+        let shared = Arc::clone(&self.shared);
+        let Some(scene) = shared.scene(name) else {
+            return Err(format!("no scene `{name}` (scenes: {})", shared.scene_names().join(", ")));
+        };
+        let session = &mut self.session;
+        catch_unwind(AssertUnwindSafe(|| scene(session))).map_err(|p| format!("scene `{name}` panicked: {}", panic_text(p.as_ref())))
     }
 
     fn start_autosave(&mut self) {
@@ -443,6 +470,10 @@ impl<D: Document> Runtime<D> {
         }
         self.started = true;
         devtools::install(ctx);
+        // without eframe's AccessKit adapter no screen reader can turn AccessKit on
+        if !cfg!(feature = "accesskit") {
+            devtools::set_platform_accesskit(ctx, false);
+        }
         self.inbox.set_ctx(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
         // OS accent, contrast and reduced motion; tokens the setup below installs win
@@ -588,6 +619,7 @@ impl<D: Document> Runtime<D> {
             && let Some(path) = self.launch.open.take()
         {
             self.run_ui_command(ctx, "file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+            self.apply_launch_scene();
         }
         let skipped = files.count();
         if skipped > 0 {
@@ -1243,7 +1275,7 @@ impl<D: Document> Runtime<D> {
             return;
         }
         let info = self.info();
-        let mut queue = UiQueue::default();
+        let mut queue = UiQueue { scenes: !self.shared.scenes.is_empty(), ..UiQueue::default() };
         for req in reqs {
             let mut bound = self.shared.registry.bind(&mut self.session);
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
@@ -1361,6 +1393,17 @@ impl<D: Document> Runtime<D> {
                 }
                 req.ok(json!({"paused": self.clock.is_paused(), "time": self.clock.time(now)}));
             }
+            ashlar_control::UI_SCENE => match p.get("name").and_then(Value::as_str) {
+                None => req.ok(json!({"scenes": self.shared.scene_names()})),
+                Some(name) => match self.apply_scene(name) {
+                    Ok(()) => {
+                        self.apply_effects(ctx);
+                        wake::wake(ctx, Reason::CONTROL);
+                        req.ok(json!({"scene": name}));
+                    }
+                    Err(e) => req.fail(e),
+                },
+            },
             "app.logs" => {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200).min(crate::logging::RING_LINES as u64) as usize;
                 let level = p.get("level").and_then(Value::as_str).and_then(crate::logging::level_of).unwrap_or(log::Level::Trace);
@@ -1508,19 +1551,22 @@ impl<D: Document> eframe::App for EframeApp<D> {
 #[cfg(not(target_arch = "wasm32"))]
 struct Args {
     control: Option<u16>,
+    scene: Option<String>,
     safe_mode: bool,
     open: Option<PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_args(env_prefix: &str) -> Args {
-    let mut a = Args { control: None, safe_mode: false, open: None };
+    let mut a = Args { control: None, scene: None, safe_mode: false, open: None };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--control" => a.control = it.next().and_then(|p| p.parse().ok()),
             s if s.starts_with("--control=") => a.control = s.trim_start_matches("--control=").parse().ok(),
             "--safe-mode" => a.safe_mode = true,
+            "--scene" => a.scene = it.next(),
+            s if s.starts_with("--scene=") => a.scene = Some(s.trim_start_matches("--scene=").to_string()),
             s if !s.starts_with('-') && a.open.is_none() => a.open = Some(PathBuf::from(s)),
             _ => {}
         }
@@ -1646,6 +1692,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         window_at: None,
         ready_file,
         presented: false,
+        scene: args.scene,
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

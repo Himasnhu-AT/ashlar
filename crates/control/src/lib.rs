@@ -22,6 +22,10 @@ mod methods;
 mod protocol;
 mod server;
 
+/// `ui.scene {name?}`: apply one of the app's named scenes, or with no name list them
+/// (`{scenes: [..]}`). Answered only by apps that declare scenes.
+pub const UI_SCENE: &str = "ui.scene";
+
 pub use client::{Client, MAX_REPLY};
 pub use clock::{APP_CLOCK, ClockOp, MAX_STEP_MS};
 pub use explain::{explain, explain_reply};

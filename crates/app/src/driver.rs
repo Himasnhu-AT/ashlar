@@ -52,6 +52,8 @@ pub struct Driver<D: Document> {
     pixels_per_point: Option<f32>,
     /// What screenshots are rendered with.
     renderer: Renderer,
+    /// The motion gate's recorder while [`Driver::record`] runs.
+    recorder: Option<ashlar_ui::motion_gate::MotionRecorder>,
 }
 
 impl<D: Document> Driver<D> {
@@ -71,6 +73,8 @@ impl<D: Document> Driver<D> {
                 w.lock().unwrap_or_else(PoisonError::into_inner).pending.push((info.delay, info.current_cumulative_pass_nr));
             }
         });
+        // no window, so no screen reader: devtools may switch AccessKit off after a request
+        ashlar_ui::devtools::set_platform_accesskit(&ctx, false);
         Driver {
             runtime,
             ctx,
@@ -88,6 +92,7 @@ impl<D: Document> Driver<D> {
             hidden: false,
             pixels_per_point: None,
             renderer,
+            recorder: None,
         }
         .install_renderer()
     }
@@ -261,7 +266,28 @@ impl<D: Document> Driver<D> {
         }
         // requests made during the passes just run are in `repaint_delay`; keep later ones
         self.wakes.lock().unwrap_or_else(PoisonError::into_inner).pending.retain(|(_, nr)| *nr >= done);
+        if let Some(rec) = &self.recorder {
+            rec.frame(&self.ctx, &out);
+        }
         out
+    }
+
+    /// Run `f` while recording motion for the motion gate: values animated through
+    /// `ashlar_ui::motion` and, each frame, the automation elements' rects and the frames asked
+    /// for. Check the result with [`MotionRecorder::check`](ashlar_ui::motion_gate::MotionRecorder::check).
+    ///
+    /// ```rust,ignore
+    /// let rec = d.record(|d| drop(d.run_ui("click overlays.open\nwait 1")));
+    /// let report = rec.check(&MotionRules::default());
+    /// assert!(report.is_clean(), "{report}");
+    /// ```
+    pub fn record(&mut self, f: impl FnOnce(&mut Self)) -> ashlar_ui::motion_gate::MotionRecorder {
+        let rec = ashlar_ui::motion_gate::MotionRecorder::install(&self.ctx);
+        self.recorder = Some(rec.clone());
+        f(self);
+        self.recorder = None;
+        ashlar_ui::motion_gate::MotionRecorder::uninstall(&self.ctx);
+        rec
     }
 
     /// A frame of a hidden window: `logic` only, and the viewport commands it gave.
@@ -384,6 +410,11 @@ impl<D: Document> Driver<D> {
             && o.contains_key("png")
         {
             o.insert("renderer".into(), Value::from(self.renderer.last_used()));
+            if let Some((adapter, backend)) = self.renderer.adapter_parts() {
+                o.insert("adapter".into(), Value::from(adapter));
+                o.insert("backend".into(), Value::from(backend));
+            }
+            o.insert("scale".into(), Value::from(self.pixels_per_point.unwrap_or(1.0)));
         }
         r
     }
@@ -399,6 +430,45 @@ impl<D: Document> Driver<D> {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn run_ui(&mut self, script: &str) -> Result<ashlar_debug::Report, ashlar_debug::ScriptError> {
         ashlar_debug::run_script(self, "script", script)
+    }
+
+    /// Apply the app's scene `name` ([`crate::App::scene`]) through the `ui.scene` control
+    /// method, then run the frames it asks for.
+    pub fn scene(&mut self, name: &str) -> Result<(), String> {
+        self.call(ashlar_control::UI_SCENE, serde_json::json!({"name": name}))?;
+        self.settle(60);
+        Ok(())
+    }
+
+    /// Compare a screenshot of the whole window with the golden snapshot `name` in
+    /// `tests/snapshots` (see [`ashlar_debug::snapshot`]): exact by default; on a mismatch it
+    /// writes `<name>-new.png` and `<name>-diff.png` and returns the reason.
+    /// `ASHLAR_UPDATE_SNAPSHOTS=1` records the baseline instead. A baseline from another adapter,
+    /// or a run with no GPU renderer, is skipped with a printed note.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn assert_snapshot(&mut self, name: &str) -> Result<ashlar_debug::SnapshotOutcome, String> {
+        self.check_snapshot(name, &ashlar_debug::Snapshots::from_env(), None)
+    }
+
+    /// [`Driver::assert_snapshot`] with explicit settings, of `target` (a control-protocol target,
+    /// e.g. `json!({"id": "list"})`) or the whole window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn check_snapshot(
+        &mut self,
+        name: &str,
+        snapshots: &ashlar_debug::Snapshots,
+        target: Option<Value>,
+    ) -> Result<ashlar_debug::SnapshotOutcome, String> {
+        let mut p = serde_json::json!({});
+        if let Some(t) = target {
+            p["target"] = t;
+        }
+        let shot = self.call("ui.screenshot", p)?;
+        let out = snapshots.check(name, &shot)?;
+        if let ashlar_debug::SnapshotOutcome::Skipped(note) = &out {
+            eprintln!("note: {note}");
+        }
+        Ok(out)
     }
 }
 
@@ -498,6 +568,53 @@ mod tests {
         assert_eq!((s.window, s.pass.window, s.tessellate.window, s.frame_cpu.window), (1, 1, 1, 1));
         assert!(s.frame_cpu.max_ms >= s.pass.max_ms && s.frame_cpu.max_ms >= s.tessellate.max_ms, "{s:?}");
         assert!(s.pass.max_ms >= s.max_ms, "the pass holds the UI: {s:?}");
+    }
+
+    /// A driver whose view registers a `box` element at `x(time)` and asks for frames while
+    /// `busy(time)`.
+    fn moving(x: fn(f64) -> f32, busy: fn(f64) -> bool) -> Driver<i64> {
+        use ashlar_ui::automation::{self, Details, Role};
+        let app = App::<i64>::new("drivertest", "0.0.0").view(move |ui, _cx| {
+            let t = ui.input(|i| i.time);
+            let rect = egui::Rect::from_min_size(pos2(x(t), 40.0), vec2(60.0, 20.0));
+            automation::register_fmt(ui, rect, format_args!("box"), "Box", Role::Group, true, Details::default());
+            if busy(t) {
+                ashlar_ui::wake::wake(ui.ctx(), ashlar_ui::wake::Reason::ANIMATION);
+            }
+        });
+        Driver::new(app.runtime())
+    }
+
+    #[test]
+    fn the_motion_gate_catches_a_teleport_and_frames_that_never_stop() {
+        use ashlar_ui::motion_gate::{MotionRules, Rule};
+        let rules = MotionRules::default();
+        // slides 2 pt a frame, then teleports to the end
+        let mut d = moving(|t| if t < 0.1 { (t * 240.0) as f32 } else { 300.0 }, |t| t < 0.1);
+        let report = d
+            .record(|d| {
+                d.advance(1.0);
+            })
+            .check(&rules);
+        assert_eq!(report.of(Rule::Pop).count(), 1, "{report}");
+        assert_eq!(report.of(Rule::Idle).count(), 0, "{report}");
+        // a smooth slide that stops passes
+        let mut d = moving(|t| (t.min(0.25) * 240.0) as f32, |t| t < 0.25);
+        let report = d
+            .record(|d| {
+                d.advance(1.0);
+            })
+            .check(&rules);
+        assert!(report.is_clean(), "{report}");
+        // asking for frames forever fails the idle check
+        let mut d = moving(|_| 10.0, |_| true);
+        let report = d
+            .record(|d| {
+                d.advance(0.5);
+            })
+            .check(&rules);
+        assert_eq!(report.of(Rule::Idle).count(), 1, "{report}");
+        assert!(report.to_string().contains("animation"), "{report}");
     }
 
     #[test]

@@ -312,6 +312,14 @@ fn app_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, V
             ),
             Access::Any,
         ),
+        (
+            "ui_scene",
+            ashlar_control::UI_SCENE,
+            "Scene",
+            "Put the app in one of its named starting states (a fixture document, a long list, an error banner…), for a repro or a screenshot. With no `name`, lists the scenes: {scenes: [..]}. Replies {scene}.",
+            obj(json!({"name": {"type": "string", "description": "The scene to apply; leave out to list them"}}), &[]),
+            Access::Any,
+        ),
     ]
 }
 
@@ -374,7 +382,7 @@ pub fn snapshot_result(r: Reply, with_elements: bool) -> ToolResult {
     }
 }
 
-/// The UI tools (and `app_stats`/`app_logs`/`ui_clock`) for the methods a backend answers: a tool is listed
+/// The UI tools (and `app_stats`/`app_logs`/`ui_clock`/`ui_scene`) for the methods a backend answers: a tool is listed
 /// only when `app.version` reports its method.
 pub fn ui_tools(methods: &[String]) -> Vec<Value> {
     method_table().into_iter().filter(|t| methods.iter().any(|m| m == t.1)).map(|(n, _, title, d, s, ro)| tool(n, title, d, s, ro)).collect()
@@ -392,7 +400,7 @@ pub fn custom_tool(name: &str, title: &str, description: &str, schema: Value, ac
 }
 
 /// The control method behind a passthrough tool name (`ui_*`, `screenshot`, `app_stats`,
-/// `app_logs`, `ui_clock`).
+/// `app_logs`, `ui_clock`, `ui_scene`).
 pub fn ui_method(tool: &str) -> Option<&'static str> {
     method_table().into_iter().find(|t| t.0 == tool).map(|t| t.1)
 }
@@ -482,6 +490,16 @@ mod tests {
     }
 
     #[test]
+    fn ui_scene_is_listed_only_for_apps_with_scenes() {
+        let names = |m: &[&str]| -> Vec<String> {
+            let m: Vec<String> = m.iter().map(|s| s.to_string()).collect();
+            ui_tools(&m).iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect()
+        };
+        assert!(!names(&["app.stats"]).contains(&"ui_scene".to_string()));
+        assert!(names(&["app.stats", "ui.scene"]).contains(&"ui_scene".to_string()));
+    }
+
+    #[test]
     fn every_ui_tool_maps_to_a_ui_method() {
         for (name, method, ..) in ui_table() {
             assert_eq!(ui_method(name), Some(method));
@@ -489,7 +507,7 @@ mod tests {
         }
         for (name, method, ..) in app_table() {
             assert_eq!(ui_method(name), Some(method));
-            assert!(method.starts_with("app."), "{method}");
+            assert!(method.starts_with("app.") || method == ashlar_control::UI_SCENE, "{method}");
         }
         assert_eq!(ui_tools(&[]).len(), 0);
         assert_eq!(ui_tools(&["app.stats".into()]).len(), 1);

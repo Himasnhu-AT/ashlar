@@ -16,6 +16,34 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - `cargo xtask launch` measures `examples/hello` launch time over 9 launches (p50/p95), and
   `cargo xtask launch --memory` its idle RSS and physical footprint (macOS). Manual, opens windows.
 - `App::frame_latency(frames)`: how many frames the GPU may queue ahead of the screen (1 to 3).
+- Motion and jank gate for tests: `ashlar_ui::motion_gate::MotionRecorder` records values
+  animated through `ashlar_ui::motion` and per-frame automation rects (`Driver::record` does both
+  for an app), and `check(&MotionRules)` flags overshoot of opacity and colour, reversals without
+  bounce, pops, flicker and frames requested after everything settled, with a per-id allow-list.
+  The gallery's dialog, toast, theme crossfade and tab switches pass it.
+- `ashlar_ui::overlay`: `Select` (a button with a list of options), `Combobox` (a text field whose
+  options are filtered with the command palette's fuzzy matcher; input-method composition never
+  chooses), and `Popover` (anchored, flips above at the window edge, Escape or an outside click
+  closes, focus moves in and returns). Option lists are virtualized, fade with the `enter_exit`
+  motion token and register `<id>.option.<n>` with ListBox/option roles.
+- `ashlar_ui::help(response, text)`: a tooltip after the new `motion.tooltip_delay` token, also
+  given to screen readers as the control's description.
+- `ashlar_ui::commands::menu::context(response, &spec)`: a context menu built from a `MenuSpec`.
+- Automation roles `ComboBox`, `ListBox`, `ListOption` and `Tooltip`.
+- `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
+  modified marker and reset button, a filter that hides non-matching rows and empty sections,
+  highlights matches and shows "No settings match", and `Field` with a required marker and an
+  announced error. Row controls get automation ids `<section>.<row>`; strings come from
+  `FormLabels`. The gallery has a Settings page.
+- Golden snapshots: `Driver::assert_snapshot(name)` and the `.ui` line `assert screenshot <name>
+  [target] [--tolerance channel=N,pixels=N]` compare with `tests/snapshots/<name>.png`, exact by
+  default; a mismatch writes `-new.png` and a magenta `-diff.png`; `ASHLAR_UPDATE_SNAPSHOTS=1`
+  records baselines with a `.meta.json` (adapter, backend, scale); a baseline from another adapter
+  is skipped with a note. Screenshot replies from a `Driver` now carry `adapter`, `backend` and
+  `scale` (IMP-4.8).
+- Named scenes: `App::scene(name, |s| ..)`, `--scene NAME` (in a window or `--headless`),
+  `--list-scenes`, `Driver::scene`, the `ui.scene` control method and the MCP tool `ui_scene`
+  (listed only for apps with scenes) (IMP-4.9).
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.
@@ -63,6 +91,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   blends two token sets.
 - `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
   by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
+- `ashlar_ui::tabs::TabStrip`: a standalone tab strip with one Tab stop (arrows, Home and End
+  move the selection), close by button, middle-click or ⌘W, an overflow menu for tabs that do not
+  fit, drag or ⌘⇧ + arrow reordering (`tabs::reorder` applies a move), the animated selection
+  indicator, an AccessKit tab list with positioned tabs, and automation ids `<id>.tab.<n>`.
+  The gallery has a Tabs page.
+- `ashlar_ui::tabs::Tab::automation`: registers a tab under a dotted automation id.
 - `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
   its exit settles, then `None`), entering and leaving along a token pair as an opacity.
 - `ashlar_ui::code_view::CodeView`: a read-only code view with virtualized lines (O(visible) per
@@ -124,6 +158,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
   window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
+- `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
+  arrow keys, an AccessKit tab list, and the animated selection underline.
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
   0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
   change at once when egui's `animation_time` is 0, which reduced motion sets. Visual regression
@@ -205,6 +241,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
+  `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
+  a screen reader's tree on every later frame (a caret-blink frame in the notes app: 272 allocations
+  instead of 652). This happens only where no screen reader can exist (a `Driver` or `--headless`
+  run, or a build without the `accesskit` feature); in a window it stays on, and
+  `devtools::set_platform_accesskit` sets which applies.
 - `Curve::Tween` started from rest follows its easing exactly: a linear tween is linear (it used to
   start at zero velocity, so a 2 s linear 0→100 tween read ≈12 at 0.525 s instead of 26.25).
   Retargets mid-motion still keep velocity continuous.

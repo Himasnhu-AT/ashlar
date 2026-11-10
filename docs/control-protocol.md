@@ -94,6 +94,7 @@ and hands the debugger methods (next section) to `ashlar_ui::devtools`:
 | `app.stats` | `{reset?}` | frame times, passes, jobs, `wakes` (frames and requests per reason) |
 | `app.logs` | `{limit?, level?}` | `{lines: [{unix, level, target, message}]}` |
 | `app.clock` | one of `{pause: true}`, `{step_ms}`, `{resume: true}`, or `{}` to read | `{paused, time}` |
+| `ui.scene` | `{name}`, or `{}` to list | `{scene}` / `{scenes: [..]}`; only apps that declare scenes ([`App::scene`](debugging-uis.md#named-scenes)) list it |
 
 `app.clock` holds the time the app's frames see, to look at an animation at an exact moment.
 `pause` freezes it at the current frame's time; `step_ms` (0 < ms ≤ 60000; pauses first) moves the
@@ -254,10 +255,11 @@ ref string (`"@e3"`, `"e3"`), `"id=…"`, `"text=…"`, or an object as in the d
 | `app_stats {reset?}` | `app.stats` |
 | `app_logs {limit?, level?}` | `app.logs` (`level`: error, warn, info, debug or trace) |
 | `ui_clock {pause?, step_ms?, resume?}` | `app.clock` |
+| `ui_scene {name?}` | `ui.scene` |
 | `docs_categories {category?}`, `list_docs {category?, query?, recursive?}`, `read_doc {path}` | the app's documentation library (no control method) |
 | `save_doc {path, content, replace_builtin?}`, `append_doc {path, text}`, `delete_doc {path}` | the user's own pages, when the server has a user folder |
 
-`screenshot`, the `ui_*` tools (`ui_clock` included) and `app_stats`/`app_logs` are listed only when the backend's
+`screenshot`, the `ui_*` tools (`ui_clock` and `ui_scene` included) and `app_stats`/`app_logs` are listed only when the backend's
 `app.version` reports their method, so an agent never sees a tool the app cannot serve. The
 documentation tools are listed when the server has a library or a user folder. With
 `ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its real input
