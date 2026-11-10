@@ -659,6 +659,15 @@ impl<D: Document> Runtime<D> {
         if self.cache.key == Some(key) {
             return;
         }
+        // only the document changed (typing): what the menus show moves only if a command's
+        // enabled state did, and checking that is far cheaper than rebuilding every info
+        if let Some(old) = self.cache.key
+            && (old.1, old.2, old.3) == (key.1, key.2, key.3)
+            && self.enabled_unchanged()
+        {
+            self.cache.key = Some(key);
+            return;
+        }
         let mut infos = self.shared.registry.infos(&self.session);
         for info in &mut infos {
             let keys = self.keymap.keys_for(&info.id);
@@ -672,6 +681,16 @@ impl<D: Document> Runtime<D> {
         if let Some(m) = &mut self.native_menu {
             m.update(&self.cache.infos);
         }
+    }
+
+    /// Every command's enabled state (and reason) is what the cached infos say.
+    fn enabled_unchanged(&self) -> bool {
+        let specs = self.shared.registry.specs();
+        specs.len() == self.cache.infos.len()
+            && specs.iter().zip(&self.cache.infos).all(|(spec, info)| match (spec.enabled)(&self.session) {
+                Ok(()) => info.enabled,
+                Err(reason) => !info.enabled && info.disabled_reason.as_deref() == Some(reason.as_str()),
+            })
     }
 
     /// Run a command the user chose (menu, key, palette, button): errors become toasts.
@@ -1442,5 +1461,26 @@ mod tests {
         assert_eq!(human_age(600), "10 min");
         assert_eq!(human_age(7200), "2 h");
         assert_eq!(human_age(300_000), "3 days");
+    }
+
+    #[test]
+    fn menus_follow_enabled_state_but_typing_rebuilds_nothing() {
+        let mut rt = crate::App::<i64>::new("runtimetest", "0.0.0").runtime();
+        let undo = |rt: &Runtime<i64>| rt.cache.infos.iter().find(|i| i.id == "app.undo").map(|i| i.enabled);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "nothing to undo yet");
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(true), "an edit enables Undo");
+        assert_eq!(rt.cache.menu.find("app.undo").map(|i| i.enabled), Some(true), "and the menu shows it");
+        let seq = rt.cache.seq;
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(rt.cache.seq, seq, "another edit changes no command's state: the infos stay");
+        assert_eq!(rt.cache.key.map(|k| k.0), Some(rt.session().revision()), "and are current");
+        rt.session_mut().undo();
+        rt.session_mut().undo();
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "undoing everything disables Undo again");
     }
 }

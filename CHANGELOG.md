@@ -10,6 +10,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-ui`: `cache::label` (a `ui.label` with its galley cached under a key: no layout and
+  no `String` on steady frames), `cache::row_label` (the same, not selectable, for text inside a
+  clickable row) and `cache::button_text` (a button's text as a cached galley).
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
   with no window, on a wgpu device with no surface, at the driver's display scale. Without an
   adapter it falls back to the grey image. Screenshot replies from a `Driver` say which was
@@ -35,6 +38,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- Fewer allocations per frame (IMP-2.16): a frame woken only by a caret blink in the notes app
+  makes 550 allocations instead of 958, a scroll frame 345 instead of 472, a keystroke 1,935
+  instead of 3,720. The menu bar and the notes list draw cached galleys, and an edit that changes
+  no command's enabled state no longer rebuilds every command's info and the menus.
 - `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
   asks for a `document` frame: the frame that ran it already shows the change. The runtime also
   stops copying and comparing the view state and formatting the window title on frames that did
@@ -93,6 +100,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `notes` example: a click on a note's title in the list selects the note (the title was
+  selectable text that took the click).
 - `native-menu`: picks in the OS menu bar no longer run while a dialog (such as "Save changes?") or
   the command palette is open.
 - ⌘Z / Ctrl+Z in a text field undoes the text, not the document. Text-editing shortcuts (undo,

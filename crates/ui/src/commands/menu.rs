@@ -25,7 +25,11 @@ pub fn menu_bar(ui: &mut Ui, spec: &MenuSpec, platform: Platform) -> Option<Stri
     egui::MenuBar::new().ui(ui, |ui| {
         for (i, menu) in spec.menus.iter().enumerate() {
             let r = ui
-                .add_enabled_ui(menu.enabled, |ui| ui.menu_button(menu.label.as_str(), |ui| menu_items(ui, &menu.children, platform, &mut chosen, 1)))
+                .add_enabled_ui(menu.enabled, |ui| {
+                    ui.menu_button(cache::button_text(ui, ("ashlar_ui::menu-bar", i), &menu.label), |ui| {
+                        menu_items(ui, &menu.children, platform, &mut chosen, 1)
+                    })
+                })
                 .inner;
             automation::register_fmt(ui, r.response.rect, format_args!("menu.{i}"), &menu.label, Role::Menu, menu.enabled, Details::default());
         }
