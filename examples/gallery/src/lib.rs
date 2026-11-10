@@ -731,12 +731,9 @@ impl Gallery {
                         .max_height(h * 6.0)
                         .stripes(true)
                         .fling(true)
-                        .show(
-                        ui,
-                        |ui, row| {
+                        .show(ui, |ui, row| {
                             ui.label(format!("Row {}", row.index + 1));
-                        },
-                    );
+                        });
                 });
             });
         });

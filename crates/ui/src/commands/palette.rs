@@ -146,7 +146,8 @@ impl CommandPalette {
             if self.focus_pending {
                 SearchField::focus(ui, "palette.search");
             }
-            let search = SearchField::new("palette.search", &mut self.query).label(&crate::labels::current(ui.ctx()).search.palette).hint(&self.hint).show(ui);
+            let search =
+                SearchField::new("palette.search", &mut self.query).label(&crate::labels::current(ui.ctx()).search.palette).hint(&self.hint).show(ui);
             if search.response.has_focus() {
                 self.focus_pending = false;
             } else if search.response.lost_focus() && !enter {
