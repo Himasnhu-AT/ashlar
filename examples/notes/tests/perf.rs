@@ -12,6 +12,13 @@ use ashlar::fs::AppDirs;
 use ashlar::prelude::*;
 use notes::Notes;
 
+#[path = "../../../crates/ui/tests/support/allocs.rs"]
+mod allocs;
+
+/// Counts allocations for the `*allocs*` metrics (this test binary only).
+#[global_allocator]
+static GLOBAL: &stats_alloc::StatsAlloc<std::alloc::System> = &stats_alloc::INSTRUMENTED_SYSTEM;
+
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_first_frame() {
@@ -217,4 +224,99 @@ fn perf_live_resize() {
         }));
     }
     println!("bench: resize_frame_p95 {:.3} ms", p95(cpu));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Allocation gate (IMP-1.2). The counts are process-wide, so run with --test-threads=1.
+// ---------------------------------------------------------------------------------------------
+
+/// Allocations a frame woken only by a timer (the caret blink of a focused field, nothing else
+/// changing) may make. Measured at 954 on 2026-11-10 (a bare egui frame with a focused field makes
+/// 29; about 470 are the visible list rows, the rest the app's chrome), plus 5%. Lower it as
+/// IMP-2.x removes per-frame work.
+const IDLE_WAKE_FRAME_ALLOCS: usize = 1_000;
+
+/// Wheel `steps` times over the list, 120 pt per step, reversing every 150 steps.
+fn scroll_list(d: &mut Driver<Notes>, steps: u32) {
+    let over_list = egui::pos2(140.0, 400.0);
+    for i in 0..steps {
+        d.push_event(egui::Event::PointerMoved(over_list));
+        let dy = if (i / 150) % 2 == 0 { -120.0 } else { 120.0 };
+        d.push_event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        d.advance(1.0 / 60.0);
+    }
+}
+
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_allocs_scroll_100k() {
+    let (mut d, _dir) = with_notes(100_000);
+    d.pixels_per_point(2.0);
+    d.call("engine.execute", json!({"command": "note.select", "params": {"id": 50}})).unwrap();
+    d.settle(20);
+    scroll_list(&mut d, 300); // warm up: down and back
+    let frames0 = d.frames();
+    let ((), a) = allocs::count(|| scroll_list(&mut d, 600));
+    let frames = usize::try_from(d.frames() - frames0).unwrap();
+    assert!(frames >= 600, "every scroll step drew a frame ({frames} frames)");
+    println!("bench: allocs_per_frame_scroll_100k {} n", a.count / frames);
+    println!("bench: bytes_per_frame_scroll_100k {} B", a.bytes / frames);
+}
+
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_allocs_idle_wake_frame() {
+    let (mut d, _dir) = with_notes(100_000);
+    // a focused field: its caret blink is the only thing that wakes the loop
+    d.call("ui.click", json!({"id": "notes.search"})).unwrap();
+    d.settle(20);
+    assert!(d.ctx().egui_wants_keyboard_input(), "the search field has the keyboard");
+    d.advance(2.0); // warm up
+    let mut per_frame = Vec::new();
+    for _ in 0..200 {
+        let (frames, a) = allocs::count(|| d.advance(0.05));
+        if frames == 1 {
+            per_frame.push(a.count);
+        }
+    }
+    assert!(per_frame.len() >= 5, "the caret woke the loop ({} single-frame steps in 10 s)", per_frame.len());
+    let max = per_frame.iter().copied().max().unwrap_or(0);
+    let mean = per_frame.iter().sum::<usize>() as f64 / per_frame.len() as f64;
+    println!("bench: allocs_per_idle_wake_frame {max} n");
+    println!("idle wake frames: {} measured, mean {mean:.1} allocs, max {max}", per_frame.len());
+    assert!(max <= IDLE_WAKE_FRAME_ALLOCS, "a frame woken only by a timer allocated {max} times (gate {IDLE_WAKE_FRAME_ALLOCS})");
+}
+
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_allocs_typing_with_query_100k() {
+    let (mut d, _dir) = with_notes(100_000);
+    d.call("ui.click", json!({"id": "notes.search"})).unwrap();
+    d.call("ui.type", json!({"text": "note 9"})).unwrap();
+    d.call("engine.execute", json!({"command": "note.select", "params": {"id": 9}})).unwrap();
+    d.settle(20);
+    d.call("ui.click", json!({"id": "notes.body"})).unwrap();
+    d.call("ui.key", json!({"key": "End"})).unwrap();
+    d.settle(20);
+    let typed = " and some more words typed";
+    let mut counts = Vec::new();
+    let mut bytes = 0;
+    for c in typed.chars() {
+        d.push_event(egui::Event::Text(c.to_string()));
+        let (_, a) = allocs::count(|| d.settle(10));
+        counts.push(a.count);
+        bytes += a.bytes;
+    }
+    let n = counts.len();
+    counts.sort_unstable();
+    println!("bench: keystroke_allocs {} n", counts.iter().sum::<usize>() / n);
+    println!("bench: keystroke_alloc_bytes {} B", bytes / n);
+    println!("keystroke allocs: min {} max {}", counts[0], counts[n - 1]);
+    let (_, body) = note_text(&mut d, 9);
+    assert!(body.ends_with(typed), "the keystrokes reached the note ({body:?})");
 }
