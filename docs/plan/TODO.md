@@ -46,7 +46,7 @@ a task's state.
 | IMP-2.10 | Idle memory | done (wt/launch, 4356a62) |
 | IMP-2.11 | Launch time | dropped (eframe 0.36 already creates the window hidden until the first paint) |
 | IMP-2.12 | Per-frame JSON log | done (61094b0) |
-| IMP-2.13 | Telemetry incident rules | todo |
+| IMP-2.13 | Telemetry incident rules | done (wt/tel) |
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | done (b9070cb) |

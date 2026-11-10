@@ -85,6 +85,14 @@ fn perf(rng: &mut Rng) -> Perf {
         startup_ms: rng.maybe(|rng| rng.number() as u32),
         counters: (0..rng.below(4)).map(|_| (rng.text(), rng.number())).collect(),
         gauges: (0..rng.below(4)).map(|_| (rng.text(), rng.float())).collect(),
+        incidents: (0..rng.below(4))
+            .map(|i| Incident {
+                rule: [IncidentRule::LongFrames, IncidentRule::Stall, IncidentRule::MemoryGrowth][i as usize % 3],
+                at_ms: rng.number(),
+                count: rng.number() as u32,
+                value: rng.number(),
+            })
+            .collect(),
     }
 }
 
