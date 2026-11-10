@@ -10,7 +10,7 @@ a task's state.
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
-| IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | doing (wt-rowuse) |
+| IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | done (9744596) |
 | IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
 | IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
@@ -26,6 +26,7 @@ a task's state.
 | IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | done for size (4e91720); idle memory probe moved to IMP-2.10 |
 | IMP-1.8 | Launch to first present | done (wt/launch, 4356a62) |
+| IMP-1.10 | Allocation counter is per process: `perf_allocs_idle_wake_frame` fails when perf tests run in parallel (1,823 vs 272 alone). `cargo xtask bench` uses one thread, so the gate holds; make the count per thread or serialise | todo |
 | IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
 
 ## Phase 2: performance
@@ -46,7 +47,7 @@ a task's state.
 | IMP-2.13 | Telemetry incident rules | todo |
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
-| IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | doing (wt-rowuse) |
+| IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | done (b9070cb) |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
 
@@ -86,7 +87,7 @@ a task's state.
 | IMP-5.3 | List and tree accessibility and selection | done (b2775e5, fix 9bc416c) |
 | IMP-5.4 | Markdown v2 | doing (wt-md2) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | done (4473fe0, c7311b4) |
-| IMP-5.6 | Diff view | doing (wt-diff) |
+| IMP-5.6 | Diff view | done (b0de2c5) |
 | IMP-5.7 | Chat kit | doing (wt-chat) |
 | IMP-5.8 | Settings form pattern | done (de225b3) |
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | done (5885b46) |
@@ -109,9 +110,9 @@ a task's state.
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
-| IMP-6.4 | Window placement and viewport hook | todo |
-| IMP-6.5 | Parented, non-blocking file dialogs | todo |
-| IMP-6.6 | Notifications | todo |
+| IMP-6.4 | Window placement and viewport hook | doing (wt-window) |
+| IMP-6.5 | Parented, non-blocking file dialogs | doing (wt-window) |
+| IMP-6.6 | Notifications | doing (wt-notify) |
 | IMP-6.7 | Dock Quit, logout and shutdown | todo |
 | IMP-6.8 | Web target gate | doing (gate and warnings done 766bdf8; web example and DOM error todo) |
 | IMP-6.9 | Honest launch timing and ready signal | done (wt/launch, 4356a62) |
