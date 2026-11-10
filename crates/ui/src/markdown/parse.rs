@@ -84,12 +84,12 @@ pub(super) struct Doc {
 
 /// Split a document into blocks.
 pub fn parse(md: &str) -> Vec<MdBlock> {
-    parse_doc(md).blocks
+    parse_doc(md, false).blocks
 }
 
-fn flush(para: &mut Vec<&str>, out: &mut Vec<MdBlock>, ends: &mut Vec<usize>, end: usize) {
+fn flush(para: &mut Vec<&str>, out: &mut Vec<MdBlock>, ends: &mut Vec<usize>, end: usize, repair: bool) {
     if !para.is_empty() {
-        out.push(MdBlock::Paragraph(inline(&join_lines(para))));
+        out.push(MdBlock::Paragraph(inline_with(&join_lines(para), repair)));
         ends.push(end);
         para.clear();
     }
@@ -102,7 +102,7 @@ fn flush(para: &mut Vec<&str>, out: &mut Vec<MdBlock>, ends: &mut Vec<usize>, en
 /// complete (followed by a newline): appended text only changes the last, incomplete line and
 /// adds lines. Every block starts with no open paragraph, so parsing from the line after a block
 /// gives what a full parse gives.
-pub(super) fn parse_doc(md: &str) -> Doc {
+pub(super) fn parse_doc(md: &str, repair: bool) -> Doc {
     let (md, rest) = if md.len() > MAX_BYTES {
         let mut end = MAX_BYTES;
         while !md.is_char_boundary(end) {
@@ -137,11 +137,11 @@ pub(super) fn parse_doc(md: &str) -> Doc {
     while let Some(&line) = lines.get(i) {
         i += 1;
         if line.trim().is_empty() {
-            flush(&mut para, &mut out, &mut ends, para_end);
+            flush(&mut para, &mut out, &mut ends, para_end, false);
             continue;
         }
         if let Some((f, lang)) = fence(line) {
-            flush(&mut para, &mut out, &mut ends, para_end);
+            flush(&mut para, &mut out, &mut ends, para_end, false);
             let mut body: Vec<&str> = Vec::new();
             let mut closed = false;
             while let Some(&l) = lines.get(i) {
@@ -158,8 +158,8 @@ pub(super) fn parse_doc(md: &str) -> Doc {
             continue;
         }
         if let Some((level, text)) = heading(line) {
-            flush(&mut para, &mut out, &mut ends, para_end);
-            out.push(MdBlock::Heading { level, spans: inline(text) });
+            flush(&mut para, &mut out, &mut ends, para_end, false);
+            out.push(MdBlock::Heading { level, spans: inline_with(text, repair && i >= lines.len()) });
             ends.push(i);
             continue;
         }
@@ -169,18 +169,18 @@ pub(super) fn parse_doc(md: &str) -> Doc {
             continue;
         }
         if let Some(q) = line.trim_start().strip_prefix('>') {
-            flush(&mut para, &mut out, &mut ends, para_end);
+            flush(&mut para, &mut out, &mut ends, para_end, false);
             let mut text = vec![q.trim_start()];
             while let Some(q) = lines.get(i).and_then(|l| l.trim_start().strip_prefix('>')) {
                 text.push(q.trim_start());
                 i += 1;
             }
-            out.push(MdBlock::Quote(inline(&join_lines(&text))));
+            out.push(MdBlock::Quote(inline_with(&join_lines(&text), repair && i >= lines.len())));
             ends.push(i);
             continue;
         }
         if let Some((depth, marker, text)) = item(line).filter(|_| !is_rule(line)) {
-            flush(&mut para, &mut out, &mut ends, para_end);
+            flush(&mut para, &mut out, &mut ends, para_end, false);
             let mut text = vec![text];
             // continuation lines: indented, not a new item, not blank
             while let Some(&l) = lines.get(i) {
@@ -190,12 +190,12 @@ pub(super) fn parse_doc(md: &str) -> Doc {
                 text.push(l.trim());
                 i += 1;
             }
-            out.push(MdBlock::Item { depth, marker, spans: inline(&join_lines(&text)) });
+            out.push(MdBlock::Item { depth, marker, spans: inline_with(&join_lines(&text), repair && i >= lines.len()) });
             ends.push(i);
             continue;
         }
         if line.contains('|') && lines.get(i).is_some_and(|l| separator_row(l)) {
-            flush(&mut para, &mut out, &mut ends, para_end);
+            flush(&mut para, &mut out, &mut ends, para_end, false);
             let header: Vec<Vec<Span>> = table_cells(line).into_iter().map(inline).collect();
             i += 1;
             let mut rows = Vec::new();
@@ -213,7 +213,7 @@ pub(super) fn parse_doc(md: &str) -> Doc {
         para.push(line);
         para_end = i;
     }
-    flush(&mut para, &mut out, &mut ends, para_end);
+    flush(&mut para, &mut out, &mut ends, para_end, repair);
     if let Some(r) = rest {
         out.push(MdBlock::Paragraph(vec![Span { text: r.to_string(), ..Span::default() }]));
         // past the size cap nothing is incremental
@@ -243,99 +243,166 @@ fn join_lines(lines: &[&str]) -> String {
 
 /// The styled runs of one line of Markdown.
 pub fn inline(s: &str) -> Vec<Span> {
+    inline_with(s, false)
+}
+
+/// Where `pat` next starts at or after `from`, remembering the answer: `from` only grows, so the
+/// text is scanned once however many openers ask (linear, not quadratic, on long paragraphs).
+fn next_at(cache: &mut Option<Option<usize>>, s: &str, from: usize, pat: &str) -> Option<usize> {
+    match *cache {
+        Some(Some(p)) if p >= from => Some(p),
+        Some(None) => None,
+        _ => {
+            let found = s.get(from..).and_then(|r| r.find(pat)).map(|p| p + from);
+            *cache = Some(found);
+            found
+        }
+    }
+}
+
+/// [`inline`]; with `repair` (the tail of a reply still streaming in) a marker with no closer yet
+/// styles the rest as if it were closed, and a marker at the very end is hidden, so markers never
+/// flash. A link whose URL has not arrived is styled as a link with an empty URL (not opened).
+pub(super) fn inline_with(s: &str, repair: bool) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut cur = Span::default();
-    let chars: Vec<char> = s.chars().collect();
-    let rest = |i: usize| -> String { chars.get(i..).unwrap_or_default().iter().collect() };
     let push = |out: &mut Vec<Span>, cur: &mut Span| {
         if !cur.text.is_empty() {
             let next = Span { text: String::new(), ..cur.clone() };
             out.push(std::mem::replace(cur, next));
         }
     };
+    // where each closer last starts: "is there one after here" is a comparison, not a scan
+    let last_double = [s.rfind("**"), s.rfind("__"), s.rfind("~~")];
+    let last_single = [s.rfind('*'), s.rfind('_')];
+    // bit k set: no run of k + 1 backticks after the current position
+    let mut no_ticks = 0u64;
+    let (mut mid_at, mut close_at, mut bracket_at) = (None, None, None);
     let mut i = 0;
-    while let Some(&c) = chars.get(i) {
-        let next = chars.get(i + 1).copied();
-        let prev = i.checked_sub(1).and_then(|p| chars.get(p)).copied();
+    while let Some(c) = s.get(i..).and_then(|r| r.chars().next()) {
+        let after = s.get(i + c.len_utf8()..).unwrap_or_default();
+        let next = after.chars().next();
+        let prev = s.get(..i).and_then(|p| p.chars().next_back());
         match c {
             '\\' if next.is_some_and(|n| n.is_ascii_punctuation()) => {
                 cur.text.push(next.unwrap_or('\\'));
                 i += 2;
             }
             '`' => {
-                let ticks = chars.get(i..).unwrap_or_default().iter().take_while(|c| **c == '`').count();
-                let delim: String = "`".repeat(ticks);
-                let after = rest(i + ticks);
-                match after.find(&delim) {
+                let ticks = after.bytes().take_while(|b| *b == b'`').count() + 1;
+                let start = i + ticks;
+                let delim = s.get(i..start).unwrap_or("`");
+                let bit = u32::try_from(ticks - 1).ok().and_then(|k| 1u64.checked_shl(k)).unwrap_or(0);
+                let tail = s.get(start..).unwrap_or_default();
+                let end = if bit == 0 || no_ticks & bit != 0 { None } else { tail.find(delim) };
+                if end.is_none() {
+                    no_ticks |= bit;
+                }
+                match end {
                     Some(end) => {
                         push(&mut out, &mut cur);
-                        let code = after.get(..end).unwrap_or_default();
+                        let code = tail.get(..end).unwrap_or_default();
                         let code = if code.starts_with(' ') && code.ends_with(' ') && code.len() > 1 {
                             code.get(1..code.len() - 1).unwrap_or(code)
                         } else {
                             code
                         };
                         out.push(Span { text: code.to_string(), code: true, link: cur.link.clone(), ..Span::default() });
-                        i += ticks + after.get(..end).map_or(0, |x| x.chars().count()) + ticks;
+                        i = start + end + ticks;
+                    }
+                    None if repair => {
+                        // still streaming: the rest is code
+                        push(&mut out, &mut cur);
+                        if !tail.is_empty() {
+                            out.push(Span { text: tail.to_string(), code: true, link: cur.link.clone(), ..Span::default() });
+                        }
+                        i = s.len();
                     }
                     None => {
-                        cur.text.push_str(&delim);
-                        i += ticks;
+                        cur.text.push_str(delim);
+                        i = start;
                     }
                 }
             }
             '*' | '_' | '~' if next == Some(c) => {
-                let delim: String = [c, c].iter().collect();
+                let k = match c {
+                    '*' => 0,
+                    '_' => 1,
+                    _ => 2,
+                };
                 let is_strike = c == '~';
                 let on = if is_strike { cur.strike } else { cur.bold };
-                if on || rest(i + 2).contains(&delim) && chars.get(i + 2).is_some_and(|n| !n.is_whitespace()) {
+                let rest = s.get(i + 2..).unwrap_or_default();
+                let closer = last_double.get(k).copied().flatten().is_some_and(|p| p >= i + 2);
+                let word = rest.chars().next().is_some_and(|n| !n.is_whitespace());
+                if on || (closer || repair) && word {
                     push(&mut out, &mut cur);
                     if is_strike {
                         cur.strike = !cur.strike;
                     } else {
                         cur.bold = !cur.bold;
                     }
-                } else {
-                    cur.text.push_str(&delim);
+                } else if !(repair && rest.is_empty()) {
+                    cur.text.push(c);
+                    cur.text.push(c);
                 }
                 i += 2;
             }
             '*' | '_' => {
                 let word_inside = c == '_' && prev.is_some_and(char::is_alphanumeric) && next.is_some_and(char::is_alphanumeric);
+                let closer = last_single.get(usize::from(c == '_')).copied().flatten().is_some_and(|p| p > i);
                 let opens = !cur.italic
                     && next.is_some_and(|n| !n.is_whitespace())
-                    && rest(i + 1).contains(c)
+                    && (closer || repair)
                     && !(c == '_' && prev.is_some_and(char::is_alphanumeric));
                 let closes = cur.italic && prev.is_some_and(|p| !p.is_whitespace());
                 if !word_inside && (opens || closes) {
                     push(&mut out, &mut cur);
                     cur.italic = !cur.italic;
-                } else {
+                } else if !(repair && next.is_none()) {
                     cur.text.push(c);
                 }
                 i += 1;
             }
             '[' if cur.link.is_none() => {
                 // [text](url)
-                let r = rest(i + 1);
-                let parsed = r.find("](").and_then(|mid| {
-                    let text = r.get(..mid)?;
-                    let after = r.get(mid + 2..)?;
-                    let end = after.find(')')?;
-                    let url = after.get(..end)?.trim();
-                    (!text.contains('\n') && !url.contains(' '))
-                        .then(|| (text.to_string(), url.to_string(), text.chars().count() + 2 + url.chars().count() + 1))
+                let base = i + 1;
+                let mid = next_at(&mut mid_at, s, base, "](");
+                let close = mid.and_then(|m| next_at(&mut close_at, s, m + 2, ")"));
+                let parts = |m: usize, end: usize| Some((s.get(base..m)?, s.get(m + 2..end)?.trim()));
+                let parsed = mid.zip(close).and_then(|(m, c)| {
+                    let (text, url) = parts(m, c)?;
+                    (!text.contains('\n') && !url.contains(' ')).then(|| (text, url.to_string(), c + 1))
                 });
-                match parsed {
-                    Some((text, url, consumed)) => {
-                        push(&mut out, &mut cur);
-                        for mut s in inline(&text) {
-                            s.link = Some(url.clone());
-                            s.bold |= cur.bold;
-                            s.italic |= cur.italic;
-                            out.push(s);
+                // still streaming: `[text`, `[text]` at the end, or `[text](partial` is drawn as a link
+                let pending = || {
+                    if !repair {
+                        return None;
+                    }
+                    let text = match mid {
+                        Some(m) if close.is_none() => {
+                            let url = s.get(m + 2..).unwrap_or_default();
+                            (!url.contains(char::is_whitespace)).then(|| s.get(base..m))?
                         }
-                        i += 1 + consumed;
+                        Some(_) => None,
+                        None => match next_at(&mut bracket_at, s, base, "]") {
+                            None => s.get(base..),
+                            Some(b) if b + 1 == s.len() => s.get(base..b),
+                            Some(_) => None,
+                        },
+                    }?;
+                    (!text.contains('\n')).then(|| (text, String::new(), s.len()))
+                };
+                match parsed.or_else(pending) {
+                    Some((text, url, end)) => {
+                        push(&mut out, &mut cur);
+                        for mut sp in inline_with(text, repair && url.is_empty()) {
+                            sp.link = Some(url.clone());
+                            sp.bold |= cur.bold;
+                            sp.italic |= cur.italic;
+                            out.push(sp);
+                        }
+                        i = end;
                     }
                     None => {
                         cur.text.push('[');
@@ -345,21 +412,18 @@ pub fn inline(s: &str) -> Vec<Span> {
             }
             'h' if cur.link.is_none()
                 && prev.is_none_or(|p| p.is_whitespace() || p == '(')
-                && (rest(i).starts_with("https://") || rest(i).starts_with("http://")) =>
+                && s.get(i..).is_some_and(|r| r.starts_with("https://") || r.starts_with("http://")) =>
             {
-                let r = rest(i);
-                let mut url: String = r.chars().take_while(|c| !c.is_whitespace()).collect();
-                while url.ends_with(['.', ',', ')', ';', ':', '!', '?']) {
-                    url.pop();
-                }
+                let r = s.get(i..).unwrap_or_default();
+                let mut url = r.get(..r.find(char::is_whitespace).unwrap_or(r.len())).unwrap_or_default();
+                url = url.trim_end_matches(['.', ',', ')', ';', ':', '!', '?']);
                 push(&mut out, &mut cur);
-                let n = url.chars().count();
-                out.push(Span { text: url.clone(), link: Some(url), bold: cur.bold, italic: cur.italic, ..Span::default() });
-                i += n.max(1);
+                out.push(Span { text: url.to_string(), link: Some(url.to_string()), bold: cur.bold, italic: cur.italic, ..Span::default() });
+                i += url.len().max(1);
             }
             _ => {
                 cur.text.push(c);
-                i += 1;
+                i += c.len_utf8();
             }
         }
     }

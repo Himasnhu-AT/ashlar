@@ -8,21 +8,39 @@
 //! Paragraphs are selectable; a link opens in the browser (`http`, `https` and `mailto` only).
 //!
 //! Automation ids (under the `id` passed to [`show`]): `<id>.code.<n>` for each code block and
-//! `<id>.code.<n>.copy` for its Copy button, `<id>.link.<n>` for each link.
-
+//! `<id>.code.<n>.copy` for its Copy button, `<id>.link.<n>` for each link (role `Link`; its rect
+//! is the link's first row), `<id>.task.<n>` for each task checkbox when [`Markdown::on_task`] is
+//! set, and `<id>.table.<n>.more` for the footer of a table cut at [`MAX_TABLE_ROWS`] rows.
+//!
+//! Links take keyboard focus (Tab, then Enter or Space opens them) and answer the pointer on every
+//! row they wrap onto. Tables size their columns to their content and, when that is too wide,
+//! wrap columns down to their longest word. [`Markdown`] adds find highlighting, task checkbox
+//! callbacks, streaming repair (an unclosed `**`, `` ` `` or link at the end is drawn as already
+//! styled, so markers never flash), a caller-kept revision instead of hashing the text, and
+//! [`MarkdownLabels`] for the words drawn.
 //!
 //! Long documents and streaming replies stay cheap: the parse is kept while the text is the same
 //! (text appended to it is parsed again only from its last open block), each block's layout is
 //! kept while the block, the width and the style are the same, and blocks outside the clip rect
 //! only reserve their space. Automation ids exist for the blocks drawn.
 
+use std::borrow::Cow;
+
 use egui::text::TextFormat;
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, Ui};
 
+mod find;
 mod parse;
 mod view;
 
+pub use find::{MAX_QUERY, find_ranges};
 pub use parse::{inline, parse};
+
+/// [`parse`] for text still streaming in: an unclosed marker in the last block is drawn as
+/// already closed (see [`Markdown::streaming`]).
+pub fn parse_streaming(md: &str) -> Vec<MdBlock> {
+    parse::parse_doc(md, true).blocks
+}
 
 /// A run of text with one style.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -73,6 +91,38 @@ pub enum MdBlock {
 /// Longest document parsed (the rest is shown as one plain paragraph).
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 
+/// Rows a table draws; the rest are counted in a footer ([`MarkdownLabels::more_rows`]).
+pub const MAX_TABLE_ROWS: usize = 500;
+
+/// The words markdown draws, for the app to localize.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownLabels {
+    /// A code block's copy button.
+    pub copy: Cow<'static, str>,
+    /// The copy button for a moment after it was pressed.
+    pub copied: Cow<'static, str>,
+    /// The caption of a code block with no language.
+    pub code: Cow<'static, str>,
+    /// The footer of a table cut short; `{n}` is replaced by the number of rows not drawn.
+    pub more_rows: Cow<'static, str>,
+}
+
+impl MarkdownLabels {
+    /// English.
+    pub const ENGLISH: MarkdownLabels = MarkdownLabels {
+        copy: Cow::Borrowed("Copy"),
+        copied: Cow::Borrowed("Copied"),
+        code: Cow::Borrowed("code"),
+        more_rows: Cow::Borrowed("{n} more rows"),
+    };
+}
+
+impl Default for MarkdownLabels {
+    fn default() -> Self {
+        Self::ENGLISH
+    }
+}
+
 /// The plain text of runs (what Copy puts on the clipboard for a paragraph).
 pub fn plain(spans: &[Span]) -> String {
     spans.iter().map(|s| s.text.as_str()).collect()
@@ -91,6 +141,8 @@ pub struct MarkdownStyle {
     pub code_bg: Color32,
     pub code_border: Color32,
     pub rule: Color32,
+    /// The background of text matching [`Markdown::find`].
+    pub find_bg: Color32,
     pub body: FontId,
     pub mono: FontId,
     /// A bold face, when the app has one (otherwise bold is the strong colour).
@@ -112,6 +164,7 @@ impl MarkdownStyle {
             code_bg: v.extreme_bg_color,
             code_border: v.widgets.noninteractive.bg_stroke.color,
             rule: v.widgets.noninteractive.bg_stroke.color,
+            find_bg: v.warn_fg_color.gamma_multiply(0.35),
             body: FontId::proportional(body_size),
             mono: FontId::monospace(body_size * 0.92),
             bold_family: None,
@@ -155,6 +208,10 @@ pub struct MarkdownResponse {
     pub copied: Option<usize>,
     /// The link that was opened.
     pub opened: Option<String>,
+    /// The task checkbox (counted from 0 in document order) that was toggled, and its new state.
+    pub task: Option<(usize, bool)>,
+    /// How many times [`Markdown::find`]'s query occurs in the document.
+    pub matches: usize,
 }
 
 fn safe_link(url: &str) -> bool {
@@ -165,13 +222,112 @@ fn safe_link(url: &str) -> bool {
 /// Draw `md` at the full available width. `id` prefixes the automation ids and, with the parent
 /// ui's id, names what is kept between frames.
 pub fn show(ui: &mut Ui, id: &str, md: &str, style: &MarkdownStyle) -> MarkdownResponse {
-    view::show(ui, id, md, style)
+    Markdown::new(id, md, style).show(ui)
+}
+
+/// [`show`] for a caller that keeps a revision of `md` (bumped whenever the text changes): while
+/// the revision is the same the text is not even hashed, so a long document costs nothing to keep.
+pub fn show_with_revision(ui: &mut Ui, id: &str, revision: u64, md: &str, style: &MarkdownStyle) -> MarkdownResponse {
+    Markdown::new(id, md, style).revision(revision).show(ui)
 }
 
 /// [`show`] with blocks parsed already. [`show`] keeps its parse itself; this hashes `blocks` each
 /// frame to find the ones that changed.
 pub fn show_blocks(ui: &mut Ui, id: &str, blocks: &[MdBlock], style: &MarkdownStyle) -> MarkdownResponse {
-    view::show_blocks(ui, id, blocks, style)
+    Markdown::blocks(id, blocks, style).show(ui)
+}
+
+enum Source<'a> {
+    Text(&'a str),
+    Blocks(&'a [MdBlock]),
+}
+
+/// A markdown view with options; [`show`] is `Markdown::new(id, md, style).show(ui)`.
+///
+/// ```no_run
+/// # fn f(ui: &mut egui::Ui, reply: &str, style: &ashlar_ui::markdown::MarkdownStyle, rev: u64) {
+/// use ashlar_ui::markdown::Markdown;
+/// let r = Markdown::new("reply.12", reply, style).revision(rev).streaming(true).find("needle").show(ui);
+/// # }
+/// ```
+pub struct Markdown<'a> {
+    id: &'a str,
+    source: Source<'a>,
+    style: &'a MarkdownStyle,
+    labels: Option<&'a MarkdownLabels>,
+    query: &'a str,
+    on_task: Option<Box<dyn FnMut(usize, bool) + 'a>>,
+    streaming: bool,
+    revision: Option<u64>,
+}
+
+impl<'a> Markdown<'a> {
+    /// Markdown text, parsed (and kept parsed) by the view.
+    pub fn new(id: &'a str, md: &'a str, style: &'a MarkdownStyle) -> Self {
+        Self::with(id, Source::Text(md), style)
+    }
+
+    /// Blocks parsed by the caller (hashed each frame to find the ones that changed).
+    pub fn blocks(id: &'a str, blocks: &'a [MdBlock], style: &'a MarkdownStyle) -> Self {
+        Self::with(id, Source::Blocks(blocks), style)
+    }
+
+    fn with(id: &'a str, source: Source<'a>, style: &'a MarkdownStyle) -> Self {
+        Markdown { id, source, style, labels: None, query: "", on_task: None, streaming: false, revision: None }
+    }
+
+    /// The caller's revision of the text: while it is unchanged the text is not hashed.
+    pub fn revision(mut self, revision: u64) -> Self {
+        self.revision = Some(revision);
+        self
+    }
+
+    /// The text is still streaming in: an unclosed `**`, `*`, `~~`, `` ` `` or link in the last
+    /// block is drawn as already closed, and a marker at the very end is hidden.
+    pub fn streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
+        self
+    }
+
+    /// Highlight every occurrence of `query` (ignoring ASCII case); [`MarkdownResponse::matches`]
+    /// counts them. An empty query highlights nothing.
+    pub fn find(mut self, query: &'a str) -> Self {
+        self.query = find::clamp(query);
+        self
+    }
+
+    /// Make task checkboxes clickable: `f(index, checked)` gets the task (counted from 0 in
+    /// document order) and its new state. The app changes the text.
+    pub fn on_task(mut self, f: impl FnMut(usize, bool) + 'a) -> Self {
+        self.on_task = Some(Box::new(f));
+        self
+    }
+
+    /// The words drawn (by default the context's [`crate::labels::UiLabels`], English unless the
+    /// app installed others).
+    pub fn labels(mut self, labels: &'a MarkdownLabels) -> Self {
+        self.labels = Some(labels);
+        self
+    }
+
+    pub fn show(self, ui: &mut Ui) -> MarkdownResponse {
+        let Markdown { id, source, style, labels, query, mut on_task, streaming, revision } = self;
+        // the app's labels for this view win; otherwise the ones installed on the context
+        let installed;
+        let labels = match labels {
+            Some(l) => l,
+            None => {
+                installed = crate::labels::current(ui.ctx());
+                &installed.markdown
+            }
+        };
+        let opts =
+            view::Opts { id, style, labels, query, on_task: on_task.as_deref_mut().map(|f| f as &mut dyn FnMut(usize, bool)), streaming, revision };
+        match source {
+            Source::Text(md) => view::show(ui, md, opts),
+            Source::Blocks(blocks) => view::show_blocks(ui, blocks, opts),
+        }
+    }
 }
 
 #[cfg(test)]

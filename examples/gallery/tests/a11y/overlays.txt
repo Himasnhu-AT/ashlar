@@ -1,0 +1,48 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=true]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Dialog"
+  Button "Open dialog"
+  Label value="Select and combobox"
+  Label value="Size"
+  ComboBox "Size" value="Medium" [collapsed]
+  Label value="Font"
+  ComboBox "Font" placeholder="Type to filter" [collapsed]
+  Label value="Popover, tooltip and context menu"
+  Button "Filters" description="Narrow the list down"
+  Label value="Right-click me"
+  Label value="Toasts"
+  Button "Info"
+  Button "Success"
+  Button "Warning"
+  Button "Error"
+  Button "Sticky"
+  Dialog "Save changes before closing?" description="Your changes will be lost if you don't save them."
+    Label value="Save changes before closing?"
+    Label value="Your changes will be lost if you don't save them."
+    TextInput value="Untitled"
+    Button "Save"
+    Button "Cancel"
+    Button "Don't Save"
+  Status "Export finished: 24 files written" [live=polite]
+  Button "Dismiss"
+  Alert "Could not reach the sync server. Working offline." [live=assertive]
+  Button "Dismiss"

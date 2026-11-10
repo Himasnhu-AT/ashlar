@@ -60,6 +60,7 @@ impl TabStripStyle {
     /// The style from the current theme tokens.
     pub fn from_ui(ui: &Ui) -> Self {
         let t = crate::tokens::current(ui.ctx());
+        let labels = crate::labels::current(ui.ctx());
         Self {
             height: t.control_height + t.space.sm,
             padding: t.space.lg,
@@ -76,8 +77,8 @@ impl TabStripStyle {
             indicator_height: 2.0,
             focus: Stroke::new(1.5, t.focus),
             border: Stroke::new(1.0, t.border),
-            overflow_label: "More tabs".to_owned(),
-            close_label: "Close tab".to_owned(),
+            overflow_label: labels.tabs.overflow.clone(),
+            close_label: labels.tabs.close.clone(),
         }
     }
 

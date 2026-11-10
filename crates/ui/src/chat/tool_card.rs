@@ -3,7 +3,7 @@
 use egui::accesskit::Role as NodeRole;
 use egui::{Color32, Frame, Margin, RichText, Sense, Stroke, Ui, UiBuilder, vec2};
 
-use super::{ChatLabels, default_labels};
+use super::ChatLabels;
 use crate::automation::{self, Details, Role};
 use crate::controls::{Button, Size, Variant};
 use crate::tokens::{self, Tokens};
@@ -91,10 +91,8 @@ impl<'a> ToolCard<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> ToolCardResponse {
-        let labels: &ChatLabels = match self.labels {
-            Some(l) => l,
-            None => default_labels(),
-        };
+        let installed = crate::labels::current(ui.ctx());
+        let labels: &ChatLabels = self.labels.unwrap_or(&installed.chat);
         let t = tokens::current(ui.ctx());
         let base = ui.make_persistent_id(("ashlar_ui::chat::tool_card", self.id));
         let open_id = base.with("open");

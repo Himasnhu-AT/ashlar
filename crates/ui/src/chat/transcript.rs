@@ -6,7 +6,7 @@ use std::ops::Range;
 use egui::accesskit::{Live, Role as NodeRole};
 use egui::{Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
-use super::{ChatLabels, default_labels};
+use super::ChatLabels;
 use crate::automation::{self, Details, Role};
 use crate::controls::{Button, Size, Variant};
 use crate::tokens;
@@ -223,10 +223,8 @@ impl<'a, T: TranscriptItem> Transcript<'a, T> {
 
     /// Draw the visible messages with `row(ui, message)`, filling the available rect.
     pub fn show(self, ui: &mut Ui, mut row: impl FnMut(&mut Ui, &T)) -> TranscriptResponse {
-        let labels: &ChatLabels = match self.labels {
-            Some(l) => l,
-            None => default_labels(),
-        };
+        let installed = crate::labels::current(ui.ctx());
+        let labels: &ChatLabels = self.labels.unwrap_or(&installed.chat);
         let t = tokens::current(ui.ctx());
         let base = ui.make_persistent_id(("ashlar_ui::chat::transcript", self.id));
         let heights_id = base.with("heights");

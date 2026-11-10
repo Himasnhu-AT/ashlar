@@ -35,6 +35,11 @@ the video editor's platform crate these were adapted from):
      `setUserInfo:`) and `notify::windows` (`SetCurrentProcessExplicitAppUserModelID`,
      `CoInitializeEx`); added 2026-11-10 so banners show while the app is frontmost, clicks are
      reported and Windows gets toasts
+   - `session_end` (macOS: `class_addMethod` of `applicationShouldTerminate:` on winit's
+     application delegate class, and reading that method's implementation; Windows: a hidden
+     window's class, window and message loop for `WM_QUERYENDSESSION` / `WM_ENDSESSION`); added
+     2026-11-10 so Dock Quit, logout and shutdown get the "Save changes?" question and the
+     settings, autosave and telemetry flush
 
    Everything else (dialogs, clipboard, secrets, Linux notifications, macOS progress and preferences,
    single instance) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.

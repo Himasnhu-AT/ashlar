@@ -3,6 +3,101 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/a11yfix merged (CI green)
+
+- **IMP-5.21:** no `Unknown` nodes remain in any gallery outline.
+  - Lists, tables and trees take `.label(text)`. Table cells have the `Cell` role and headers
+    `ColumnHeader` (with sort direction). Resize handles and tree arrows are hidden from AccessKit.
+  - The keymap editor's third column is "Actions", and its table is "Keyboard shortcuts".
+  - Search fields are named "Search" (`SearchField::label` overrides it), and the palette input is
+    "Command palette".
+  - Banners say their text once.
+  - **Breaking:** new fields on `KeymapLabels` and `UiLabels` break code that builds them field by
+    field.
+- **IMP-5.22, a real bug:** `VirtualList::scroll_to` (and the fling) read the scroll offset under the
+  wrong id, so the offset always read 0. It never scrolled up to a row above the view and moved
+  the list for rows already in view. Fixed; `crates/ui/tests/list_scroll_to.rs` failed before the
+  fix.
+
+## 2026-11-10: wt/a11ygold and wt/motion2 merged (CI green)
+
+- **IMP-5.15:** `examples/gallery/tests/a11y_goldens.rs` covers all 9 pages.
+  - Each page renders headless at a fixed size and scale 1, light theme, reduced motion. Its AccessKit
+    outline (role, name, value, description, states, position in set) is stored in
+    `tests/a11y/<page>.txt`.
+  - Each page is rendered twice for determinism. A mismatch fails with a readable diff;
+    `ASHLAR_BLESS=1` rewrites the files.
+  - A check rejects any node whose name equals an automation id or looks like one (allow list: the tab
+    titles `main.rs` and `lib.rs`).
+  - Findings went to IMP-5.21.
+- **IMP-5.12:** `RollingText`: only changed characters roll (up when rising, down when falling) and
+  the width animates. Reduced motion crossfades instead. The accessible value updates at once.
+- **IMP-3.7:** fling on release for value fields, sliders and knobs (to a projected, snapped and
+  clamped value; one undo step), and opt-in `VirtualList::fling(true)` with rubber banding.
+  - A pause of 40 ms or more, or reduced motion, means no fling.
+  - Fling speed is capped so a fling never overshoots an edge.
+  - **Changed:** fling is on by default for fields, sliders and knobs (`.fling(false)` turns it off).
+- **After merging both:** the Controls golden gained only the new sections (0 removed lines). It was
+  re-recorded in its own commit.
+- Started: wt-a11yfix (IMP-5.21, 5.22).
+
+## 2026-11-10: wt/i18n merged (CI green)
+
+- **IMP-6.13:** `ashlar-i18n` (rank 0, wasm32; depends on serde_json, log, thiserror).
+  - Flat JSON catalogs, stackable, parsed on first use. A bad catalog is reported and treated as
+    empty.
+  - Plural rules for about 50 languages, number separators per locale, and the fallback order locale
+    → language → source; `zh-TW` resolves to `zh-Hant`.
+  - Key checks run in tests: `I18n::check` and `missing_source_keys`.
+- **`ashlar_ui::labels::UiLabels`** covers toasts, form, chat, diff view, keymap editor, tab strip and
+  print panel. Explicit labels still win. English and German catalogs live in `crates/ui/i18n/`.
+  - System locale comes from `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG`. There is no native list
+    yet (IMP-6.19).
+  - Changed: `ToastLabels`, `FormLabels` and the chat labels now default to the installed labels.
+  - Changed: `KeymapEditor.labels` uses the installed labels when it equals the English default.
+- Started: wt-a11ygold (IMP-5.15).
+
+## 2026-11-10: wt/window merged (CI green)
+
+- **IMP-6.5:** a file dialog opens on the frame after the one that asks for it, parented to the
+  window (`FileDialog::parent`), and acts on the pick then.
+  - `after_save` carries "Save" in the confirm dialog on to the held-back open or quit.
+  - Fixed: a failed save left `quit_after_save` set.
+  - Four Driver tests.
+- **IMP-6.4:** `window_state.rs` provides a pure `clamp` (10 unit tests) and a `Tracker` that saves
+  under `"window"` only when the viewport changes. New: `App::viewport`, `App::icon`,
+  `App::remember_window`.
+  - Gap: no monitor list exists before the window does, so the launch-time clamp only bounds sizes;
+    on Windows an off-screen window can stay off-screen (IMP-6.18).
+- Process note: removing a merged worktree while its agent's gate is still running kills that gate,
+  and one gate fell back to the main checkout and ran against a merge in progress. Merges now wait
+  until the agent has reported its last `ci:` line.
+- Started: wt-motion2 (IMP-5.12, 3.7), wt-native2 (IMP-6.7, 6.12), wt-flakes (IMP-0.8, 1.10).
+
+## 2026-11-10: wt/notify and wt/perfwarn merged (CI green)
+
+- **IMP-6.6:** `Notification { id, silent, info }`, `notify::show`, `remove`, `on_click`,
+  `set_app_identity`. Showing a notification with an existing id replaces it.
+  - macOS: a delegate shows banners while the app is in front and reports clicks, under
+    `catch_unwind`.
+  - Windows: toasts, with the app id registered for unpackaged apps, escaped XML and hashed tags.
+    Compile-checked for x86_64-pc-windows-msvc only.
+  - Linux: the `desktop-entry` hint and `ActionInvoked` clicks.
+  - New FFI modules are on the ADR 0001 list and in the deny-panics allow list.
+  - **Changed:** macOS notifications play the default sound unless `silent` is set.
+- **IMP-2.7:** `perf_warn` reports stalls (wall time far above thread CPU) and the same frame drawn
+  60 times on non-input wakes, in debug builds, once per site. `ASHLAR_FRAME_BUDGET_MS` works in any
+  build, at most one line per second. `ASHLAR_PERF_WARN=0` silences it.
+- **IMP-2.12:** `ASHLAR_FRAME_LOG` (or `Runtime::log_frames`) writes one JSON line per pass from a
+  writer thread, capped at 64 MiB.
+- **IMP-4.2:** `app.stats.process` gives `{footprint_bytes, peak_bytes, cpu_s, threads}`.
+  - `peak_bytes` is the highest footprint sampled, not the OS lifetime peak.
+  - `threads` is reported on Linux only (IMP-6.18).
+- The perf_warn Driver scroll test passes on one clean run out of three because of machine load
+  (IMP-0.9).
+- The syntax timing test also failed once under load (IMP-0.8). wt-flakes is fixing IMP-0.8 and
+  IMP-1.10.
+
 ## 2026-11-10: wt/chat merged
 
 - **IMP-5.7:** `chat::{Transcript, Message, ToolCard, Composer, PopupList}`. It is UI over plain data

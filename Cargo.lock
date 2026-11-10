@@ -293,6 +293,7 @@ dependencies = [
  "ashlar-store",
  "ashlar-telemetry",
  "ashlar-ui",
+ "cpu-time",
  "eframe",
  "egui",
  "log",
@@ -461,6 +462,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-i18n"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ashlar-integrations"
 version = "0.1.0"
 dependencies = [
@@ -537,6 +547,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "objc2-user-notifications 0.3.2",
+ "png 0.18.1",
  "raw-window-handle",
  "rfd",
  "serde",
@@ -677,6 +688,7 @@ dependencies = [
  "ashlar-command",
  "ashlar-control",
  "ashlar-diff",
+ "ashlar-i18n",
  "ashlar-motion",
  "ashlar-syntax",
  "ashlar-telemetry",

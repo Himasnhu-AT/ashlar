@@ -118,6 +118,8 @@ impl<'a> Banner<'a> {
             node.set_role(if assertive { AkRole::Alert } else { AkRole::Status });
             node.set_live(if assertive { Live::Assertive } else { Live::Polite });
             node.set_label(label);
+            // the name carries the text: a value would make readers say it twice
+            node.clear_value();
             if label != text {
                 node.set_description(text);
             }

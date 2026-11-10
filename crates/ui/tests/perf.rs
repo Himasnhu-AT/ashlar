@@ -188,6 +188,40 @@ fn perf_markdown_static_50kb_allocs() {
     assert!(n > 0, "the counting allocator saw the frames");
 }
 
+/// One 50 KB paragraph with no blank line in it (a pasted log, a minified reply): inline parsing
+/// must stay linear in its length.
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_markdown_long_paragraph() {
+    let mut para = String::new();
+    let mut n = 0usize;
+    while para.len() < 50 * 1024 {
+        n += 7;
+        let x = WORDS[n % WORDS.len()];
+        match n % 13 {
+            1 => para.push_str(&format!("**{x}** ")),
+            4 => para.push_str(&format!("*{x}* ")),
+            6 => para.push_str(&format!("`{x}` ")),
+            9 => para.push_str(&format!("[{x}](https://example.com/{x}) ")),
+            11 => para.push_str("a*b [c] _d "),
+            _ => {
+                para.push_str(x);
+                para.push(' ');
+            }
+        }
+    }
+    let mut times = Vec::new();
+    for _ in 0..20 {
+        let t = Instant::now();
+        let blocks = std::hint::black_box(markdown::parse(std::hint::black_box(&para)));
+        times.push(t.elapsed());
+        assert_eq!(blocks.len(), 1);
+    }
+    let p50 = pct(&mut times, 50);
+    println!("bench: md_long_paragraph_parse {p50:.3} ms");
+    assert!(p50 < 50.0, "a 50 KB paragraph parses in linear time: {p50} ms");
+}
+
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_markdown_stream_7kb() {

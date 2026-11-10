@@ -1,0 +1,58 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=true]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Closable, reorderable"
+  TabList "Documents"
+    Tab "main.rs" [selected, 1/4]
+    Button "Close tab"
+    Tab "lib.rs" [2/4]
+    Button "Close tab"
+    Tab "Cargo.toml" [3/4]
+    Button "Close tab"
+    Tab "README.md" [4/4]
+    Button "Close tab"
+  Label value="Editing main.rs. Arrows move, ⌘W closes, drag or ⌘⇧+arrow reorders."
+  Button "Reset tabs"
+  Label value="Overflow: 60 tabs"
+  TabList "Scenes"
+    Tab "Scene 1" [1/60]
+    Tab "Scene 2" [2/60]
+    Tab "Scene 3" [3/60]
+    Tab "Scene 4" [4/60]
+    Tab "Scene 5" [5/60]
+    Tab "Scene 6" [6/60]
+    Tab "Scene 7" [7/60]
+    Tab "Scene 8" [8/60]
+    Tab "Scene 9" [9/60]
+    Tab "Scene 10" [10/60]
+    Tab "Scene 11" [11/60]
+    Tab "Scene 12" [12/60]
+    Tab "Scene 13" [13/60]
+    Tab "Scene 14" [14/60]
+    Tab "Scene 15" [15/60]
+    Tab "Scene 16" [16/60]
+    Tab "Scene 17" [17/60]
+    Tab "Scene 18" [18/60]
+    Tab "Scene 19" [19/60]
+    Tab "Scene 20" [20/60]
+    Tab "Scene 21" [21/60]
+    Tab "Scene 31" [selected, 31/60]
+  Button "More tabs"

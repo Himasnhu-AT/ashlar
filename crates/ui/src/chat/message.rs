@@ -2,7 +2,7 @@
 
 use egui::{Frame, Margin, RichText, Ui};
 
-use super::{ChatLabels, ChatRole, default_labels};
+use super::{ChatLabels, ChatRole};
 use crate::markdown::{self, MarkdownResponse, MarkdownStyle};
 use crate::tokens;
 
@@ -38,10 +38,8 @@ impl<'a> Message<'a> {
     }
 
     pub fn show(self, ui: &mut Ui) -> MarkdownResponse {
-        let labels: &ChatLabels = match self.labels {
-            Some(l) => l,
-            None => default_labels(),
-        };
+        let installed = crate::labels::current(ui.ctx());
+        let labels: &ChatLabels = self.labels.unwrap_or(&installed.chat);
         let t = tokens::current(ui.ctx());
         let owned;
         let style = match self.style {

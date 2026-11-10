@@ -143,15 +143,21 @@ pub struct TreeView<'a> {
     model: &'a dyn TreeModel,
     revision: u64,
     max_height: Option<f32>,
+    label: Option<&'a str>,
 }
 
 impl<'a> TreeView<'a> {
     /// `revision` must change whenever the model's structure or labels change.
     pub fn new(id: &'a str, state: &'a mut TreeState, model: &'a dyn TreeModel, revision: u64) -> Self {
-        TreeView { id, state, model, revision, max_height: None }
+        TreeView { id, state, model, revision, max_height: None, label: None }
     }
     pub fn max_height(mut self, h: f32) -> Self {
         self.max_height = Some(h);
+        self
+    }
+    /// The name a screen reader announces for the tree (a human name, not the automation id).
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.label = Some(text);
         self
     }
 
@@ -167,6 +173,9 @@ impl<'a> TreeView<'a> {
         if let Some(h) = self.max_height {
             list = list.max_height(h);
         }
+        if let Some(label) = self.label {
+            list = list.label(label);
+        }
         let mut toggled = None;
         let flat = &state.flat;
         let model = self.model;
@@ -181,6 +190,8 @@ impl<'a> TreeView<'a> {
             let is_open = expanded.contains(&node.id);
             if node.has_children {
                 let resp = ui.interact(arrow, base.with(("toggle", node.id)), Sense::click());
+                // the item itself reports expanded or collapsed and the arrow keys toggle it
+                ui.ctx().accesskit_node_builder(resp.id, |n| n.set_role(egui::accesskit::Role::GenericContainer));
                 if resp.clicked() {
                     toggled = Some((node.id, !is_open));
                 }

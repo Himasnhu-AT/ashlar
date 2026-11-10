@@ -283,7 +283,7 @@ fn app_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, V
             "app_stats",
             "app.stats",
             "App stats",
-            "Frame times, layout passes, background jobs and wakes (frames and repaint requests per reason) since the window began. `reset` starts a new window after this reading, e.g. reset, act, read again.",
+            "Frame times, layout passes, background jobs, wakes (frames and repaint requests per reason) since the window began, and the process (memory footprint and its peak, CPU seconds, threads). `reset` starts a new window after this reading, e.g. reset, act, read again.",
             obj(json!({"reset": {"type": "boolean", "description": "Start a new measurement window after this reading"}}), &[]),
             Access::Read,
         ),

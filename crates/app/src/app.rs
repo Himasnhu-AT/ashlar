@@ -18,6 +18,16 @@ use crate::telemetry::TelemetryConfig;
 pub type ViewFn<D> = Box<dyn FnMut(&mut egui::Ui, &mut Cx<'_, D>)>;
 /// Runs once with the egui context before the first frame (fonts, tokens).
 pub type SetupFn = Box<dyn FnOnce(&egui::Context)>;
+/// Changes the window's builder before the window opens (see [`App::viewport`]).
+pub type ViewportFn = Box<dyn FnOnce(egui::ViewportBuilder) -> egui::ViewportBuilder>;
+
+/// What only the window's creation needs (taken out of the [`App`] before it is split).
+#[derive(Default)]
+pub(crate) struct WindowSpec {
+    pub viewport: Option<ViewportFn>,
+    /// PNG bytes for the window and taskbar icon.
+    pub icon: Option<Vec<u8>>,
+}
 /// A named starting state ([`App::scene`]).
 pub type SceneFn<D> = Arc<dyn Fn(&mut Session<D>) + Send + Sync>;
 
@@ -57,6 +67,8 @@ pub(crate) struct Shared<D: Document> {
     pub motion: Option<ashlar_motion::MotionPrefs>,
     pub single_instance: bool,
     pub accept_drops: bool,
+    /// Save the window's placement and restore it on launch (see [`App::remember_window`]).
+    pub remember_window: bool,
     /// Named starting states, in declaration order.
     pub scenes: Vec<(String, SceneFn<D>)>,
 }
@@ -122,6 +134,8 @@ pub struct App<D: Document> {
     motion: Option<ashlar_motion::MotionPrefs>,
     single_instance: bool,
     accept_drops: Option<bool>,
+    remember_window: bool,
+    window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
 }
 
@@ -150,6 +164,8 @@ impl<D: Document> App<D> {
             motion: None,
             single_instance: false,
             accept_drops: None,
+            remember_window: true,
+            window: WindowSpec::default(),
             scenes: Vec::new(),
         }
     }
@@ -277,6 +293,48 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Change the window before it opens: a minimum size, decorations, transparency… `f` gets
+    /// the builder ashlar made (title, size, app id, the restored placement) and returns it.
+    /// Desktop only; the headless driver has no window.
+    ///
+    /// ```no_run
+    /// # use ashlar_app::App;
+    /// App::<i64>::new("notes", "0.1.0").viewport(|b| b.with_min_inner_size([480.0, 320.0]));
+    /// ```
+    pub fn viewport(mut self, f: impl FnOnce(egui::ViewportBuilder) -> egui::ViewportBuilder + 'static) -> Self {
+        let previous = self.window.viewport.take();
+        self.window.viewport = Some(Box::new(move |b| {
+            let b = match previous {
+                Some(p) => p(b),
+                None => b,
+            };
+            f(b)
+        }));
+        self
+    }
+
+    /// The window and taskbar icon, as PNG bytes (`include_bytes!("icon.png")`). An image that
+    /// does not decode is logged and the default icon stays. Desktop only.
+    pub fn icon(mut self, png: impl Into<Vec<u8>>) -> Self {
+        self.window.icon = Some(png.into());
+        self
+    }
+
+    /// Remember where the window was (default on): its position, size, maximized and full
+    /// screen state go to the settings under `"window"` when they change and on close, and the
+    /// next launch opens the window there, kept on a visible monitor. Ignored without a window
+    /// (`--headless`, [`crate::Driver`]) and without an app folder ([`App::dirs`]).
+    pub fn remember_window(mut self, on: bool) -> Self {
+        self.remember_window = on;
+        self
+    }
+
+    /// The window's own options, taken out before the app is split.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn take_window(&mut self) -> WindowSpec {
+        std::mem::take(&mut self.window)
+    }
+
     /// A named starting state: `setup` runs on the session (load a fixture, fill a list, set the
     /// theme…) when the scene is applied, with `--scene NAME` (in a window or `--headless`), the
     /// `ui.scene {name}` control method, the MCP tool `ui_scene` or [`crate::Driver::scene`].
@@ -335,6 +393,7 @@ impl<D: Document> App<D> {
             motion: self.motion,
             single_instance: self.single_instance,
             accept_drops,
+            remember_window: self.remember_window,
             scenes: self.scenes,
         };
         (Arc::new(shared), self.view, self.setup)

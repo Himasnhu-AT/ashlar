@@ -9,7 +9,7 @@
 //! - Text: [`markdown`] (chat replies and short documents, streaming-safe), [`code_view`],
 //!   [`diff_view`] (unified and split diffs of [`ashlar_diff`] files).
 //! - Data: [`virtual_list`] (list and table, O(visible) per frame), [`tree`].
-//! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
+//! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`], [`labels`] (every built-in string, localizable).
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
 //! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`devtools`]
 //!   (the UI debugger: element tree with refs, injected input, waits, screenshots, inspector), [`cache`]
@@ -39,6 +39,7 @@ pub mod fonts;
 pub mod form;
 pub mod icons;
 pub mod idle;
+pub mod labels;
 pub mod layout;
 pub mod list;
 pub mod markdown;
@@ -46,6 +47,7 @@ pub mod motion;
 pub mod motion_gate;
 pub mod overlay;
 pub mod printing;
+pub mod rolling;
 pub mod search;
 pub mod selection;
 pub mod slider;
