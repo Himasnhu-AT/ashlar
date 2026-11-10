@@ -58,6 +58,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-example-notes", 8),
     ("ashlar-example-trace-demo-cli", 8),
     ("ashlar-example-trace-loadgen", 8),
+    ("ashlar-example-web-hello", 8),
     ("xtask", 9),
 ];
 /// Crates no rank 0–4 crate may depend on (directly).
