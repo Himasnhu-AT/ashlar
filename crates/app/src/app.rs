@@ -48,6 +48,8 @@ pub(crate) struct Shared<D: Document> {
     pub telemetry: Option<TelemetryConfig>,
     pub instructions: String,
     pub window_size: [f32; 2],
+    /// Frames the GPU may queue ahead of the screen (see [`App::frame_latency`]).
+    pub frame_latency: u32,
     pub control_port: Option<u16>,
     pub follow_system_accent: bool,
     pub motion: Option<ashlar_motion::MotionPrefs>,
@@ -98,6 +100,7 @@ pub struct App<D: Document> {
     instructions: String,
     dirs: Option<AppDirs>,
     window_size: [f32; 2],
+    frame_latency: u32,
     control_port: Option<u16>,
     follow_system_accent: bool,
     motion: Option<ashlar_motion::MotionPrefs>,
@@ -124,6 +127,7 @@ impl<D: Document> App<D> {
             instructions: String::new(),
             dirs: None,
             window_size: [960.0, 640.0],
+            frame_latency: 1,
             control_port: None,
             follow_system_accent: true,
             motion: None,
@@ -210,6 +214,14 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Frames the GPU may queue ahead of the screen, 1 to 3 (default 1: the lowest input latency,
+    /// and one swapchain image fewer, about 10 MB for a 960×640 window on a Retina screen). Apps
+    /// that draw heavy GPU scenes every frame may prefer 2 for smoother throughput.
+    pub fn frame_latency(mut self, frames: u32) -> Self {
+        self.frame_latency = frames.clamp(1, 3);
+        self
+    }
+
     /// Serve the control port on this port (also `--control <port>` and `<APP>_CONTROL_PORT`).
     pub fn control_port(mut self, port: u16) -> Self {
         self.control_port = Some(port);
@@ -272,6 +284,7 @@ impl<D: Document> App<D> {
             telemetry: self.telemetry,
             instructions: self.instructions,
             window_size: self.window_size,
+            frame_latency: self.frame_latency,
             control_port: self.control_port,
             follow_system_accent: self.follow_system_accent,
             motion: self.motion,

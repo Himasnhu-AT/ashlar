@@ -1566,6 +1566,16 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     Ok(())
 }
 
+/// eframe's wgpu setup with `latency` frames queued at most (IMP-2.10: one swapchain image fewer).
+#[cfg(not(target_arch = "wasm32"))]
+fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
+    let surface = eframe::egui_wgpu::SurfaceConfig {
+        present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: Some(latency),
+    };
+    eframe::egui_wgpu::WgpuConfiguration { surface, ..Default::default() }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     // launch timings count from here (IMP-6.9)
@@ -1642,6 +1652,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
             .with_title(shared.title.clone())
             .with_inner_size(shared.window_size)
             .with_app_id(shared.name.clone()),
+        wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
     let title = shared.title.clone();

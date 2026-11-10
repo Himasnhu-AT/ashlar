@@ -15,6 +15,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   frame is presented.
 - `cargo xtask launch` measures `examples/hello` launch time over 9 launches (p50/p95), and
   `cargo xtask launch --memory` its idle RSS and physical footprint (macOS). Manual, opens windows.
+- `App::frame_latency(frames)`: how many frames the GPU may queue ahead of the screen (1 to 3).
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.
@@ -119,6 +120,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ### Changed
 - A document named on the command line opens on the frame after the first, so the window shows
   before the load runs (it used to load before the first paint).
+- Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower
+  input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
+  window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
   0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
