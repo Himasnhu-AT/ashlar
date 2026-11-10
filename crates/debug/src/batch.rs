@@ -288,8 +288,36 @@ impl Ctx<'_, '_, '_> {
                     _ => Ok(Done::new(json!({"count": n}), "")),
                 }
             }
+            "screenshot" | "snapshot" => {
+                // assert screenshot <name> [target] [--tolerance channel=N,pixels=N]
+                let mut snaps = crate::snapshot::Snapshots::from_env();
+                let mut words: Vec<&String> = Vec::new();
+                let mut it = rest.iter();
+                while let Some(w) = it.next() {
+                    if let Some(v) = w.strip_prefix("--tolerance=") {
+                        snaps.tolerance = Some(crate::snapshot::Tolerance::parse(v).map_err(failed)?);
+                    } else if w == "--tolerance" {
+                        let v = it.next().ok_or_else(|| failed("--tolerance needs channel=N,pixels=N".into()))?;
+                        snaps.tolerance = Some(crate::snapshot::Tolerance::parse(v).map_err(failed)?);
+                    } else {
+                        words.push(w);
+                    }
+                }
+                let (name, tgt) = match words.as_slice() {
+                    [name] => (name.as_str(), None),
+                    [name, t] => (name.as_str(), Some(target::parse(t).map_err(failed)?)),
+                    _ => return Err(failed("assert screenshot <name> [target] [--tolerance channel=N,pixels=N]".into())),
+                };
+                let mut p = json!({});
+                if let Some(t) = tgt {
+                    p["target"] = t;
+                }
+                let v = self.call("ui.screenshot", p)?;
+                let out = snaps.check(name, &v).map_err(failed)?;
+                Ok(Done::new(out.to_json(), out.text()))
+            }
             other => Err(failed(format!(
-                "unknown assertion `{other}` (text, value, contains, visible, hidden, enabled, disabled, focused, checked, unchecked, count, exists, missing)"
+                "unknown assertion `{other}` (text, value, contains, visible, hidden, enabled, disabled, focused, checked, unchecked, count, exists, missing, screenshot)"
             ))),
         }
     }

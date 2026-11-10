@@ -384,6 +384,11 @@ impl<D: Document> Driver<D> {
             && o.contains_key("png")
         {
             o.insert("renderer".into(), Value::from(self.renderer.last_used()));
+            if let Some((adapter, backend)) = self.renderer.adapter_parts() {
+                o.insert("adapter".into(), Value::from(adapter));
+                o.insert("backend".into(), Value::from(backend));
+            }
+            o.insert("scale".into(), Value::from(self.pixels_per_point.unwrap_or(1.0)));
         }
         r
     }
@@ -407,6 +412,37 @@ impl<D: Document> Driver<D> {
         self.call(ashlar_control::UI_SCENE, serde_json::json!({"name": name}))?;
         self.settle(60);
         Ok(())
+    }
+
+    /// Compare a screenshot of the whole window with the golden snapshot `name` in
+    /// `tests/snapshots` (see [`ashlar_debug::snapshot`]): exact by default; on a mismatch it
+    /// writes `<name>-new.png` and `<name>-diff.png` and returns the reason.
+    /// `ASHLAR_UPDATE_SNAPSHOTS=1` records the baseline instead. A baseline from another adapter,
+    /// or a run with no GPU renderer, is skipped with a printed note.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn assert_snapshot(&mut self, name: &str) -> Result<ashlar_debug::SnapshotOutcome, String> {
+        self.check_snapshot(name, &ashlar_debug::Snapshots::from_env(), None)
+    }
+
+    /// [`Driver::assert_snapshot`] with explicit settings, of `target` (a control-protocol target,
+    /// e.g. `json!({"id": "list"})`) or the whole window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn check_snapshot(
+        &mut self,
+        name: &str,
+        snapshots: &ashlar_debug::Snapshots,
+        target: Option<Value>,
+    ) -> Result<ashlar_debug::SnapshotOutcome, String> {
+        let mut p = serde_json::json!({});
+        if let Some(t) = target {
+            p["target"] = t;
+        }
+        let shot = self.call("ui.screenshot", p)?;
+        let out = snapshots.check(name, &shot)?;
+        if let ashlar_debug::SnapshotOutcome::Skipped(note) = &out {
+            eprintln!("note: {note}");
+        }
+        Ok(out)
     }
 }
 

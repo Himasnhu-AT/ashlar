@@ -154,6 +154,28 @@ App::<Notes>::new("notes", "0.1.0")
 - Agents use the `ui.scene {name}` control method or the MCP tool `ui_scene` (`{}` lists the
   scenes). Both are listed only when the app declares scenes.
 
+### Golden snapshots
+
+`Driver::assert_snapshot(name)` and the script line `assert screenshot <name> [target]
+[--tolerance channel=2,pixels=4]` compare a screenshot with `tests/snapshots/<name>.png`
+(relative to the working directory, the package folder under `cargo test`; `ASHLAR_SNAPSHOT_DIR`
+overrides it):
+
+- The comparison is exact by default. A tolerance allows pixels whose channels are off by at
+  most `channel`, and up to `pixels` pixels beyond that. A tolerance given when recording is kept
+  in the baseline's meta and used when a check names none.
+- On a mismatch it writes `<name>-new.png` and `<name>-diff.png` (differing pixels magenta), and
+  fails with both paths.
+- `ASHLAR_UPDATE_SNAPSHOTS=1` records the baselines instead, with `<name>.meta.json` saying what
+  rendered them (`adapter`, `backend`, `scale`, size).
+- A baseline from another adapter or backend is skipped with a note on stderr, not failed: GPUs
+  differ by a few pixels. With no GPU renderer (grey screenshots) it is skipped too.
+
+`examples/notes/tests/snapshots.rs` checks the notes app's `empty` and `two-notes` scenes this way.
+Egui's own test harness has a snapshot feature, but it uses its own renderer and a perceptual
+compare with no adapter metadata, so ashlar keeps a small module (`ashlar_debug::snapshot`) that
+works on any `ui.screenshot` reply, from a `Driver` or a live app.
+
 ## Without an app: the demo
 
 `ashlar-debug demo --control <port>` serves a small fake app with a text field, buttons, a
