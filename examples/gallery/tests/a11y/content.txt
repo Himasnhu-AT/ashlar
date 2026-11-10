@@ -1,0 +1,45 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=true]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Banners"
+  Status "A new version is ready. It installs the next time the app starts." [live=polite]
+  Button "Close"
+  Button "Retry"
+  Status "Offline" description="Changes stay on this computer until the connection is back." [live=polite]
+  Button "Save As…"
+  Alert "Save failed" description="The file could not be saved: the disk is full." [live=assertive]
+  Status "Export finished: 24 files written." [live=polite]
+  Label value="Cards and collapsible sections"
+  Group "Account"
+    Label value="Account"
+    Label value="Signed in as someone@example.com"
+    Label value="Pro"
+    Label value="3 seats"
+  Button "Advanced" [expanded]
+  Switch "Verbose logs" [toggled=false]
+  Label value="Settings most people never change."
+  Button "About" [collapsed]
+  Label value="Empty state"
+  Group "No files yet"
+    Label value="No files yet"
+    Label value="Drop files here, or create one to get started."
+    Button "New file"
+  ScrollBar

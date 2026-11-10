@@ -34,11 +34,18 @@ pub struct SearchField<'a> {
     rounded: bool,
     text_margin: Option<Margin>,
     icon: Option<&'a dyn Fn(&Painter, Rect, Color32)>,
+    label: Option<&'a str>,
 }
 
 impl<'a> SearchField<'a> {
     pub fn new(id: &'a str, text: &'a mut String) -> Self {
-        SearchField { id, text, hint: "Search", width: None, max_len: 512, height: None, rounded: false, text_margin: None, icon: None }
+        SearchField { id, text, hint: "Search", width: None, max_len: 512, height: None, rounded: false, text_margin: None, icon: None, label: None }
+    }
+    /// The field's name for screen readers; the placeholder is only a hint. Without one, the
+    /// installed labels' "Search" is used.
+    pub fn label(mut self, label: &'a str) -> Self {
+        self.label = Some(label).filter(|l| !l.is_empty());
+        self
     }
     /// Placeholder shown while empty (localized by the app).
     pub fn hint(mut self, hint: &'a str) -> Self {
@@ -110,6 +117,9 @@ impl<'a> SearchField<'a> {
                 // egui ignores `margin` once a frame is set: the margin goes on the frame
                 .frame(egui::Frame::NONE.inner_margin(self.text_margin.unwrap_or(Margin::symmetric(0, ((h - row_h) / 2.0).max(0.0).floor() as i8)))),
         );
+        let words = crate::labels::current(ui.ctx());
+        let name = self.label.unwrap_or(&words.search.field);
+        ui.ctx().accesskit_node_builder(response.id, |n| n.set_label(name));
         let mut changed = response.changed() || self.text.len() != before;
         let mut cleared = false;
         let submitted = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
@@ -134,10 +144,11 @@ impl<'a> SearchField<'a> {
             let k = h * 0.14;
             ui.painter().line_segment([c - vec2(k, k), c + vec2(k, k)], Stroke::new(1.5, col));
             ui.painter().line_segment([c + vec2(-k, k), c + vec2(k, -k)], Stroke::new(1.5, col));
-            clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Clear search"));
+            let clear_label = words.search.clear.as_str();
+            clear.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, clear_label));
             let sid = self.id;
             if !sid.is_empty() {
-                automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), "Clear search", Role::Button, true, Details::default());
+                automation::register_fmt(ui, clear_rect, format_args!("{sid}.clear"), clear_label, Role::Button, true, Details::default());
             }
             if clear.clicked() {
                 self.text.clear();

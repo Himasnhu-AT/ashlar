@@ -24,6 +24,7 @@ ashlar-log = { path = "crates/log", version = "0.1.0" }
 ashlar-motion = { path = "crates/motion", version = "0.1.0" }
 ashlar-syntax = { path = "crates/syntax", version = "0.1.0" }
 ashlar-diff = { path = "crates/diff", version = "0.1.0" }
+ashlar-i18n = { path = "crates/i18n", version = "0.1.0" }
 ashlar-obfuscate = { path = "crates/obfuscate", version = "0.1.0" }
 ashlar-fs = { path = "crates/fs", version = "0.1.0" }
 # default features off: each crate names the native features it uses

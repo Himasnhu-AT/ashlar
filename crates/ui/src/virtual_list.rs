@@ -26,10 +26,14 @@
 
 use std::ops::Range;
 
-use egui::accesskit::Role as NodeRole;
+use egui::accesskit::{Role as NodeRole, SortDirection};
 use egui::{Event, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 
+use ashlar_motion::gesture::{VelocityTracker, decay_k, deceleration, project, rubber_band};
+use ashlar_motion::{Class, Curve, tokens as mtokens};
+
 use crate::automation::{self, Details, Role};
+use crate::motion;
 use crate::selection::Selection;
 use crate::tokens::{self, Tokens};
 
@@ -259,6 +263,8 @@ pub struct VirtualList<'a> {
     type_ahead: Option<&'a dyn Fn(usize) -> &'a str>,
     selection: Option<&'a mut Selection>,
     changed_rows: &'a [usize],
+    fling: bool,
+    label: Option<&'a str>,
 }
 
 /// Typed letters within this many seconds of each other build one type-ahead prefix.
@@ -280,7 +286,21 @@ impl<'a> VirtualList<'a> {
             type_ahead: None,
             selection: None,
             changed_rows: &[],
+            fling: false,
+            label: None,
         }
+    }
+    /// Drag the list to scroll it (off by default): let go while moving and it keeps going, then
+    /// eases to rest; pulled past either end it stretches with rubber-band resistance and springs
+    /// back. Reduced motion keeps the drag but drops the fling.
+    pub fn fling(mut self, on: bool) -> Self {
+        self.fling = on;
+        self
+    }
+    /// The name a screen reader announces for the list (a human name, not the automation id).
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.label = Some(text).filter(|t| !t.is_empty());
+        self
     }
     /// Rows whose height changed since the last frame, with [`RowHeights::Variable`]: only these
     /// are measured again (O(log rows) each) while the revision and row count stay the same.
@@ -445,6 +465,9 @@ pub(crate) fn show_rows(
         .ctx()
         .accesskit_node_builder(base, |node| {
             node.set_role(kind.node);
+            if let Some(label) = list.label {
+                node.set_label(label);
+            }
             if sel.is_some() {
                 node.set_multiselectable();
             }
@@ -512,7 +535,9 @@ pub(crate) fn show_rows(
     let mut body_rect = outer;
     if let Some(h) = header {
         let header_rect = Rect::from_min_size(outer.min, vec2(outer.width(), h.height));
-        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header"));
+        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header").accessibility_parent(base));
+        // the header is the table's first row; its cells are column headers
+        ui.ctx().accesskit_node_builder(hui.unique_id(), |n| n.set_role(NodeRole::Row));
         hui.set_clip_rect(header_rect.intersect(ui.clip_rect()));
         (h.paint)(&mut hui, header_rect);
         body_rect.min.y = header_rect.max.y;
@@ -521,7 +546,7 @@ pub(crate) fn show_rows(
     let view_h_id = base.with("view_h");
     let mut scroll = egui::ScrollArea::vertical().id_salt(base.with("scroll")).auto_shrink([false, false]).max_height(body_rect.height());
     if let Some(target) = scroll_target {
-        let state = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(base.with("scroll")));
+        let state = egui::scroll_area::State::load(ui.ctx(), scroll_area_id(ui, base));
         let offset = state.map_or(0.0, |s| s.offset.y as f64);
         let view_h: f32 = ui.data(|d| d.get_temp(view_h_id)).unwrap_or(body_rect.height());
         let (top, h) = layout.span(target);
@@ -532,6 +557,8 @@ pub(crate) fn show_rows(
         }
     }
 
+    let over = if list.fling { drive_fling(ui, base, &layout, body_rect, scroll_target.is_some(), &mut scroll) } else { 0.0 };
+
     let mut clicked = None;
     let mut double_clicked = None;
     let mut secondary_clicked = None;
@@ -541,7 +568,8 @@ pub(crate) fn show_rows(
         let total = layout.total().min(f32::MAX as f64 / 4.0) as f32;
         ui.set_height(total);
         ui.set_width(ui.available_width());
-        let origin = ui.max_rect().min;
+        // past an end, the rows follow the rubber band
+        let origin = ui.max_rect().min - vec2(0.0, over);
         let width = ui.max_rect().width();
         visible = layout.visible(viewport.min.y as f64, viewport.max.y as f64, list.overscan);
         let label_fn = list.row_label;
@@ -617,6 +645,8 @@ pub(crate) fn show_rows(
     });
     let view_h = out.inner_rect.height();
     ui.data_mut(|d| d.insert_temp(view_h_id, view_h));
+    // the scroll area's own id (it lives in the body's child ui), for reading its offset
+    ui.data_mut(|d| d.insert_temp(base.with("scroll_id"), out.id));
     if let Some(o) = offsets {
         ui.data_mut(|d| d.insert_temp(offsets_id, o));
     }
@@ -626,6 +656,109 @@ pub(crate) fn show_rows(
     }
     automation::register_with(ui, &response, list.id, "", kind.role, Details::default());
     ListResponse { response, clicked, double_clicked, secondary_clicked, select, activated, visible }
+}
+
+/// The id the list's scroll area keeps its offset under, as it reported last frame. The area
+/// lives in the body's child ui, so the id is not `ui`'s own id with the salt.
+fn scroll_area_id(ui: &Ui, base: Id) -> Id {
+    ui.data(|d| d.get_temp::<Id>(base.with("scroll_id"))).unwrap_or_else(|| ui.make_persistent_id(base.with("scroll")))
+}
+
+/// A list's drag-to-scroll state between frames.
+#[derive(Clone, Copy, Debug, Default)]
+struct ListFling {
+    tracker: VelocityTracker<f32>,
+    /// The offset the hand asks for (may be past either end).
+    raw: f32,
+    /// The last offset given to the tracker.
+    tracked: f32,
+    dragging: bool,
+    /// A fling or spring-back is running toward `target`.
+    running: bool,
+    target: f32,
+    /// The scroll offset set last frame (a different one means something else scrolled).
+    last: f32,
+}
+
+/// Drag-to-scroll with fling and rubber band for the list `base` (see [`VirtualList::fling`]):
+/// sets `scroll`'s offset while dragging or flinging and returns the rubber-band overscroll to
+/// draw the rows with (negative above the top).
+fn drive_fling(ui: &Ui, base: Id, layout: &Layout<'_>, body: Rect, scrolling_to: bool, scroll: &mut egui::ScrollArea) -> f32 {
+    let ctx = ui.ctx().clone();
+    let key = base.with("fling");
+    let anim = key.with("offset");
+    let view_h: f32 = ui.data(|d| d.get_temp(base.with("view_h"))).unwrap_or(body.height()).max(1.0);
+    let max = (layout.total().min(f32::MAX as f64 / 4.0) as f32 - view_h).max(0.0);
+    let scroll_id = scroll_area_id(ui, base);
+    let current = egui::scroll_area::State::load(&ctx, scroll_id).map_or(0.0, |s| s.offset.y);
+    // the list scrolls by hand itself (egui's own drag-to-scroll would fight it)
+    *scroll = scroll.clone().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() });
+    let drag = ui.interact(body, key, Sense::drag());
+    // a pointer-only surface: the list and its scroll bar are what a screen reader uses
+    ui.ctx().accesskit_node_builder(drag.id, |n| n.set_role(NodeRole::GenericContainer));
+    let now = ui.input(|i| i.time);
+    let mut f: ListFling = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    let band = |raw: f32| {
+        if raw < 0.0 {
+            rubber_band(raw, view_h)
+        } else if raw > max {
+            max + rubber_band(raw - max, view_h)
+        } else {
+            raw
+        }
+    };
+    let mut offset = None;
+    if drag.drag_started() {
+        f = ListFling { raw: current, tracked: current, dragging: true, last: current, ..ListFling::default() };
+        f.tracker.add(now, current);
+    }
+    if f.dragging {
+        f.raw -= drag.drag_delta().y;
+        let shown = band(f.raw);
+        // only movement is a sample: a still hand ages the last one until `velocity_at` says 0
+        if shown != f.tracked {
+            f.tracker.add(now, shown);
+            f.tracked = shown;
+        }
+        motion::set(&ctx, anim, shown);
+        offset = Some(shown);
+        if drag.drag_stopped() || !drag.dragged() {
+            f.dragging = false;
+            let reduced = motion::prefs(&ctx).reduced;
+            let v = if reduced { 0.0 } else { f.tracker.velocity_at(now) };
+            let target = project(shown, v, deceleration::NORMAL).clamp(0.0, max);
+            if target != shown {
+                // never faster than the distance left can absorb: a fling stopped by an end eases
+                // into it, and a stretched list springs back without swinging past
+                let reach = (target - shown) * decay_k(deceleration::NORMAL);
+                let v = if v.signum() == reach.signum() { v.abs().min(reach.abs()).copysign(v) } else { 0.0 };
+                let curve = if reduced && v == 0.0 && (0.0..=max).contains(&shown) { Curve::Instant } else { Curve::Spring(mtokens::SETTLE.enter) };
+                motion::release(&ctx, anim, v, target, curve);
+                f.running = true;
+                f.target = target;
+            }
+        }
+    } else if f.running {
+        if scrolling_to || (current - f.last).abs() > 0.5 {
+            // the wheel, the keyboard or the app scrolled: they win
+            f.running = false;
+        } else {
+            let o = motion::value(&ctx, anim, f.target, Class::Gesture, mtokens::SETTLE.enter);
+            if o == f.target {
+                f.running = false;
+            }
+            offset = Some(o);
+        }
+    }
+    let mut over = 0.0;
+    if let Some(o) = offset.filter(|o| o.is_finite()) {
+        let inside = o.clamp(0.0, max);
+        *scroll = scroll.clone().vertical_scroll_offset(inside);
+        over = o - inside;
+        f.last = inside;
+    }
+    ui.data_mut(|d| d.insert_temp(key, f));
+    over
 }
 
 fn paint_row_background(ui: &Ui, t: &Tokens, rect: Rect, i: usize, selected: bool, hovered: bool, stripes: bool, focused: bool) {
@@ -715,6 +848,11 @@ impl<'a> VirtualTable<'a> {
         self.list = self.list.max_height(h);
         self
     }
+    /// The name a screen reader announces for the table. See [`VirtualList::label`].
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.list = self.list.label(text);
+        self
+    }
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.list = self.list.row_label(f);
         self
@@ -782,6 +920,13 @@ impl<'a> VirtualTable<'a> {
                     painter.line_segment([pos2(ax, ay + a * 0.5 - 0.5), pos2(ax + 3.5, ay + b * 0.5)], Stroke::new(1.5, t.text.secondary));
                 }
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, col.title));
+                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                    n.set_role(NodeRole::ColumnHeader);
+                    n.set_column_index(c);
+                    if let Some(s) = sort.filter(|s| s.column == c) {
+                        n.set_sort_direction(if s.ascending { SortDirection::Ascending } else { SortDirection::Descending });
+                    }
+                });
                 let sorted = sort.map(|s| s.column == c);
                 automation::register_fmt(
                     ui,
@@ -796,6 +941,8 @@ impl<'a> VirtualTable<'a> {
                 if col.resizable {
                     let handle = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(6.0, cell.height()));
                     let hr = ui.interact(handle, base.with(("resize", c)), Sense::drag());
+                    // a pointer-only handle: nothing for a screen reader to announce
+                    ui.ctx().accesskit_node_builder(hr.id, |n| n.set_role(NodeRole::GenericContainer));
                     if hr.hovered() || hr.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
                     }
@@ -825,6 +972,11 @@ impl<'a> VirtualTable<'a> {
                         let mut cui =
                             ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)).id_salt(c));
                         cui.set_clip_rect(inner.intersect(ui.clip_rect()));
+                        cui.ctx().accesskit_node_builder(cui.unique_id(), |n| {
+                            n.set_role(NodeRole::Cell);
+                            n.set_column_index(c);
+                            n.set_row_index(row.index);
+                        });
                         cell(&mut cui, row.index, c);
                     }
                     x += w;

@@ -18,11 +18,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   default): macOS answers `applicationShouldTerminate:` later until the user chooses; Windows
   handles `WM_QUERYENDSESSION` / `WM_ENDSESSION` and, since it can't wait for a dialog, keeps
   unsaved changes for recovery. The flow is the pure `session_end::step`.
+- Gesture handoff: value fields, sliders and knobs keep going when a drag is let go while moving
+  and ease to rest (clamped, snapped; the commit carries the resting value, so one drag is still
+  one undo step); `.fling(false)` turns it off. `VirtualList::fling(true)` drags the list to
+  scroll it, with fling and rubber band past either end. A pause of 40 ms before release, or
+  reduced motion, means no fling.
+- `ashlar_ui::rolling::RollingText`: counters and readouts that roll instead of jumping. Only the
+  changed characters move (prefix/suffix, then LCS for short text), up when `.value(..)` rises and
+  down when it falls; the width follows; `.tabular(true)` gives digits one width. Reduced motion
+  crossfades. The accessible value is the whole new text at once; nothing animates once settled.
 - Windows reopen where they were: `App::remember_window(bool)` (default on) saves position, size,
   maximized and full screen state in the settings under `"window"` when they change, and the next
   launch opens the window there, sizes bounded and a window left on no monitor moved back
   (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
   (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
+- `ashlar-i18n` (new crate, rank 0, builds for wasm32): translations without a full Unicode
+  library. Flat JSON catalogs per locale, parsed on first use and layered (later catalogs override
+  key by key); a bad catalog is reported and acts as empty, never a panic. `I18n::{text, format,
+  plural, integer, decimal, set_locale, negotiate}`: `{name}` templates, CLDR plural categories
+  for about 50 languages (`key.one`, `key.few`, …), per-locale group and decimal separators
+  (including Indian grouping), fallback locale → language → source (`zh-TW` → `zh-Hant`), POSIX
+  and BCP 47 tags (`de_DE.UTF-8` → `de-DE`), `system_locales()` from `LANGUAGE`/`LC_ALL`/`LANG`,
+  and `I18n::check()` for missing keys and mismatched placeholders.
+- `ashlar_ui::labels`: one `UiLabels` installed on the context holds every built-in component
+  string (toasts, form, chat, diff view, keymap editor, tab strip, print panel). Components use it
+  unless the app passes its own labels, which still win. English and German catalogs ship for the
+  `ui.*` keys; `UiLabels::from_i18n` builds the labels for any locale.
 - Perf warnings in debug builds (`ashlar_app::perf_warn`): one stderr line per site when a frame
   waits (≥ 8 ms wall at ≥ 4× its CPU time; names the command or wake reason) or when 60 identical
   frames in a row are drawn for non-input wakes. `ASHLAR_FRAME_BUDGET_MS=N` (any build) prints at
@@ -302,6 +323,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - Linux: copied text and images no longer vanish when the copy call returns; one clipboard lives
   on a worker thread for the life of the process.
 
+- `ashlar-ui` lists: `scroll_to` read the scroll offset under the wrong id, so it never scrolled
+  up to a row above the view and moved the list for a row already in view. It now reads the scroll
+  area's own id, as the fling does.
+- `ashlar-ui` accessibility: lists, tables and trees take a `.label(text)` that screen readers
+  announce; table cells are `Cell` nodes and the header row holds `ColumnHeader` nodes (with sort
+  direction); resize handles, tree disclosure arrows and the fling drag surface no longer show up as
+  unnamed nodes. The keymap editor's table, its actions column and its shortcut and clear buttons
+  have names (new `KeymapLabels::table` and `actions`, English and German).
+- `ashlar-ui` accessibility: search fields and the command palette input have a name, not only a
+  placeholder (`SearchField::label`, new `UiLabels::search` with English and German); banners
+  announce their text once instead of as both name and value.
 - `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
   `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
   a screen reader's tree on every later frame (a caret-blink frame in the notes app: 272 allocations
