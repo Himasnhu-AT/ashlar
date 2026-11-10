@@ -11,6 +11,9 @@ use crate::automation::{self, Details, Role};
 use crate::controls::{Button, Size, Variant};
 use crate::tokens;
 
+/// Wake reason for the one frame a transcript asks for after measured heights moved.
+pub const CHAT_LAYOUT: crate::wake::Reason = crate::wake::Reason("chatLayout");
+
 /// Messages beyond this are not shown.
 pub const MAX_MESSAGES: usize = 1_000_000;
 /// Height assumed for a message never drawn, before any message was measured.
@@ -298,7 +301,7 @@ impl<'a, T: TranscriptItem> Transcript<'a, T> {
         }
         if moved {
             // the layout settles on the next frame; then nothing changes and no frame is asked for
-            ui.ctx().request_repaint();
+            crate::wake::wake(ui.ctx(), CHAT_LAYOUT);
         }
 
         let mut jumped = false;
@@ -308,7 +311,7 @@ impl<'a, T: TranscriptItem> Transcript<'a, T> {
             let mut bui = ui.new_child(UiBuilder::new().max_rect(strip).layout(Layout::top_down(egui::Align::Center)).accessibility_parent(base));
             if Button::new(self.id, &labels.jump_to_latest).part("jump").variant(Variant::Secondary).size(Size::Sm).show(&mut bui).clicked() {
                 ui.data_mut(|d| d.insert_temp(jump_id, true));
-                ui.ctx().request_repaint();
+                crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
                 jumped = true;
             }
         }

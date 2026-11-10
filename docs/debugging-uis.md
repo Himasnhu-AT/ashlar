@@ -212,6 +212,10 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   eframe has built the window and its wgpu surface), `to_first_frame_ms` (the end of the first
   frame) and `launch_to_present_ms` (that frame painted and presented). The app also logs them
   once at `info`. Headless runs report none.
+- `stats` also reports `process`: `footprint_bytes` (macOS physical footprint, Linux private
+  resident + swap, Windows private commit), `peak_bytes` (the highest footprint seen, sampled at
+  most once a second while frames run and at every reading), `cpu_s` (CPU seconds of every
+  thread) and `threads` (Linux only for now). A field the platform cannot report is `null`.
 - `<PREFIX>_READY_FILE=path` (the prefix is the app name in capitals, like `<PREFIX>_CONTROL_PORT`)
   makes the app write `{"pid": …, "ready_ms": …}` to `path`, atomically, once its first frame is
   presented: a launcher or a test waits for the file instead of sleeping.
@@ -223,6 +227,36 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   process). `cargo xtask launch --memory` lets it idle 10 s (`--settle SECS`) and prints the RSS
   and the physical footprint and its peak (`vmmap`, macOS). Both open real windows, so they are
   manual and never run in CI; results swing with machine load, so compare runs made back to back.
+
+## Frame performance
+
+Debug builds watch their own frames and print one line to stderr, once per site, when:
+
+- a frame **waits**: it took ≥ 8 ms of wall time and at least 4× the UI thread's CPU time, so the
+  thread was blocked (file or network I/O, a lock, a sleep). The line names the command the frame
+  ran, or else the wake reasons it was drawn for. Move that work to a job.
+- the **same frame is drawn over and over**: 60 frames in a row with identical shapes, drawn only
+  for non-input wake reasons (a timer or an animation that never settles). The line names the
+  reasons; `app.stats` → `wakes` counts them.
+
+`ASHLAR_FRAME_BUDGET_MS=N` (debug or release) prints at most one line per second for frames over
+`N` ms: the pass time, the runtime's own UI time, the UI thread's CPU time, the command or wake
+reasons, and how many more frames went over since the previous line. `ASHLAR_PERF_WARN=0`
+silences all of these. A release build with neither variable set installs nothing.
+
+`ASHLAR_FRAME_LOG=FILE` (any build; `Runtime::log_frames(path)` in tests) writes one JSON line
+per frame, for comparing runs:
+
+```json
+{"frame":12,"passes":1,"t":0.204,"wall_ms":3.1,"cpu_ms":2.9,"phases":{"pass_ms":3.1,"ui_ms":2.4},
+ "reasons":["animation"],"commands":[],"input":false,"dropped":0}
+```
+
+`passes` is the pass number within the frame (egui sometimes runs a frame twice; each pass gets a
+line). `cpu_ms` is the UI thread's CPU time, `phases.ui_ms` the runtime's own part (menus, view,
+dialogs), `reasons` the wake reasons and `commands` the commands the frame ran. A background
+thread writes the file; it stops at 64 MiB with a last `{"end": "size limit reached", …}` line, and
+`dropped` counts lines lost if the writer falls behind. Not available on the web.
 
 ## Agents (MCP)
 

@@ -88,7 +88,7 @@ a task's state.
 | IMP-5.4 | Markdown v2 | doing (wt-md2) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | done (4473fe0, c7311b4) |
 | IMP-5.6 | Diff view | done (b0de2c5) |
-| IMP-5.7 | Chat kit | doing (wt-chat) |
+| IMP-5.7 | Chat kit | done (ae5d998) |
 | IMP-5.8 | Settings form pattern | done (de225b3) |
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | done (5885b46) |
 | IMP-5.10 | Standalone tab strip | done (2a523df) |
@@ -119,7 +119,7 @@ a task's state.
 | IMP-6.10 | Open command-line document after first frame | done (wt/launch, 4356a62) |
 | IMP-6.11 | Tray / status item | todo |
 | IMP-6.12 | Rich clipboard, secret copy | todo |
-| IMP-6.13 | `ashlar-i18n` | todo |
+| IMP-6.13 | `ashlar-i18n` | doing (wt-i18n) |
 | IMP-6.14 | macOS shell shims | todo |
 | IMP-6.15 | Drag-out and native context menus | todo |
 | IMP-6.16 | Global shortcuts and bring-to-front | todo |

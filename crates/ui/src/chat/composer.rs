@@ -192,7 +192,7 @@ impl<'a> Composer<'a> {
                 self.apply_pick(ui, edit_id, f, i);
                 popup_pick = Some(i);
                 ui.memory_mut(|m| m.request_focus(edit_id));
-                ui.ctx().request_repaint();
+                crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
             }
             st.cursor = cursor;
         }

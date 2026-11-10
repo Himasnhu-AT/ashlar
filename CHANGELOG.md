@@ -21,6 +21,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   string (toasts, form, chat, diff view, keymap editor, tab strip, print panel). Components use it
   unless the app passes its own labels, which still win. English and German catalogs ship for the
   `ui.*` keys; `UiLabels::from_i18n` builds the labels for any locale.
+- Perf warnings in debug builds (`ashlar_app::perf_warn`): one stderr line per site when a frame
+  waits (≥ 8 ms wall at ≥ 4× its CPU time; names the command or wake reason) or when 60 identical
+  frames in a row are drawn for non-input wakes. `ASHLAR_FRAME_BUDGET_MS=N` (any build) prints at
+  most one line a second for frames over `N` ms with the phase split; `ASHLAR_PERF_WARN=0` silences.
+- `ASHLAR_FRAME_LOG=FILE` and `Runtime::log_frames(path)`: one JSON line per frame (wall and
+  UI-thread CPU time, phases, wake reasons, commands run, pass number), written by a background
+  thread and capped at 64 MiB with a final `"end"` line (`ashlar_app::frame_log`).
+- `app.stats` (and the MCP `app_stats` tool) reports `process`: `footprint_bytes`, `peak_bytes`,
+  `cpu_s` and `threads` (`ProcessStats`; `null` where the platform cannot say).
+- `ashlar-native` notifications: stable ids (`Notification::id`; the same id replaces a shown
+  notification), `notify::show` (returns the id), `notify::remove`, `notify::on_click` (a
+  `Receiver<Click>` with the notification's `info` map), `silent`, and `notify::set_app_identity`.
+  Windows now shows toasts (AppUserModelID registered under HKCU for unpackaged apps, escaped XML,
+  tags over 64 characters hashed); macOS installs a notification-center delegate so banners show
+  while the app is frontmost and clicks are reported; Linux sends the `desktop-entry` hint and
+  reports clicks from `ActionInvoked`.
 - `ashlar_ui::chat`: a chat kit over plain data. `Transcript` is a virtualized, variable-height
   message list (heights kept per message key, revision and width; a frame costs O(visible)) that
   follows the newest message while it streams, stays put once the user scrolls up and then offers
@@ -184,6 +200,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- `ashlar-native` macOS notifications play the default sound unless `silent` is set, and ask for
+  sound permission only then.
 - A document named on the command line opens on the frame after the first, so the window shows
   before the load runs (it used to load before the first paint).
 - Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower

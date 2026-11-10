@@ -293,6 +293,7 @@ dependencies = [
  "ashlar-store",
  "ashlar-telemetry",
  "ashlar-ui",
+ "cpu-time",
  "eframe",
  "egui",
  "log",
