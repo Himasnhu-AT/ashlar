@@ -7,16 +7,16 @@ a task's state.
 ## Phase 0: plan
 | Id | Task | Status |
 |---|---|---|
-| IMP-0.1 | Audit and plan files | done (this commit) |
+| IMP-0.1 | Audit and plan files | done (0f3d6dd) |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
 |---|---|---|
-| IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | todo |
+| IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | doing (wt-frame) |
 | IMP-1.2 | Allocation gate in perf tests | todo |
-| IMP-1.3 | `ashlar-ui` perf suite | todo |
-| IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | todo |
-| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | todo |
+| IMP-1.3 | `ashlar-ui` perf suite | doing (wt-uiperf) |
+| IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | doing (wt-notes) |
+| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | doing (wt-notes: typing/resize/select; wt-frame: idle field, frames per command) |
 | IMP-1.6 | 120 Hz frame budget in telemetry | todo |
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | todo |
 | IMP-1.8 | Launch to first present | todo |
@@ -25,12 +25,12 @@ a task's state.
 ## Phase 2: performance
 | Id | Task | Status |
 |---|---|---|
-| IMP-2.1 | No caret-blink frames when idle | todo |
-| IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | todo |
-| IMP-2.3 | Markdown cache and off-screen culling | todo |
-| IMP-2.4 | Galley cache hot path | todo |
-| IMP-2.5 | Notes example O(n) paths | todo |
-| IMP-2.6 | Incremental offsets for variable-height lists | todo |
+| IMP-2.1 | No caret-blink frames when idle | doing (wt-frame) |
+| IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | doing (wt-frame) |
+| IMP-2.3 | Markdown cache and off-screen culling | doing (wt-uiperf) |
+| IMP-2.4 | Galley cache hot path | doing (wt-uiperf) |
+| IMP-2.5 | Notes example O(n) paths | doing (wt-notes) |
+| IMP-2.6 | Incremental offsets for variable-height lists | doing (wt-uiperf) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | todo |
 | IMP-2.9 | Binary size | todo |
@@ -42,7 +42,7 @@ a task's state.
 ## Phase 3: motion and theming
 | Id | Task | Status |
 |---|---|---|
-| IMP-3.1 | `ashlar-motion` crate | todo |
+| IMP-3.1 | `ashlar-motion` crate | doing (wt-motion) |
 | IMP-3.2 | `ashlar_ui::motion` | todo |
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | todo |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | todo |
@@ -54,9 +54,9 @@ a task's state.
 ## Phase 4: agent tooling
 | Id | Task | Status |
 |---|---|---|
-| IMP-4.1 | Fix `trace` with `--port`/`--app` | todo |
-| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | todo |
-| IMP-4.3 | Control-protocol doc drift | todo |
+| IMP-4.1 | Fix `trace` with `--port`/`--app` | doing (wt-tools) |
+| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (wt-tools: MCP part; process numbers wait for wave 2) |
+| IMP-4.3 | Control-protocol doc drift | doing (wt-tools) |
 | IMP-4.4 | Headless wgpu renderer for `Driver` | todo |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | todo |
 | IMP-4.6 | `--headless --snap --tree` flags | todo |

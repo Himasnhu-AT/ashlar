@@ -3,6 +3,21 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wave 1 started
+
+Worktrees under `.claude/worktrees/` were branched from `imp` at 0f3d6dd. Each agent owns the files
+listed in its brief, so merges stay mechanical.
+
+| Agent | Branch | Tasks | Owns |
+|---|---|---|---|
+| wt-frame | `wt/frame` | IMP-1.1, IMP-1.5 (idle field, frames per command), IMP-2.1, IMP-2.2 | `crates/app`, the caret fix, `examples/notes/tests/wake.rs`, one fn in `examples/notes/tests/perf.rs` |
+| wt-notes | `wt/notes` | IMP-1.4, IMP-1.5 (typing, resize, select-last), IMP-2.5 | `examples/notes/src`, the rest of `examples/notes/tests/perf.rs`, new scroll bench |
+| wt-uiperf | `wt/uiperf` | IMP-1.3, IMP-2.4, IMP-2.3, then IMP-2.6 | `crates/ui/src/{cache,markdown,virtual_list}.rs`, `crates/ui/tests/perf.rs` |
+| wt-motion | `wt/motion` | IMP-3.1 | `crates/motion`, `LAYERS`, the architecture table |
+| wt-tools | `wt/tools` | IMP-4.1, IMP-4.2 (MCP part), IMP-4.3 | `crates/debug`, `crates/mcp`, protocol docs |
+
+Expected merge conflicts: CHANGELOG.md (every branch adds lines), `Cargo.lock`.
+
 ## 2026-11-10: audit and plan (IMP-0.1)
 
 - Six read-only auditors ran in parallel, one per area: rendering, motion, components, agent tooling,
