@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Motion and jank gate for tests: `ashlar_ui::motion_gate::MotionRecorder` records values
+  animated through `ashlar_ui::motion` and per-frame automation rects (`Driver::record` does both
+  for an app), and `check(&MotionRules)` flags overshoot of opacity and colour, reversals without
+  bounce, pops, flicker and frames requested after everything settled, with a per-id allow-list.
+  The gallery's dialog, toast, theme crossfade and tab switches pass it.
 - `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
   modified marker and reset button, a filter that hides non-matching rows and empty sections,
   highlights matches and shows "No settings match", and `Field` with a required marker and an
