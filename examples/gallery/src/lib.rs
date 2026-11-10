@@ -11,15 +11,17 @@ use ashlar::command::Keymap;
 use ashlar::command::shortcut::{Chord, Platform};
 use ashlar::ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use ashlar::ui::chat::{Approval, ChatMessage, ChatRole, Composer, Message, ToolCard, ToolStatus, Transcript};
+use ashlar::ui::code_view::CodeView;
 use ashlar::ui::commands::{CommandPalette, Item, KeymapEditor, MenuNode, MenuSpec, Submenu, dispatch, menu, menu_bar};
-use ashlar::ui::content::{Banner, Card, Collapsible, EmptyState};
-use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Spinner, Switch, Tone, Variant};
+use ashlar::ui::content::{Accordion, Banner, Card, Collapsible, EmptyState};
+use ashlar::ui::controls::{Badge, Button, Keycap, Progress, RadioGroup, Segmented, Size, Skeleton, Spinner, Switch, Tone, Variant};
 use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::form::{self, Field};
 use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
 use ashlar::ui::rolling::RollingText;
 use ashlar::ui::search::SearchField;
+use ashlar::ui::sidebar::{Sidebar, SidebarItem, SidebarSection, SidebarState};
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
 use ashlar::ui::swatches::SwatchGrid;
@@ -43,11 +45,24 @@ pub enum Page {
     Tabs,
     Settings,
     Chat,
+    Code,
+    Sidebar,
 }
 
 impl Page {
-    pub const ALL: [Page; 9] =
-        [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands, Page::Settings, Page::Chat];
+    pub const ALL: [Page; 11] = [
+        Page::Inputs,
+        Page::Controls,
+        Page::Content,
+        Page::Lists,
+        Page::Tabs,
+        Page::Overlays,
+        Page::Commands,
+        Page::Settings,
+        Page::Chat,
+        Page::Code,
+        Page::Sidebar,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -59,8 +74,29 @@ impl Page {
             Page::Tabs => "Tabs",
             Page::Settings => "Settings",
             Page::Chat => "Chat",
+            Page::Code => "Code",
+            Page::Sidebar => "Sidebar",
         }
     }
+}
+
+/// The code page's sample: a small Rust module with one very long line.
+fn demo_code() -> &'static str {
+    static CODE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CODE.get_or_init(|| {
+        let mut s = String::from(
+            "//! A tiny inventory: items, counts and a report.\n\nuse std::collections::BTreeMap;\n\n/// One stock item.\n#[derive(Clone, Debug)]\npub struct Item {\n    pub name: String,\n    pub count: u32,\n}\n\n/// Items by name, sorted.\npub fn index(items: &[Item]) -> BTreeMap<&str, u32> {\n    let mut map = BTreeMap::new();\n    for item in items {\n        *map.entry(item.name.as_str()).or_insert(0) += item.count;\n    }\n    map\n}\n\n",
+        );
+        s.push_str("pub const REPORT_HEADER: &str = \"");
+        for i in 0..24 {
+            s.push_str(&format!("column {i} | "));
+        }
+        s.push_str("\";\n\n");
+        for i in 0..40 {
+            s.push_str(&format!("/// Restock rule {i}: order more below {} items.\npub fn rule_{i}(count: u32) -> bool {{\n    count < {}\n}}\n\n", 10 + i, 10 + i));
+        }
+        s
+    })
 }
 
 /// A long demo conversation for the chat page.
@@ -176,6 +212,10 @@ pub struct Gallery {
     pub view: usize,
     pub quality: usize,
     pub align: usize,
+    /// The plan picker, whose last option is disabled.
+    pub plan: usize,
+    /// The open section of the help accordion.
+    pub faq_open: Option<usize>,
     pub reduce_motion: bool,
     pub exporting: bool,
     pub button_clicks: u64,
@@ -209,6 +249,18 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    pub sidebar: SidebarState,
+    /// The sidebar page's mailboxes (renamable) and tags.
+    pub sidebar_places: Vec<String>,
+    pub sidebar_tags: Vec<String>,
+    /// What the sidebar last reported.
+    pub sidebar_last: String,
+    /// The code page wraps long lines.
+    pub code_wrap: bool,
+    /// The code page shows line numbers.
+    pub code_numbers: bool,
+    /// The toast demo's export progress, in quarters (0 = not started).
+    pub toast_progress: u8,
     // settings
     pub settings_query: String,
     pub launch_at_login: bool,
@@ -284,6 +336,8 @@ impl Gallery {
             view: 1,
             quality: 1,
             align: 0,
+            plan: 0,
+            faq_open: None,
             reduce_motion: false,
             exporting: false,
             button_clicks: 0,
@@ -299,6 +353,13 @@ impl Gallery {
             dialog_open: false,
             dialog_opener: None,
             toasts: Toasts::new(),
+            sidebar: SidebarState::new(),
+            sidebar_places: ["Inbox", "Drafts", "Sent", "Archive", "Trash"].map(String::from).to_vec(),
+            sidebar_tags: (0..5_000).map(|i| format!("Tag {i:04}")).collect(),
+            sidebar_last: String::new(),
+            code_wrap: false,
+            code_numbers: true,
+            toast_progress: 0,
             last_dialog: None,
             font_size: 1,
             font: ComboboxState::new(),
@@ -471,12 +532,16 @@ impl Gallery {
                 Page::Tabs => self.tabs_page(ui),
                 Page::Settings => self.settings(ui),
                 Page::Chat => self.chat(ui),
+                Page::Code => self.code_page(ui),
+                Page::Sidebar => self.sidebar_page(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
             self.run(&ctx, &id);
         }
-        self.toasts.show(&ctx);
+        for action in self.toasts.show_actions(&ctx) {
+            self.run(&ctx, &action.command);
+        }
     }
 
     fn settings(&mut self, ui: &mut Ui) {
@@ -676,6 +741,9 @@ impl Gallery {
                     RadioGroup::new("controls.quality", "Quality", &["Draft", "Good", "Best"], &mut self.quality).show(ui);
                     ui.add_space(t.space.xl);
                     RadioGroup::new("controls.align", "Alignment", &["Left", "Center", "Right"], &mut self.align).horizontal(true).show(ui);
+                    ui.add_space(t.space.xl);
+                    // an option the current account cannot pick
+                    Segmented::new("controls.plan", "Plan", &["Free", "Team", "Enterprise"], &mut self.plan).disabled(&[2]).show(ui);
                 });
             });
             section(ui, &t, "Badges and keycaps", |ui| {
@@ -695,6 +763,9 @@ impl Gallery {
                         Keycap::chord("controls.keys.palette", chord, Platform::current()).show(ui);
                     }
                     Keycap::new("controls.keys.escape", "Esc").show(ui);
+                    if let Ok(chord) = Chord::parse("Mod+Shift+Z") {
+                        Keycap::chord("controls.keys.mac", chord, Platform::Mac).show(ui);
+                    }
                 });
             });
             section(ui, &t, "Progress", |ui| {
@@ -708,6 +779,8 @@ impl Gallery {
                     Progress::circle("controls.progress.circle.busy", "Connecting", None).reduced_motion(reduced).show(ui);
                     Spinner::new("controls.spinner", "Loading").reduced_motion(reduced).show(ui);
                 });
+                ui.add_space(t.space.sm);
+                Skeleton::rows("controls.skeleton", 3).width(260.0).reduced_motion(reduced).show(ui);
             });
             section(ui, &t, "Rolling numbers", |ui| {
                 ui.horizontal(|ui| {
@@ -801,6 +874,120 @@ impl Gallery {
                     self.button_clicks += 1;
                 }
             });
+            section(ui, &t, "Accordion (one section open)", |ui| {
+                let mut acc = Accordion::new("content.faq", &mut self.faq_open);
+                for (i, (title, body)) in [
+                    ("Where are my files kept?", "In the folder you chose when you created the project."),
+                    ("Can I work offline?", "Yes. Changes sync when the connection is back."),
+                    ("How do I export?", "File, Export, then pick a format."),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    acc.section(ui, i, title, |ui| {
+                        ui.label(body);
+                    });
+                }
+            });
+        });
+    }
+
+    fn sidebar_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        let tray = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+            let s = egui::Stroke::new(1.2, c);
+            let r = r.shrink(r.width() * 0.12);
+            p.rect_stroke(r, 2.0, s, egui::StrokeKind::Inside);
+            p.hline(r.x_range(), r.center().y, s);
+        };
+        let dot = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+            p.circle_filled(r.center(), r.width() * 0.25, c);
+        };
+        let details = ["12", "", "", "1.2k", ""];
+        let places: Vec<SidebarItem> = self
+            .sidebar_places
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let item = SidebarItem::new(name).icon(&tray).detail(details.get(i).copied().unwrap_or(""));
+                if i == 0 { item.badge("3") } else { item }
+            })
+            .collect();
+        let tags: Vec<SidebarItem> = self.sidebar_tags.iter().map(|n| SidebarItem::new(n).icon(&dot)).collect();
+        let sections = [SidebarSection::new("Mailboxes", &places).count(3), SidebarSection::new("Tags", &tags)];
+        let mut renamed = None;
+        ui.horizontal_top(|ui| {
+            egui::Frame::new()
+                .fill(t.surface.panel)
+                .stroke(egui::Stroke::new(1.0, t.border))
+                .corner_radius(t.radius.lg)
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.set_width(240.0);
+                    let out = Sidebar::new("sidebar.nav", "Navigation", &mut self.sidebar, &sections).max_height(560.0).show(ui);
+                    let name = |r: ashlar::ui::sidebar::ItemRef| {
+                        sections.get(r.section).and_then(|s| s.items.get(r.item)).map_or("", |i| i.label).to_owned()
+                    };
+                    if let Some(r) = out.activated {
+                        self.sidebar_last = format!("Opened {}", name(r));
+                    } else if let Some(r) = out.context {
+                        self.sidebar_last = format!("Context menu for {}", name(r));
+                    } else if let Some(s) = out.toggled {
+                        self.sidebar_last = format!(
+                            "{} {}",
+                            if self.sidebar.is_collapsed(s) { "Folded" } else { "Unfolded" },
+                            sections.get(s).map_or("", |s| s.title)
+                        );
+                    }
+                    if let Some((r, new)) = out.renamed {
+                        self.sidebar_last = format!("Renamed {} to {new}", name(r));
+                        renamed = Some((r, new));
+                    }
+                });
+            ui.add_space(t.space.lg);
+            ui.vertical(|ui| {
+                let selected = self
+                    .sidebar
+                    .selected
+                    .and_then(|r| sections.get(r.section).and_then(|s| s.items.get(r.item)))
+                    .map_or("Nothing selected", |i| i.label);
+                ui.label(egui::RichText::new(selected).size(t.type_scale.heading).strong());
+                ui.label(
+                    egui::RichText::new("Tab focuses the sidebar. Arrows move, Left and Right fold, F2 renames, typing jumps.")
+                        .color(t.text.secondary),
+                );
+                if !self.sidebar_last.is_empty() {
+                    ui.label(&self.sidebar_last);
+                }
+            });
+        });
+        if let Some((r, new)) = renamed
+            && r.section == 0
+            && let Some(slot) = self.sidebar_places.get_mut(r.item)
+        {
+            *slot = new;
+        }
+    }
+
+    fn code_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        section(ui, &t, "Code view", |ui| {
+            ui.horizontal(|ui| {
+                Switch::new("code.wrap", "Wrap long lines", &mut self.code_wrap).show(ui);
+                ui.add_space(t.space.lg);
+                Switch::new("code.numbers", "Line numbers", &mut self.code_numbers).show(ui);
+            });
+            ui.add_space(t.space.sm);
+            let hint =
+                if self.code_wrap { "Long lines wrap at the view's width." } else { "Long lines scroll sideways: Shift+wheel or the bar below." };
+            ui.label(egui::RichText::new(hint).color(t.text.secondary));
+            ui.add_space(t.space.sm);
+            CodeView::new("code.view", demo_code())
+                .lang(Some("rust"))
+                .wrap(self.code_wrap)
+                .line_numbers(self.code_numbers)
+                .max_height(420.0)
+                .show(ui);
         });
     }
 
@@ -986,6 +1173,23 @@ impl Gallery {
                     self.toasts.push(Toast::new(ToastLevel::Warning, "This one stays until you close it").sticky());
                 }
             });
+            ui.add_space(t.space.sm);
+            ui.horizontal(|ui| {
+                if Button::new("overlays.toast.action", "With actions").show(ui).clicked() {
+                    // the actions name gallery commands: the gallery runs them when clicked
+                    let toast = Toast::success("24 files written to Exports").title("Export finished").action("Toggle grid", "view.grid");
+                    self.toasts.push(toast.action("Palette", "help.palette").sticky());
+                }
+                if Button::new("overlays.toast.progress", "Advance export").show(ui).clicked() {
+                    self.toast_progress = (self.toast_progress + 1) % 5;
+                    if self.toast_progress == 0 {
+                        self.toasts.push(Toast::success("Export finished").key("gallery.export").duration(Duration::from_secs(3)));
+                    } else {
+                        self.toasts.progress("gallery.export", "Exporting…", Some(f32::from(self.toast_progress) / 4.0));
+                    }
+                }
+            });
+            ui.label(egui::RichText::new("F6 moves focus to the newest toast and back; Escape dismisses it.").color(t.text.secondary));
         });
         if self.dialog_open {
             let buttons = [DialogButton::new("Don't Save"), DialogButton::cancel("Cancel"), DialogButton::new("Save").default()];

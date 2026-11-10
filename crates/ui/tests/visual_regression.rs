@@ -248,7 +248,7 @@ fn kit_controls_match_their_references() {
             }
         }
     }
-    assert_eq!(pairs, 282);
+    assert_eq!(pairs, 300);
 }
 
 #[test]
@@ -261,6 +261,8 @@ fn kit_mutations_are_detected() {
         kit::Kit::Switch,
         kit::Kit::Radio,
         kit::Kit::Bar(Some(0.25)),
+        kit::Kit::Circle(Some(0.25)),
+        kit::Kit::Spinner,
         kit::Kit::Collapsible,
         kit::Kit::Banner(ashlar_ui::controls::Tone::Info),
     ] {
@@ -276,7 +278,7 @@ fn kit_mutations_are_detected() {
             pairs += 1;
         }
     }
-    assert_eq!(pairs, 12);
+    assert_eq!(pairs, 16);
 }
 
 #[test]

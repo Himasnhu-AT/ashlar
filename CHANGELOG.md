@@ -9,6 +9,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::sidebar` (IMP-5.14): a source list of folding sections with counts and rows with an
+  icon, detail and badge, built on `list::Row` and virtualized. One Tab stop: arrows, Home/End,
+  Left/Right to fold, Enter to activate, F2 to rename in place, type-ahead; click, double click
+  and context clicks reported in `SidebarResponse`. Automation ids `<id>`, `<id>.section.<s>`,
+  `<id>.section.<s>.item.<i>`, `<id>.rename`; labels `UiLabels::sidebar` (`ui.sidebar.rename`,
+  `ui.sidebar.items`, English and German). `list::Row` gains `icon`, `detail`, `badge` and
+  `focusable`. The gallery has a Sidebar page.
+- CodeView and DiffView follow-ups (IMP-5.20): unwrapped long lines scroll sideways (horizontal
+  wheel or Shift+wheel, and a draggable bar along the bottom; a split diff's sides move together);
+  both views register the new automation role `Role::Document` (`"document"` in `ui.inspect`). The
+  gallery has a Code page. An open dialog no longer copies its shapes for the exit animation on
+  frames where they did not change, and reuses the copy's buffer when they did
+  (`perf_dialog_open_frame_allocs`: per-frame overhead over a plain area 173 → 21 allocations,
+  24.9 → 5.5 KB).
+- Controls follow-ups (IMP-5.19): `controls::Skeleton` placeholder rows (pulse while visible,
+  static and frame-free under reduced motion, a busy progress node named by the new
+  `UiLabels::controls.loading`, English and German); `content::Accordion` keeps at most one
+  section open; `Segmented::disabled` and `RadioGroup::disabled` dim options that cannot be
+  picked and that the keys skip; the `⇧` keycap is drawn as an outlined arrow (the default fonts
+  lack the glyph). Visual regression adds reference-painter pairs for the progress circle and the
+  spinner's static poses.
+- Toasts (IMP-5.17): F6 moves keyboard focus into the newest toast (its first action, else its
+  close button) and back to where it was; `Toasts::take_actions_where` drains only the actions a
+  caller accepts; `App::run_toast_actions(true)` makes the runtime run a clicked toast action
+  whose command is registered (other actions stay for the view). The gallery's Overlays page
+  demos action and progress toasts.
 
 - `ashlar-rs`: the `tray` and `hotkey` features pass through to `ashlar-app`, so an app on the
   umbrella crate can use `App::tray` and `App::global_shortcut`.

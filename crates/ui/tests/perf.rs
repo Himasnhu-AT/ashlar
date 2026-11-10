@@ -14,6 +14,7 @@ use ashlar_command::CommandInfo;
 use ashlar_command::shortcut::Platform;
 use ashlar_ui::cache;
 use ashlar_ui::commands::palette::CommandPalette;
+use ashlar_ui::dialog::{Dialog, DialogButton};
 use ashlar_ui::markdown::{self, MarkdownStyle};
 use ashlar_ui::tree::{TreeModel, TreeState, TreeView};
 use ashlar_ui::virtual_list::{RowHeights, VirtualList};
@@ -474,4 +475,59 @@ fn perf_palette_filter_5k_commands() {
 
 fn key(key: egui::Key) -> Event {
     Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+}
+
+/// A dialog body of `n` rows: a label and a polyline each (text shapes share their galleys when
+/// copied; paths own their points).
+fn dialog_body(ui: &mut egui::Ui, n: usize) {
+    for i in 0..n {
+        ui.horizontal(|ui| {
+            ui.label(format!("Row {i}"));
+            let r = ui.allocate_space(vec2(40.0, 10.0)).1;
+            let pts = vec![r.left_center(), r.center_top(), r.center_bottom(), r.right_center()];
+            ui.painter().add(egui::Shape::line(pts, egui::Stroke::new(1.0, Color32::GRAY)));
+        });
+    }
+}
+
+/// Heap allocations of one frame of an open, settled dialog (repainted by pointer moves), next to
+/// the same body in a plain area: the difference is what the dialog adds per frame, including
+/// the copy of its shapes kept for the exit animation.
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_dialog_open_frame_allocs() {
+    let _serial = allocs::serial();
+    let buttons = [DialogButton::cancel("Cancel"), DialogButton::new("OK").default()];
+    let measure = |dialog: bool| {
+        let ctx = egui::Context::default();
+        let draw = |t: f64| {
+            let events = vec![Event::PointerMoved(pos2(400.0 + (t * 600.0).sin() as f32 * 3.0, 300.0))];
+            frame(&ctx, t, events, |ui| {
+                if dialog {
+                    std::hint::black_box(Dialog::new("bench.dialog", "Settings", &buttons).show(ui.ctx(), |ui| dialog_body(ui, 150)));
+                } else {
+                    egui::Area::new(egui::Id::new("bench.area")).order(egui::Order::Foreground).show(ui.ctx(), |ui| dialog_body(ui, 150));
+                }
+            })
+        };
+        // past the enter animation
+        for i in 0..120 {
+            draw(f64::from(i) / 60.0);
+        }
+        let frames: u32 = 100;
+        let ((), a) = allocs::count(|| {
+            for i in 120..120 + frames {
+                draw(f64::from(i) / 60.0);
+            }
+        });
+        (a.count / frames as usize, a.bytes / frames as usize)
+    };
+    let (area_n, area_b) = measure(false);
+    let (dialog_n, dialog_b) = measure(true);
+    println!("bench: dialog_body_area_allocs {area_n} n");
+    println!("bench: dialog_open_allocs {dialog_n} n");
+    println!("bench: dialog_open_alloc_bytes {dialog_b} B");
+    println!("bench: dialog_overhead_allocs {} n", dialog_n.saturating_sub(area_n));
+    println!("bench: dialog_overhead_alloc_bytes {} B", dialog_b.saturating_sub(area_b));
+    assert!(dialog_n > 0);
 }

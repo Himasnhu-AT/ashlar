@@ -2,6 +2,8 @@
 //!
 //! Both are one Tab stop (the chosen option, or the first when none is): the arrow keys move
 //! the choice and the focus together, Home and End jump to the ends, and a click picks an option.
+//! Options listed in `disabled(&[..])` are drawn dimmed, cannot be picked and are skipped by the
+//! keys.
 
 use std::sync::Arc;
 
@@ -43,9 +45,19 @@ struct Group<'a> {
     id: &'a str,
     label: &'a str,
     options: &'a [&'a str],
+    disabled: &'a [usize],
 }
 
 impl Group<'_> {
+    fn off(&self, i: usize) -> bool {
+        self.disabled.contains(&i)
+    }
+
+    /// The next enabled option from `from`, stepping by `step` (±1) with wrap-around.
+    fn step(&self, from: usize, count: usize, forward: bool) -> Option<usize> {
+        (1..=count).map(|k| if forward { (from + k) % count } else { (from + count * k - k) % count }).find(|&i| !self.off(i))
+    }
+
     fn egui_id(&self, ui: &Ui, auto: Id) -> Id {
         if self.id.is_empty() { auto } else { ui.make_persistent_id(("ashlar_ui::controls::choice", self.id)) }
     }
@@ -63,18 +75,26 @@ impl Group<'_> {
     /// report each option's response and whether the choice changed.
     fn interact(&self, ui: &mut Ui, group: &Response, rects: &[Rect], selected: &mut usize) -> (Vec<Response>, bool) {
         let count = rects.len();
-        let tab_stop = if *selected < count { *selected } else { 0 };
+        let first = (0..count).find(|&i| !self.off(i));
+        let tab_stop = if *selected < count && !self.off(*selected) { Some(*selected) } else { first };
         let enabled = ui.is_enabled();
         let child = ui.new_child(UiBuilder::new().max_rect(group.rect).accessibility_parent(group.id));
         let items: Vec<Response> = rects
             .iter()
             .enumerate()
             .map(|(i, rect)| {
-                let sense = if i == tab_stop { Sense::click() } else { Sense::CLICK };
+                let sense = if self.off(i) {
+                    Sense::hover()
+                } else if Some(i) == tab_stop {
+                    Sense::click()
+                } else {
+                    Sense::CLICK
+                };
                 let r = child.interact(*rect, group.id.with(i), sense);
                 let label = self.options.get(i).copied().unwrap_or_default();
                 let chosen = i == *selected;
-                r.widget_info(|| WidgetInfo::selected(WidgetType::RadioButton, enabled, chosen, label));
+                let on = enabled && !self.off(i);
+                r.widget_info(|| WidgetInfo::selected(WidgetType::RadioButton, on, chosen, label));
                 child.ctx().accesskit_node_builder(r.id, |node| {
                     node.set_position_in_set(i + 1);
                     node.set_size_of_set(count);
@@ -85,6 +105,7 @@ impl Group<'_> {
         let mut changed = false;
         if let Some(i) = items.iter().position(Response::clicked)
             && *selected != i
+            && !self.off(i)
         {
             *selected = i;
             changed = true;
@@ -95,13 +116,13 @@ impl Group<'_> {
             let next = ui.input_mut(|inp| {
                 let mut key = |k| inp.consume_key(Modifiers::NONE, k);
                 if key(Key::ArrowRight) || key(Key::ArrowDown) {
-                    Some((f + 1) % count)
+                    self.step(f, count, true)
                 } else if key(Key::ArrowLeft) || key(Key::ArrowUp) {
-                    Some((f + count - 1) % count)
+                    self.step(f, count, false)
                 } else if key(Key::Home) {
-                    Some(0)
+                    first
                 } else if key(Key::End) {
-                    Some(count - 1)
+                    (0..count).rev().find(|&i| !self.off(i))
                 } else {
                     None
                 }
@@ -135,7 +156,7 @@ impl Group<'_> {
                 format_args!("{}.option.{i}", self.id),
                 label,
                 Role::Radio,
-                r.enabled(),
+                r.enabled() && !self.off(i),
                 Details { value: None, selected: Some(i == selected) },
             );
         }
@@ -152,7 +173,12 @@ pub struct Segmented<'a> {
 impl<'a> Segmented<'a> {
     /// `label` names the whole control for screen readers and automation.
     pub fn new(id: &'a str, label: &'a str, options: &'a [&'a str], selected: &'a mut usize) -> Self {
-        Segmented { group: Group { id, label, options }, selected }
+        Segmented { group: Group { id, label, options, disabled: &[] }, selected }
+    }
+    /// Options (by index) that cannot be picked.
+    pub fn disabled(mut self, options: &'a [usize]) -> Self {
+        self.group.disabled = options;
+        self
     }
 
     /// The group's response: `changed()` when the user picked another option.
@@ -180,8 +206,10 @@ impl<'a> Segmented<'a> {
             for (i, (item, galley)) in items.iter().zip(galleys).enumerate() {
                 let seg = item.rect.shrink(2.0);
                 let chosen = i == *self.selected;
-                let pressed = enabled && item.is_pointer_button_down_on();
-                let hovered = enabled && item.hovered();
+                let off = self.group.off(i);
+                let painter = &super::dimmed(ui, enabled && off);
+                let pressed = enabled && !off && item.is_pointer_button_down_on();
+                let hovered = enabled && !off && item.hovered();
                 let state = if chosen || !(pressed || hovered) {
                     Color32::TRANSPARENT
                 } else if pressed {
@@ -218,7 +246,12 @@ pub struct RadioGroup<'a> {
 impl<'a> RadioGroup<'a> {
     /// `label` names the whole group for screen readers and automation.
     pub fn new(id: &'a str, label: &'a str, options: &'a [&'a str], selected: &'a mut usize) -> Self {
-        RadioGroup { group: Group { id, label, options }, selected, horizontal: false }
+        RadioGroup { group: Group { id, label, options, disabled: &[] }, selected, horizontal: false }
+    }
+    /// Options (by index) that cannot be picked.
+    pub fn disabled(mut self, options: &'a [usize]) -> Self {
+        self.group.disabled = options;
+        self
     }
     pub fn horizontal(mut self, horizontal: bool) -> Self {
         self.horizontal = horizontal;
@@ -262,11 +295,12 @@ impl<'a> RadioGroup<'a> {
             group.mark_changed();
         }
         if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
             for (i, (item, galley)) in items.iter().zip(galleys).enumerate() {
                 let chosen = i == *self.selected;
-                let pressed = enabled && item.is_pointer_button_down_on();
-                let hovered = enabled && item.hovered();
+                let off = self.group.off(i);
+                let painter = &super::dimmed(ui, enabled && off);
+                let pressed = enabled && !off && item.is_pointer_button_down_on();
+                let hovered = enabled && !off && item.hovered();
                 let center = pos2(item.rect.left() + r, item.rect.center().y);
                 let (fill, stroke, dot) = radio_colors(&t, chosen, hovered, pressed);
                 let fill = crate::tokens::state_color(ui.ctx(), item.id, fill);

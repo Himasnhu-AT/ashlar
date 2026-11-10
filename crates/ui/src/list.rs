@@ -39,6 +39,10 @@ use crate::cache;
 /// A full-width, single-line, selectable list row: a hover and selection fill, a label truncated
 /// with "…" to the row's width, clickable and focusable (Tab reaches it, Space and Enter click it).
 /// Screen readers see a list item with its label and selection state.
+///
+/// Optionally a leading [icon](Row::icon), and at the right a weak [detail](Row::detail) text
+/// and a [badge](Row::badge) (a count in a pill). A row inside a control that keeps one Tab stop
+/// for all its rows (a sidebar) is made [non-focusable](Row::focusable).
 #[must_use = "add it with `ui.add(row)`"]
 pub struct Row<'a> {
     id_salt: u64,
@@ -49,6 +53,10 @@ pub struct Row<'a> {
     indent: f32,
     text_style: Option<TextStyle>,
     weak: bool,
+    icon: Option<crate::controls::IconPainter<'a>>,
+    detail: Option<&'a str>,
+    badge: Option<&'a str>,
+    focusable: bool,
 }
 
 impl<'a> Row<'a> {
@@ -63,6 +71,10 @@ impl<'a> Row<'a> {
             indent: 0.0,
             text_style: None,
             weak: false,
+            icon: None,
+            detail: None,
+            badge: None,
+            focusable: true,
         }
     }
 
@@ -103,6 +115,30 @@ impl<'a> Row<'a> {
         self.weak = weak;
         self
     }
+
+    /// A leading icon, painted in a square as tall as the text, in the label's colour.
+    pub fn icon(mut self, paint: crate::controls::IconPainter<'a>) -> Self {
+        self.icon = Some(paint);
+        self
+    }
+
+    /// A short weak text at the right edge (a count, a date, a shortcut).
+    pub fn detail(mut self, text: &'a str) -> Self {
+        self.detail = Some(text).filter(|t| !t.is_empty());
+        self
+    }
+
+    /// A small pill at the right edge (an unread count).
+    pub fn badge(mut self, text: &'a str) -> Self {
+        self.badge = Some(text).filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Whether Tab can reach the row (default true). Off, the row still takes clicks.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
 }
 
 impl Widget for Row<'_> {
@@ -112,7 +148,7 @@ impl Widget for Row<'_> {
         let width = Some(ui.available_width()).filter(|w| w.is_finite()).unwrap_or(0.0).max(0.0);
         let (_, rect) = ui.allocate_space(vec2(width, height));
         let id = ui.id().with(self.id_salt);
-        let response = ui.interact(rect, id, Sense::click());
+        let response = ui.interact(rect, id, if self.focusable { Sense::click() } else { Sense::CLICK });
 
         let enabled = ui.is_enabled();
         let (text, selected) = (self.text, self.selected);
@@ -136,9 +172,49 @@ impl Widget for Row<'_> {
             ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, StrokeKind::Inside);
         }
         let pad = ui.spacing().button_padding.x;
-        let left = (pad + self.indent).min(rect.width());
-        let max_width = (rect.width() - left - pad).max(0.0);
         let font = self.text_style.unwrap_or(TextStyle::Button).resolve(ui.style());
+        let color = if self.weak && !selected { ui.visuals().weak_text_color() } else { visuals.text_color() };
+        let mut left = (pad + self.indent).min(rect.width());
+        if let Some(paint) = self.icon {
+            let side = font.size.round().max(4.0).min(rect.height());
+            let icon = egui::Rect::from_min_size(pos2(rect.left() + left, rect.center().y - side / 2.0), vec2(side, side));
+            if icon.right() < rect.right() {
+                paint(ui.painter(), icon, color);
+            }
+            left = (left + side + pad * 0.75).min(rect.width());
+        }
+        // the right side, from the edge inwards: badge, then detail
+        let mut right = rect.right() - pad;
+        if let Some(badge) = self.badge {
+            let small = TextStyle::Small.resolve(ui.style());
+            let g = cache::galley(ui, id.with("badge"), cache::hash_of(&(badge, &small)), || {
+                LayoutJob::simple_singleline(badge.to_owned(), small, Color32::PLACEHOLDER)
+            });
+            let h = (g.size().y + 2.0).min(rect.height());
+            let w = (g.size().x + h * 0.8).max(h);
+            let pill = egui::Rect::from_min_size(pos2(right - w, rect.center().y - h / 2.0), vec2(w, h));
+            if pill.left() > rect.left() + left {
+                let (fill, text) = if selected {
+                    (visuals.text_color(), visuals.weak_bg_fill)
+                } else {
+                    (ui.visuals().widgets.inactive.bg_fill, ui.visuals().text_color())
+                };
+                ui.painter().rect_filled(pill, h / 2.0, fill);
+                ui.painter().galley(pill.center() - g.size() / 2.0, g, text);
+                right = pill.left() - pad * 0.75;
+            }
+        }
+        if let Some(detail) = self.detail {
+            let g = cache::galley(ui, id.with("detail"), cache::hash_of(&(detail, &font)), || {
+                LayoutJob::simple_singleline(detail.to_owned(), font.clone(), Color32::PLACEHOLDER)
+            });
+            if right - g.size().x > rect.left() + left {
+                let detail_color = if selected { visuals.text_color() } else { ui.visuals().weak_text_color() };
+                ui.painter().galley(pos2(right - g.size().x, rect.center().y - g.size().y / 2.0), g.clone(), detail_color);
+                right -= g.size().x + pad;
+            }
+        }
+        let max_width = (right - rect.left() - left).max(0.0);
         // the revision covers everything the galley is built from, so a changed label never shows stale
         let revision = cache::hash_of(&(text, &font, max_width.to_bits()));
         let galley = cache::galley(ui, id, revision, || {
@@ -147,7 +223,6 @@ impl Widget for Row<'_> {
             job
         });
         let pos = pos2(rect.left() + left, rect.center().y - galley.size().y / 2.0);
-        let color = if self.weak && !selected { ui.visuals().weak_text_color() } else { visuals.text_color() };
         ui.painter().galley(pos, galley, color);
         response
     }

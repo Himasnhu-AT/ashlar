@@ -78,7 +78,8 @@ impl<'a> Badge<'a> {
 /// Most keys one keycap row shows.
 const MAX_KEYS: usize = 8;
 
-/// Keys drawn as caps: `⌘` `⇧` `P` on macOS, `Ctrl` `Shift` `P` elsewhere.
+/// Keys drawn as caps: `⌘` `⇧` `P` on macOS, `Ctrl` `Shift` `P` elsewhere. The default fonts
+/// have no `⇧`, so that cap is drawn as an outlined arrow instead of text.
 pub struct Keycap<'a> {
     id: &'a str,
     keys: KeySource<'a>,
@@ -113,23 +114,34 @@ impl<'a> Keycap<'a> {
             }
         };
         let size = t.type_scale.small;
-        let galleys: Vec<_> =
-            caps.iter().take(MAX_KEYS).enumerate().map(|(i, c)| text_galley(ui, ("ashlar_ui::controls::keycap", self.id, i), c, size)).collect();
+        let galleys: Vec<_> = caps
+            .iter()
+            .take(MAX_KEYS)
+            .enumerate()
+            .map(|(i, c)| {
+                let text = if c == SHIFT { "" } else { c.as_str() };
+                (c == SHIFT, text_galley(ui, ("ashlar_ui::controls::keycap", self.id, i), text, size))
+            })
+            .collect();
         let h = (size + 2.0 * t.space.xs).round();
         let gap = t.space.xxs;
-        let widths: Vec<f32> = galleys.iter().map(|g| (g.size().x + 2.0 * t.space.xs).max(h)).collect();
+        let widths: Vec<f32> = galleys.iter().map(|(_, g)| (g.size().x + 2.0 * t.space.xs).max(h)).collect();
         let total = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
         let (rect, response) = ui.allocate_exact_size(vec2(total, h + 1.0), Sense::hover());
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             let radius = CornerRadius::same(t.radius.sm);
             let mut x = rect.left();
-            for (g, w) in galleys.into_iter().zip(widths) {
+            for ((shift, g), w) in galleys.into_iter().zip(widths) {
                 let cap = Rect::from_min_size(pos2(x, rect.top()), vec2(w, h));
                 // a 1-point "edge" below the cap
                 painter.rect_filled(cap.translate(vec2(0.0, 1.0)), radius, t.border);
                 painter.rect(cap, radius, t.surface.raised, Stroke::new(1.0, t.border), StrokeKind::Inside);
-                painter.galley(Align2::CENTER_CENTER.align_size_within_rect(g.size(), cap).min, g, t.text.secondary);
+                if shift {
+                    painter.add(egui::Shape::closed_line(shift_arrow(cap.center(), size * 0.8), Stroke::new(1.0, t.text.secondary)));
+                } else {
+                    painter.galley(Align2::CENTER_CENTER.align_size_within_rect(g.size(), cap).min, g, t.text.secondary);
+                }
                 x += w + gap;
             }
         }
@@ -137,6 +149,25 @@ impl<'a> Keycap<'a> {
         automation::register_with(ui, &response, self.id, &name, Role::Label, Details { value: Some(&name), selected: None });
         response
     }
+}
+
+/// The Shift key's glyph.
+const SHIFT: &str = "\u{21E7}";
+
+/// The outline of `⇧` (an upward arrow with a hollow stem) in a square of side `s` centred at `c`.
+fn shift_arrow(c: egui::Pos2, s: f32) -> Vec<egui::Pos2> {
+    let h = s / 2.0;
+    let stem = s / 4.0;
+    let neck = c.y + s * 0.05;
+    vec![
+        pos2(c.x, c.y - h),
+        pos2(c.x + h, neck),
+        pos2(c.x + stem, neck),
+        pos2(c.x + stem, c.y + h),
+        pos2(c.x - stem, c.y + h),
+        pos2(c.x - stem, neck),
+        pos2(c.x - h, neck),
+    ]
 }
 
 /// `⌃⇧K` → `⌃` `⇧` `K`: each modifier glyph is a cap, the rest is the key.

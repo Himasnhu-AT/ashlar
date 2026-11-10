@@ -12,6 +12,8 @@ Window
   Button "Commands" [toggled=true]
   Button "Settings" [toggled=false]
   Button "Chat" [toggled=false]
+  Button "Code" [toggled=false]
+  Button "Sidebar" [toggled=false]
   Button "Light" [toggled=true]
   Button "Dark" [toggled=false]
   Button "System" [toggled=false]

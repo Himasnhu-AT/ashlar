@@ -2,7 +2,8 @@
 //!
 //! Timed toasts disappear after their duration (the timer pauses while the pointer is over them or
 //! keyboard focus is inside them); sticky ones stay until dismissed. Clicking a toast's close
-//! button, or pressing Escape, dismisses it. A toast can carry a title, a progress bar and up to
+//! button, or pressing Escape, dismisses it. F6 moves keyboard focus into the newest toast (its
+//! first action, else its close button) and, pressed again there, back to where it was. A toast can carry a title, a progress bar and up to
 //! [`MAX_ACTIONS`] action buttons; a toast pushed with the [`key`](Toast::key) of a queued one
 //! replaces it in place. Toasts beyond [`Toasts::max_visible`] are summed up as "+N more".
 //!
@@ -183,6 +184,8 @@ pub struct Toasts {
     leaving: Vec<Entry>,
     /// `show` has run: toasts pushed from now on animate in.
     seen: bool,
+    /// Where keyboard focus was before F6 moved it into the stack.
+    return_focus: Option<Id>,
 }
 
 impl Default for Toasts {
@@ -245,6 +248,7 @@ impl Toasts {
             focused: None,
             leaving: Vec::new(),
             seen: false,
+            return_focus: None,
         }
     }
     /// Keep at most `capacity` toasts (the oldest are dropped first).
@@ -380,6 +384,22 @@ impl Toasts {
         std::mem::take(&mut self.activated)
     }
 
+    /// Take only the clicked actions `keep` accepts (oldest first); the others stay queued for
+    /// [`take_actions`](Toasts::take_actions). A runtime uses it to run the actions whose
+    /// command is one it knows and leave the rest to the app.
+    pub fn take_actions_where(&mut self, mut keep: impl FnMut(&ToastActivation) -> bool) -> Vec<ToastActivation> {
+        let mut taken = Vec::new();
+        self.activated.retain(|a| {
+            if keep(a) {
+                taken.push(a.clone());
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    }
+
     /// [`show`](Toasts::show), then [`take_actions`](Toasts::take_actions).
     pub fn show_actions(&mut self, ctx: &egui::Context) -> Vec<ToastActivation> {
         self.show(ctx);
@@ -397,6 +417,7 @@ impl Toasts {
             self.last_time = None;
             self.focused = None;
             self.escape_ready = true;
+            self.return_focus = None;
             return;
         }
         let installed = crate::labels::current(ctx);
@@ -421,6 +442,26 @@ impl Toasts {
         if visible > 0 && self.escape_ready && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             let focused = self.focused.filter(|id| self.entries.iter().take(visible).any(|e| e.id == *id));
             dismiss = focused.or_else(|| self.entries.get(visible.saturating_sub(1)).map(|e| e.id));
+        }
+
+        // F6: into the newest toast, or back out to where focus was
+        if visible > 0 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F6)) {
+            if self.focused.is_some() {
+                match self.return_focus.take() {
+                    Some(back) => ctx.memory_mut(|m| m.request_focus(back)),
+                    None => ctx.memory_mut(|m| {
+                        if let Some(f) = m.focused() {
+                            m.surrender_focus(f);
+                        }
+                    }),
+                }
+            } else if let Some(e) = self.entries.get(visible.saturating_sub(1)) {
+                let base = Id::new(("ashlar_ui::toast", e.id));
+                let target = if e.toast.actions.is_empty() { base.with("close") } else { base.with(("action", 0usize)) };
+                self.return_focus = ctx.memory(|m| m.focused());
+                ctx.memory_mut(|m| m.request_focus(target));
+            }
+            crate::wake::wake(ctx, crate::wake::Reason::INPUT);
         }
 
         // toasts come in from, and leave toward, the edge they stack from
@@ -883,6 +924,51 @@ mod tests {
         let taken = h.state_mut().take_actions();
         assert_eq!(taken, [ToastActivation { toast: id, key: Some("export".into()), index: 1, command: "edit.undo".into() }]);
         assert!(h.state_mut().take_actions().is_empty());
+    }
+
+    #[test]
+    fn take_actions_where_leaves_the_rest_queued() {
+        let mut q = Toasts::new();
+        let act = |toast, command: &str| ToastActivation { toast, key: None, index: 0, command: command.into() };
+        q.activated = vec![act(1, "known"), act(2, "app.own"), act(3, "known")];
+        let ran = q.take_actions_where(|a| a.command == "known");
+        assert_eq!(ran.iter().map(|a| a.toast).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(q.take_actions(), [act(2, "app.own")]);
+    }
+
+    #[test]
+    fn f6_moves_focus_into_the_newest_toast_and_back() {
+        let mut h = Harness::builder().with_size(vec2(600.0, 400.0)).build_ui_state(
+            |ui, (q, text, focus): &mut (Toasts, String, bool)| {
+                let field = ui.add(egui::TextEdit::singleline(text).id(Id::new("field")));
+                if std::mem::take(focus) {
+                    field.request_focus();
+                }
+                q.show(ui.ctx());
+            },
+            (Toasts::new(), String::new(), true),
+        );
+        h.state_mut().0.push(Toast::info("Older").sticky());
+        let newest = h.state_mut().0.push(Toast::info("Exported").action("Show", "export.reveal").sticky());
+        h.step();
+        h.step();
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(Id::new("field")));
+        h.key_press(Key::F6);
+        h.step();
+        let action = Id::new(("ashlar_ui::toast", newest)).with(("action", 0usize));
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(action), "F6 lands on the newest toast's action");
+        h.step();
+        h.key_press(Key::F6);
+        h.step();
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(Id::new("field")), "F6 again returns focus");
+        // a toast without actions takes focus on its close button
+        h.state_mut().0.dismiss(newest);
+        h.step();
+        h.step();
+        h.key_press(Key::F6);
+        h.step();
+        let older = h.state().0.entries.front().map(|e| e.id).unwrap();
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(Id::new(("ashlar_ui::toast", older)).with("close")));
     }
 
     #[test]

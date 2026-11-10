@@ -12,6 +12,8 @@ Window
   Button "Commands" [toggled=false]
   Button "Settings" [toggled=false]
   Button "Chat" [toggled=false]
+  Button "Code" [toggled=false]
+  Button "Sidebar" [toggled=false]
   Button "Light" [toggled=true]
   Button "Dark" [toggled=false]
   Button "System" [toggled=false]
@@ -35,6 +37,9 @@ Window
   Button "Warning"
   Button "Error"
   Button "Sticky"
+  Button "With actions"
+  Button "Advance export"
+  Label value="F6 moves focus to the newest toast and back; Escape dismisses it."
   Dialog "Save changes before closing?" description="Your changes will be lost if you don't save them."
     Label value="Save changes before closing?"
     Label value="Your changes will be lost if you don't save them."

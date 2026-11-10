@@ -360,3 +360,97 @@ fn hostile_sizes_and_values_are_clamped() {
     assert!(bar2.rect[2] <= 4000.0);
     assert_eq!(automation::find(&h.ctx, "x.circle").unwrap().value, "100%");
 }
+
+#[test]
+fn disabled_options_cannot_be_picked_and_are_skipped_by_keys() {
+    let mut h = Harness::builder().with_size(vec2(600.0, 300.0)).build_ui_state(
+        |ui, (seg, radio): &mut (usize, usize)| {
+            Segmented::new("d.view", "View", &["List", "Grid", "Columns", "Board"], seg).disabled(&[1, 3]).show(ui);
+            RadioGroup::new("d.quality", "Quality", &["Draft", "Good", "Best"], radio).disabled(&[0]).show(ui);
+        },
+        (0usize, 0usize),
+    );
+    automation::install(&h.ctx);
+    h.step();
+    h.step();
+    let grid = automation::find(&h.ctx, "d.view.option.1").unwrap();
+    assert!(!grid.enabled);
+    assert!(automation::find(&h.ctx, "d.view.option.2").unwrap().enabled);
+    // a click on a disabled option does nothing
+    crate::test_support::click(&mut h, grid.center());
+    h.step();
+    assert_eq!(h.state().0, 0);
+    // Tab reaches the segmented control; the arrows skip the disabled options, wrapping
+    h.key_press(Key::Tab);
+    h.step();
+    h.step();
+    assert!(h.get_by_label("List").accesskit_node().is_focused());
+    h.key_press(Key::ArrowRight);
+    h.step();
+    assert_eq!(h.state().0, 2, "Grid is skipped");
+    h.key_press(Key::ArrowRight);
+    h.step();
+    assert_eq!(h.state().0, 0, "Board is skipped, wrapping to List");
+    h.key_press(Key::End);
+    h.step();
+    assert_eq!(h.state().0, 2, "End lands on the last enabled option");
+    assert!(h.get_by_label("Draft").accesskit_node().is_disabled());
+    // the radio group's chosen option is disabled: its Tab stop is the first enabled one
+    h.key_press(Key::Tab);
+    h.step();
+    h.step();
+    assert!(h.get_by_label("Good").accesskit_node().is_focused());
+    assert_eq!(h.state().1, 0, "focus alone does not pick");
+}
+
+#[test]
+fn skeleton_rows_pulse_while_visible_and_hold_still_under_reduced_motion() {
+    let mut h = Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+        |ui, reduced: &mut bool| {
+            Skeleton::rows("s.list", 5).reduced_motion(*reduced).show(ui);
+        },
+        false,
+    );
+    automation::install(&h.ctx);
+    h.step();
+    let e = automation::find(&h.ctx, "s.list").unwrap();
+    assert_eq!((e.role, e.label.as_str()), (Role::Progress, "Loading"));
+    assert_eq!(e.rect[3], 5.0 * 24.0);
+    assert!(h.get_by_label("Loading").accesskit_node().is_busy());
+    let count = |h: &mut Harness<'_, bool>| {
+        let before = Scheduler::of(&h.ctx).stats().requests_for(Reason::ANIMATION);
+        for _ in 0..5 {
+            h.step();
+        }
+        Scheduler::of(&h.ctx).stats().requests_for(Reason::ANIMATION) - before
+    };
+    assert!(count(&mut h) >= 5);
+    *h.state_mut() = true;
+    h.step();
+    assert_eq!(count(&mut h), 0, "reduced motion asks for no frames");
+    // the name follows the installed labels
+    let mut l = crate::labels::UiLabels::default();
+    l.controls.loading = "Wird geladen".into();
+    crate::labels::install(&h.ctx, l);
+    h.step();
+    assert_eq!(automation::find(&h.ctx, "s.list").unwrap().label, "Wird geladen");
+}
+
+#[test]
+fn the_shift_cap_is_drawn_as_a_shape() {
+    let mut h = Harness::builder().with_size(vec2(300.0, 100.0)).build_ui(|ui| {
+        Keycap::chord("k.mac", Chord::parse("Mod+Shift+P").unwrap(), Platform::Mac).show(ui);
+    });
+    h.step();
+    let out = h.output();
+    let lines = out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Path(p) if p.closed && p.points.len() == 7)).count();
+    assert_eq!(lines, 1, "one outlined arrow for ⇧");
+    let mut caps = 0;
+    for s in &out.shapes {
+        if let egui::Shape::Text(t) = &s.shape {
+            caps += 1;
+            assert!(!t.galley.job.text.contains('\u{21E7}'), "⇧ is never drawn as text");
+        }
+    }
+    assert_eq!(caps, 2, "⌘ and P are text, ⇧ is not");
+}

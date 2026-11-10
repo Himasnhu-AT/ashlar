@@ -305,7 +305,7 @@ fn grow(ctx: &egui::Context, layer: egui::LayerId, center: egui::Pos2, p: f32) {
 mod focus_return {
     use ashlar_motion::tokens as mt;
     use egui::epaint::ClippedShape;
-    use egui::{Context, Id, LayerId, Painter, Pos2, Ui};
+    use egui::{Context, Id, LayerId, Painter, Pos2, Shape, Ui};
 
     use crate::motion;
 
@@ -412,13 +412,57 @@ mod focus_return {
     }
 
     /// Keep this pass's shapes of `modal` (on `layer`, resting layout) for its exit.
+    ///
+    /// The copy is made only when it can be shown: not in a pass egui will discard, and only
+    /// when the layer differs from the kept copy (a pointer move over a settled dialog changes
+    /// nothing, so it copies nothing). The kept buffer is reused, so a changed frame clones the
+    /// shapes without reallocating the list.
     pub(super) fn snapshot(ctx: &Context, modal: Id, layer: LayerId, center: Pos2) {
-        let shapes = ctx.graphics(|g| g.get(layer).filter(|l| l.next_idx().0 <= MAX_SNAPSHOT).map(|l| l.all_entries().cloned().collect::<Vec<_>>()));
+        if ctx.will_discard() {
+            return;
+        }
+        // the kept copy, or an empty one; nothing when the dialog is not tracked
+        let Some(kept) = ctx.with_plugin(|p: &mut Plugin| p.open.iter_mut().find(|o| o.modal == modal).map(|o| o.last_frame.take())).flatten() else {
+            return;
+        };
+        let mut snap = kept.unwrap_or(Snapshot { layer, center, shapes: Vec::new() });
+        let kept = ctx.graphics(|g| {
+            let Some(l) = g.get(layer).filter(|l| l.next_idx().0 <= MAX_SNAPSHOT) else { return false };
+            let same =
+                snap.layer == layer && snap.shapes.len() == l.next_idx().0 && snap.shapes.iter().zip(l.all_entries()).all(|(a, b)| same_shape(a, b));
+            if !same {
+                snap.shapes.clear();
+                snap.shapes.extend(l.all_entries().cloned());
+            }
+            true
+        });
+        snap.layer = layer;
+        snap.center = center;
         ctx.with_plugin(|p: &mut Plugin| {
             if let Some(o) = p.open.iter_mut().find(|o| o.modal == modal) {
-                o.last_frame = shapes.map(|shapes| Snapshot { layer, center, shapes });
+                o.last_frame = kept.then_some(snap);
             }
         });
+    }
+
+    /// The same shape, comparing text by its galley's identity (cached galleys are shared) rather
+    /// than glyph by glyph.
+    fn same_shape(a: &ClippedShape, b: &ClippedShape) -> bool {
+        if a.clip_rect != b.clip_rect {
+            return false;
+        }
+        match (&a.shape, &b.shape) {
+            (Shape::Text(x), Shape::Text(y)) => {
+                std::sync::Arc::ptr_eq(&x.galley, &y.galley)
+                    && x.pos == y.pos
+                    && x.underline == y.underline
+                    && x.fallback_color == y.fallback_color
+                    && x.override_text_color == y.override_text_color
+                    && x.opacity_factor == y.opacity_factor
+                    && x.angle == y.angle
+            }
+            (x, y) => x == y,
+        }
     }
 
     /// Paint one pass of a closed dialog's exit; false once it has faded out.
@@ -776,6 +820,43 @@ mod tests {
             rects.push(automation::find(ctx, "anim").expect("dialog").rect);
         }
         (bounds, rects, t)
+    }
+
+    #[test]
+    fn the_exit_shows_the_last_frame_after_unchanged_frames_are_skipped() {
+        let ctx = egui::Context::default();
+        let texts = |body: Option<&str>, t: f64| {
+            let input = egui::RawInput { time: Some(t), predicted_dt: DT as f32, screen_rect: Some(SCREEN), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                if let Some(body) = body {
+                    Dialog::new("swap", "Title", &[DialogButton::new("OK")]).show(ui.ctx(), |ui| {
+                        ui.label(body);
+                    });
+                }
+            });
+            out.textures_delta.clear();
+            let mut seen: Vec<String> = Vec::new();
+            for c in &out.shapes {
+                if let egui::Shape::Text(t) = &c.shape {
+                    seen.push(t.galley.job.text.clone());
+                }
+            }
+            seen
+        };
+        let mut t = 0.0;
+        for _ in 0..3 {
+            texts(None, t);
+            t += DT;
+        }
+        for _ in 0..40 {
+            texts(Some("first"), t);
+            t += DT;
+        }
+        texts(Some("second"), t);
+        t += DT;
+        let exit = texts(None, t);
+        assert!(exit.iter().any(|s| s == "second"), "the exit paints the latest content: {exit:?}");
+        assert!(!exit.iter().any(|s| s == "first"));
     }
 
     #[test]

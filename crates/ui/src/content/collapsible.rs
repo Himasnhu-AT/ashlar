@@ -25,7 +25,7 @@ pub(crate) fn chevron_center(t: &Tokens, left: f32, y: f32) -> (Pos2, f32) {
 
 /// A header row (chevron and title) that shows or hides the content under it. A click, Space or
 /// Enter toggles `open`; with the header focused, the right arrow opens and the left arrow closes.
-/// Several in a column make an accordion.
+/// Several in a column make an accordion; [`Accordion`] keeps at most one of them open.
 pub struct Collapsible<'a> {
     id: &'a str,
     title: &'a str,
@@ -94,5 +94,47 @@ impl<'a> Collapsible<'a> {
             .inner
         });
         CollapsibleOutput { header, body }
+    }
+}
+
+/// Collapsible sections of which at most one is open: opening one closes the one open before.
+/// `open` is the open section's index (`None`: all closed). Each section's automation id is
+/// `<id>.<index>`.
+///
+/// ```
+/// # use ashlar_ui::content::Accordion;
+/// # fn ui(ui: &mut egui::Ui, open: &mut Option<usize>) {
+/// let mut acc = Accordion::new("help.faq", open);
+/// acc.section(ui, 0, "Shipping", |ui| { ui.label("…"); });
+/// acc.section(ui, 1, "Returns", |ui| { ui.label("…"); });
+/// # }
+/// ```
+pub struct Accordion<'a> {
+    id: &'a str,
+    open: &'a mut Option<usize>,
+}
+
+impl<'a> Accordion<'a> {
+    pub fn new(id: &'a str, open: &'a mut Option<usize>) -> Self {
+        Accordion { id, open }
+    }
+
+    /// The section at `index`, shown open when it is the open one.
+    pub fn section<R>(&mut self, ui: &mut Ui, index: usize, title: &str, add: impl FnOnce(&mut Ui) -> R) -> CollapsibleOutput<R> {
+        let mut open = *self.open == Some(index);
+        let id = if self.id.is_empty() { String::new() } else { format!("{}.{index}", self.id) };
+        let out = Collapsible::new(&id, title, &mut open).show(ui, add);
+        if out.header.changed() {
+            if open {
+                // a section above this one may have drawn open this frame: draw once more
+                if self.open.is_some_and(|o| o < index) {
+                    crate::wake::wake(ui.ctx(), crate::wake::Reason::INPUT);
+                }
+                *self.open = Some(index);
+            } else if *self.open == Some(index) {
+                *self.open = None;
+            }
+        }
+        out
     }
 }

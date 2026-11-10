@@ -6,7 +6,7 @@
 //! compared is the frame, track, knob, circle and fill of each control in each state.
 
 use ashlar_ui::content::{Banner, Collapsible};
-use ashlar_ui::controls::{Button, Progress, RadioGroup, Switch, Tone, Variant};
+use ashlar_ui::controls::{Button, Progress, RadioGroup, Spinner, Switch, Tone, Variant};
 use egui::{Color32, CornerRadius, Painter, Rect, Stroke, StrokeKind, Theme, Ui, UiBuilder, pos2, vec2};
 
 use super::fixtures::{ORIGIN, Probe, State};
@@ -18,6 +18,10 @@ pub enum Kit {
     Radio,
     /// A determinate bar at this fraction, or an indeterminate one under reduced motion.
     Bar(Option<f32>),
+    /// A progress circle at this fraction, or its static indeterminate pose (reduced motion).
+    Circle(Option<f32>),
+    /// A spinner in its static pose (reduced motion).
+    Spinner,
     /// A collapsible's header (selected = open).
     Collapsible,
     /// A dismissible banner without text.
@@ -25,7 +29,7 @@ pub enum Kit {
 }
 
 impl Kit {
-    pub const ALL: [Kit; 13] = [
+    pub const ALL: [Kit; 16] = [
         Kit::Button(Variant::Primary),
         Kit::Button(Variant::Secondary),
         Kit::Button(Variant::Ghost),
@@ -35,6 +39,9 @@ impl Kit {
         Kit::Bar(Some(0.25)),
         Kit::Bar(Some(1.0)),
         Kit::Bar(None),
+        Kit::Circle(Some(0.25)),
+        Kit::Circle(None),
+        Kit::Spinner,
         Kit::Collapsible,
         Kit::Banner(Tone::Info),
         Kit::Banner(Tone::Warning),
@@ -48,6 +55,9 @@ impl Kit {
             Kit::Radio => "radio".into(),
             Kit::Bar(Some(f)) => format!("bar-{}", (f * 100.0) as u32),
             Kit::Bar(None) => "bar-indeterminate".into(),
+            Kit::Circle(Some(f)) => format!("circle-{}", (f * 100.0) as u32),
+            Kit::Circle(None) => "circle-indeterminate".into(),
+            Kit::Spinner => "spinner".into(),
             Kit::Collapsible => "collapsible".into(),
             Kit::Banner(tone) => format!("banner-{}", format!("{tone:?}").to_lowercase()),
         }
@@ -57,7 +67,7 @@ impl Kit {
         match self {
             Kit::Button(_) => vec![State::Normal, State::Hover, State::Press, State::Disabled, State::Focus],
             Kit::Switch | Kit::Radio | Kit::Collapsible => State::ALL.to_vec(),
-            Kit::Bar(_) | Kit::Banner(_) => vec![State::Normal],
+            Kit::Bar(_) | Kit::Circle(_) | Kit::Spinner | Kit::Banner(_) => vec![State::Normal],
         }
     }
 
@@ -68,6 +78,8 @@ impl Kit {
             Kit::Switch => pos2(28.0, 21.0),
             Kit::Radio => pos2(19.0, 24.0),
             Kit::Bar(_) => pos2(52.0, 15.0),
+            Kit::Circle(_) => pos2(24.0, 24.0),
+            Kit::Spinner => pos2(20.0, 20.0),
             Kit::Collapsible => pos2(62.0, 24.0),
             Kit::Banner(_) => pos2(62.0, 32.0),
         }
@@ -103,6 +115,14 @@ pub fn production(ui: &mut Ui, kit: Kit, state: State, probe: &mut Probe) {
         }
         Kit::Bar(fraction) => {
             let r = Progress::bar("", "", fraction).width(80.0).reduced_motion(true).show(ui);
+            probe.record(&r);
+        }
+        Kit::Circle(fraction) => {
+            let r = Progress::circle("", "", fraction).reduced_motion(true).show(ui);
+            probe.record(&r);
+        }
+        Kit::Spinner => {
+            let r = Spinner::new("", "").reduced_motion(true).show(ui);
             probe.record(&r);
         }
         Kit::Collapsible => {
@@ -269,6 +289,19 @@ pub fn reference(ui: &mut Ui, kit: Kit, state: State, theme: Theme, mutate: bool
             };
             p.rect_filled(Rect::from_min_max(pos2(a, 12.0), pos2(b, 18.0)), r, k.accent);
         }
+        Kit::Circle(fraction) => {
+            // a 24-point circle at the origin: a 3-point ring of radius 10.5 centred at (24, 24),
+            // filled clockwise from 12 o'clock; indeterminate holds a three-quarter arc
+            let center = pos2(24.0, 24.0);
+            p.circle_stroke(center, 10.5, Stroke::new(3.0, wrong(k.hover)));
+            let sweep = fraction.unwrap_or(0.75);
+            p.add(egui::Shape::line(arc(center, 10.5, sweep), Stroke::new(3.0, k.accent)));
+        }
+        Kit::Spinner => {
+            // a 16-point square at the origin: a 2-point three-quarter arc of radius 7 centred at
+            // (20, 20) in the secondary text colour, open at the top left
+            p.add(egui::Shape::line(arc(pos2(20.0, 20.0), 7.0, 0.75), Stroke::new(2.0, wrong(k.text_secondary))));
+        }
         Kit::Collapsible => {
             // a 100 × 24 header row, radius 3; an 8-point chevron centred at (22, 24)
             let row = Rect::from_min_size(pos2(12.0, 12.0), vec2(100.0, 24.0));
@@ -300,6 +333,19 @@ pub fn reference(ui: &mut Ui, kit: Kit, state: State, theme: Theme, mutate: bool
             p.rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
         }
     }
+}
+
+/// An arc from 12 o'clock, clockwise over `turns` of a full turn, with a point every 4 degrees.
+fn arc(center: egui::Pos2, radius: f32, turns: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::{FRAC_PI_2, TAU};
+    let sweep = TAU * turns;
+    let n = (turns * 90.0).ceil() as usize;
+    (0..=n)
+        .map(|i| {
+            let a = -FRAC_PI_2 + sweep * (i as f32 / n as f32);
+            pos2(center.x + radius * a.cos(), center.y + radius * a.sin())
+        })
+        .collect()
 }
 
 /// Banner fill (raised an eighth of the way to the tone), border (border three eighths of the
