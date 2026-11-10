@@ -56,6 +56,8 @@ pub enum Role {
     Disclosure,
     /// A message that screen readers announce when it appears (a banner).
     Alert,
+    /// A hyperlink (`value` is its URL).
+    Link,
     /// A closed list with one chosen value: a select or a combobox (`value` is the chosen
     /// option's label, `selected` whether its list is open).
     ComboBox,

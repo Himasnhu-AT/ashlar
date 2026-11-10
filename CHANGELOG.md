@@ -9,6 +9,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
+  them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
+  the pointer on every row they wrap onto; tables size columns to their content and wrap them down
+  to their longest word, with a "N more rows" footer (`<id>.table.<n>.more`) past
+  `MAX_TABLE_ROWS` (500) instead of dropping rows silently; the `Markdown` builder adds
+  `.on_task(|index, checked| ..)` (clickable task checkboxes, `<id>.task.<n>`), `.find(query)`
+  (highlighted matches, counted in `MarkdownResponse::matches`; `find_ranges` gives the byte
+  ranges), `.streaming(true)` (an unclosed `**`, `*`, `~~`, `` ` `` or link at the end is drawn as
+  already styled, so markers never flash; also `parse_streaming`) and `.labels(&MarkdownLabels)`
+  for "Copy", "Copied", "code" and the table footer, by default from the installed `UiLabels`
+  (`ui.markdown.copy`, `.copied`, `.code`, `.more_rows`; English and German). `MarkdownStyle`
+  gains `find_bg`.
+- `ashlar_ui::markdown::show_with_revision` and `Markdown::revision`: a caller that keeps a
+  revision of the text skips hashing it each frame. Inline parsing is linear in the paragraph's
+  length (a 50 KB paragraph: `bench: md_long_paragraph_parse`, about 0.4 ms), and a drawing
+  snapshot (`tests/markdown_snapshot.rs`) checks what markdown paints (IMP-5.18).
 - Gesture handoff: value fields, sliders and knobs keep going when a drag is let go while moving
   and ease to rest (clamped, snapped; the commit carries the resting value, so one drag is still
   one undo step); `.fling(false)` turns it off. `VirtualList::fling(true)` drags the list to

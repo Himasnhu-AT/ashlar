@@ -26,6 +26,7 @@ use crate::chat::ChatLabels;
 use crate::commands::keymap_editor::KeymapLabels;
 use crate::diff_view::DiffLabels;
 use crate::form::FormLabels;
+use crate::markdown::MarkdownLabels;
 use crate::toasts::ToastLabels;
 
 /// The built-in catalogs (`ui.*` keys), as `(locale, json)`.
@@ -105,6 +106,7 @@ pub struct UiLabels {
     pub tabs: TabLabels,
     pub print: PrintLabels,
     pub search: SearchLabels,
+    pub markdown: MarkdownLabels,
 }
 
 /// The search field's and the command palette's words.
@@ -181,6 +183,10 @@ pub const KEYS: &[&str] = &[
     "ui.print.long_edge",
     "ui.print.short_edge",
     "ui.print.grayscale",
+    "ui.markdown.copy",
+    "ui.markdown.copied",
+    "ui.markdown.code",
+    "ui.markdown.more_rows",
 ];
 
 /// Adds the built-in catalogs to `i18n` (add the app's own catalogs after, to override keys).
@@ -273,6 +279,17 @@ impl UiLabels {
             (&mut p.grayscale, "ui.print.grayscale"),
         ] {
             set(field, key);
+        }
+        let m = &mut l.markdown;
+        for (field, key) in [
+            (&mut m.copy, "ui.markdown.copy"),
+            (&mut m.copied, "ui.markdown.copied"),
+            (&mut m.code, "ui.markdown.code"),
+            (&mut m.more_rows, "ui.markdown.more_rows"),
+        ] {
+            if let Some(text) = i18n.get(key) {
+                *field = text.to_owned().into();
+            }
         }
         l
     }

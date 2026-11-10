@@ -54,5 +54,9 @@
   "ui.print.one_sided": "One-sided",
   "ui.print.long_edge": "Long edge",
   "ui.print.short_edge": "Short edge",
-  "ui.print.grayscale": "Grayscale"
+  "ui.print.grayscale": "Grayscale",
+  "ui.markdown.copy": "Copy",
+  "ui.markdown.copied": "Copied",
+  "ui.markdown.code": "code",
+  "ui.markdown.more_rows": "{n} more rows"
 }
