@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
+  counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
+- `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
+  frame is presented.
+- `cargo xtask launch` measures `examples/hello` launch time over 9 launches (p50/p95), and
+  `cargo xtask launch --memory` its idle RSS and physical footprint (macOS). Manual, opens windows.
+- `App::frame_latency(frames)`: how many frames the GPU may queue ahead of the screen (1 to 3).
 - Motion and jank gate for tests: `ashlar_ui::motion_gate::MotionRecorder` records values
   animated through `ashlar_ui::motion` and per-frame automation rects (`Driver::record` does both
   for an app), and `check(&MotionRules)` flags overshoot of opacity and colour, reversals without
@@ -145,6 +152,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- A document named on the command line opens on the frame after the first, so the window shows
+  before the load runs (it used to load before the first paint).
+- Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower
+  input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
+  window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
 - `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
   arrow keys, an AccessKit tab list, and the animated selection underline.

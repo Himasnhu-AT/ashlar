@@ -206,6 +206,24 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   [control-protocol.md](control-protocol.md#ui-methods) for what else stands still.
 - `call <method> '{json}'` sends any control method as is.
 
+## Launch time and memory
+
+- `stats` (`app.stats`) reports `launch`: `to_window_ms` (from the first line of `run()` until
+  eframe has built the window and its wgpu surface), `to_first_frame_ms` (the end of the first
+  frame) and `launch_to_present_ms` (that frame painted and presented). The app also logs them
+  once at `info`. Headless runs report none.
+- `<PREFIX>_READY_FILE=path` (the prefix is the app name in capitals, like `<PREFIX>_CONTROL_PORT`)
+  makes the app write `{"pid": …, "ready_ms": …}` to `path`, atomically, once its first frame is
+  presented: a launcher or a test waits for the file instead of sleeping.
+- A document named on the command line opens on the frame after the first one, so the window
+  shows before a slow load runs. eframe keeps the window hidden until that first frame is painted,
+  so there is no white flash.
+- `cargo xtask launch` builds `examples/hello` in release, launches it 9 times (`--runs N`) and
+  prints `bench: launch_to_present_p50/p95` and `spawn_to_ready_p50/p95` (from spawning the
+  process). `cargo xtask launch --memory` lets it idle 10 s (`--settle SECS`) and prints the RSS
+  and the physical footprint and its peak (`vmmap`, macOS). Both open real windows, so they are
+  manual and never run in CI; results swing with machine load, so compare runs made back to back.
+
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,
