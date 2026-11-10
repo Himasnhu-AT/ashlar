@@ -60,7 +60,7 @@ a task's state.
 | IMP-3.2 | `ashlar_ui::motion` | done (ce86186) |
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | done (2089b8c) |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | done (8ec7a04) |
-| IMP-3.5 | Animated theme switch | doing (wt-animate (if time)) |
+| IMP-3.5 | Animated theme switch | done (6579595) |
 | IMP-3.9 | `motion::f32` tween with `Easing::LINEAR` reached about 12 % at 26 % of its duration (reported by wt-clock): check against a unit test | done (c657940) |
 | IMP-3.6 | Presence and component adoption | done (378458b..ea70000) |
 | IMP-3.7 | Gesture handoff | done (2f0c85a) |
@@ -99,7 +99,7 @@ a task's state.
 | IMP-5.13 | Small content components | done (05f44af) |
 | IMP-5.14 | Sidebar / source list | todo |
 | IMP-5.15 | Accessibility goldens | done (bcdeb0e) |
-| IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo |
+| IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo (tab indicator done in IMP-5.10) |
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |
 | IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | done (329a6bc) |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
@@ -112,7 +112,7 @@ a task's state.
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
 | IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
-| IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo |
+| IMP-6.19 | i18n follow-ups: markdown Copy/Copied labels, a plural for toast "+N more", the keymap editor's shared-shortcut text, and native system languages on macOS/Windows (desktop launches often have no `LANG`) | todo (markdown labels done by wt-md2, pending merge) |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
