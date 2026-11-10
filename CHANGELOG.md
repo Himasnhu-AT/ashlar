@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `app.stats` reports `launch`: `to_window_ms`, `to_first_frame_ms` and `launch_to_present_ms`,
+  counted from the first line of `run()` (`FrameStats::launch`, `LaunchTimes`). Native windows only.
+- `<PREFIX>_READY_FILE=path`: the app writes `{"pid", "ready_ms"}` there atomically once its first
+  frame is presented.
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.
