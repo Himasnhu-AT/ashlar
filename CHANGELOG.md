@@ -12,6 +12,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 - `examples/hello`, the smallest ashlar app, and a `cargo xtask bench` step that reports its
   stripped release size as `hello_stripped_bytes`.
+- Features `accesskit` and `headless` on `ashlar-rs` and `ashlar-app`, both on by default (no
+  change for existing apps). `default-features = false` drops AccessKit and `--headless` for a
+  binary about 1 MB smaller.
+- A `release-small` profile in the workspace (fat LTO, one codegen unit, `opt-level = "s"`,
+  stripped): the hello app goes from 13.6 MB to 9.0 MB stripped on macOS arm64.
 - `ashlar-ui`: screen readers see every visible row of `VirtualList`, `VirtualTable` and
   `TreeView`: list items, table rows and tree items named by `row_label` (the tree's labels),
   with selected state, position and set size, and level and expanded state for tree items. Only

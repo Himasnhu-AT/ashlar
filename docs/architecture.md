@@ -85,7 +85,8 @@ Units ending in `/s` are higher-is-better; all others lower-is-better. A test th
 
 One step is not a test: `perf_hello_size` builds `examples/hello` (an empty document, a heading
 and a checkbox) in release, strips a copy and reports `hello_stripped_bytes`, the size the
-framework adds to every app.
+framework adds to every app. `cargo build --profile release-small` (fat LTO, one codegen unit,
+`opt-level = "s"`, stripped) is the workspace's size profile.
 
 ```sh
 cargo xtask bench                             # writes target/bench/bench.{json,md}

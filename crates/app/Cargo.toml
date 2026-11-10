@@ -15,7 +15,12 @@ categories = ["gui"]
 workspace = true
 
 [features]
-default = []
+# Both on by default; `default-features = false` drops them for a smaller binary.
+default = ["accesskit", "headless"]
+# Screen readers and other assistive technology see the window (eframe's AccessKit adapter).
+accesskit = ["eframe/accesskit"]
+# `App::run` honours `--headless` (render without a window, `.ui` scripts, `--snap`, `--tree`).
+headless = []
 # The app's commands in the macOS / Windows menu bar (ashlar-native + muda) instead of the window.
 native-menu = ["ashlar-native/menu"]
 # Crash, performance and usage telemetry through ashlar-telemetry: always on when the app
@@ -27,7 +32,7 @@ log = { workspace = true, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 ashlar-log = { workspace = true, features = ["serde"] }
 ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
