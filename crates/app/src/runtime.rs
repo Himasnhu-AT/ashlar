@@ -266,6 +266,14 @@ pub struct Runtime<D: Document> {
     tray: Option<ashlar_native::tray::Tray>,
     #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
     tray_tried: bool,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts: Option<ashlar_native::hotkey::GlobalShortcuts>,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts_tried: bool,
+    /// Bring the window to the front on the next frame (a forwarded launch, a tray click, a
+    /// global shortcut), through the OS where the focus request alone may be refused.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    bring_front: bool,
     /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
     /// [`crate::Driver::native_menu_pick`]).
     native_picks: Vec<String>,
@@ -362,6 +370,11 @@ impl<D: Document> Runtime<D> {
             tray: None,
             #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
             tray_tried: false,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts: None,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts_tried: false,
+            bring_front: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             inbox,
@@ -606,6 +619,14 @@ impl<D: Document> Runtime<D> {
         }
         #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
         self.drain_tray(ctx);
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if let Some(g) = &self.global_shortcuts {
+            let pressed = g.drain();
+            if !pressed.is_empty() {
+                self.show_window(ctx);
+            }
+            self.native_picks.extend(pressed);
+        }
         self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
     }
@@ -685,6 +706,7 @@ impl<D: Document> Runtime<D> {
         if focus {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.bring_front = true;
         }
         let mut files = items.into_iter().filter_map(|item| match item {
             ashlar_native::open_files::Opened::File(p) => Some(p),
@@ -899,7 +921,45 @@ impl<D: Document> Runtime<D> {
                 }
             }
         }
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.global_shortcuts_tried {
+            self.global_shortcuts_tried = true;
+            if !self.shared.global_shortcuts.is_empty() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::hotkey::GlobalShortcuts::new(std::sync::Arc::new(move || wake.wake())) {
+                    Ok(mut g) => {
+                        for (command, chord) in &self.shared.global_shortcuts {
+                            let done = ashlar_command::shortcut::Chord::parse(chord)
+                                .map_err(|e| ashlar_native::NativeError::Invalid(e.0))
+                                .and_then(|c| g.register(command.clone(), &c));
+                            if let Err(e) = done {
+                                log::warn!("global shortcut `{chord}` for `{command}` skipped: {e}");
+                            }
+                        }
+                        self.global_shortcuts = Some(g);
+                    }
+                    Err(e) => log::warn!("no global shortcuts: {e}"),
+                }
+            }
+        }
+        if std::mem::take(&mut self.bring_front)
+            && let Err(e) = ashlar_native::system::bring_to_front(window)
+            && !e.is_unsupported()
+        {
+            log::debug!("bring to front: {e}");
+        }
         let _ = (ctx, window);
+    }
+
+    /// Show, restore and focus the window, now through the viewport and on the next frame
+    /// through the OS.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn show_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.bring_front = true;
+        ctx.request_repaint();
     }
 
     /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
@@ -909,11 +969,7 @@ impl<D: Document> Runtime<D> {
         for e in t.events() {
             match e {
                 ashlar_native::tray::TrayEvent::Menu(id) => self.native_picks.push(id),
-                ashlar_native::tray::TrayEvent::Activate => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
+                ashlar_native::tray::TrayEvent::Activate => self.show_window(ctx),
             }
         }
     }

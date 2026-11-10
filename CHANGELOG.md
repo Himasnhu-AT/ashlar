@@ -9,6 +9,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_native::hotkey` (feature `hotkey`, IMP-6.16): system-wide shortcuts on global-hotkey
+  (macOS, Windows, Linux on X11). `GlobalShortcuts::new(waker)`, `register(id, &chord)` with the
+  keymap's chords (a chord without Ctrl, Alt or ⌘ is refused), `unregister`, `drain()`; dropping
+  it releases every chord. `system::bring_to_front(window)` restores and focuses a window through
+  the OS (Windows borrows the foreground thread's input when the foreground lock refuses), and a
+  second launch on Windows now calls `AllowSetForegroundWindow` for the first (its pid travels in
+  the endpoint file). `App::global_shortcut(command, chord)` (feature `hotkey` of `ashlar-app`)
+  runs the command and brings the window forward; forwarded launches and tray clicks also bring
+  it forward through the OS.
 - `ashlar_native::tray` (feature `tray`, IMP-6.11): a tray / status-bar icon with a menu built from
   a `MenuSpec` (macOS status bar, Windows notification area, Linux StatusNotifierItem over D-Bus
   with no GTK). `Tray::new(TraySpec { id, tooltip, icon, template, menu }, waker)`, `events()`

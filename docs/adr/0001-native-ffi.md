@@ -22,7 +22,11 @@ the video editor's platform crate these were adapted from):
    - `power` (macOS `endActivity:`, Windows `SetThreadExecutionState`)
    - `open_files` (macOS: the Apple event handler class and its registration)
    - `progress` (Windows `ITaskbarList3`)
-   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`)
+   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`; and for `bring_to_front`,
+     added 2026-11-10: `IsIconic`, `ShowWindow`, `SetForegroundWindow`, `BringWindowToTop`,
+     `AttachThreadInput`)
+   - `single_instance` (Windows `AllowSetForegroundWindow`, one block; added 2026-11-10 so the
+     second launch lets the first come to the front)
    - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)
    - `terminate` (Unix, through `libc`: `pipe`, `fcntl`, `sigaction`, and in the handler only
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server
@@ -42,7 +46,7 @@ the video editor's platform crate these were adapted from):
      settings, autosave and telemetry flush
 
    Everything else (dialogs, clipboard, secrets, Linux notifications, macOS progress and preferences,
-   single instance) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.
+   single instance off Windows, tray, global shortcuts) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.
 2. Every `unsafe` block has a `// SAFETY:` comment saying why it is sound.
 3. The public API is safe: no `pub unsafe fn`, no raw pointers or FFI types in signatures.
    Window handles come in through `raw_window_handle::HasWindowHandle`, so a caller can't pass

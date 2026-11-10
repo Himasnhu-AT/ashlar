@@ -23,6 +23,7 @@
 //! | [`cli_tool`] | link + admin prompt | – | link (no prompt) | – |
 //! | [`display`] | always | window station check | always | – |
 //! | [`tray`] | NSStatusItem | notification area | StatusNotifierItem (D-Bus, no GTK) | – |
+//! | [`hotkey`] | Carbon hot keys | RegisterHotKey | X11 (not Wayland) | – |
 //! | [`memory`] | phys_footprint, malloc pressure relief | private commit | /proc status, malloc_trim | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
@@ -45,6 +46,11 @@ pub mod clipboard;
 pub mod dialogs;
 #[cfg(feature = "display")]
 pub mod display;
+#[cfg(feature = "hotkey")]
+pub mod hotkey;
+#[cfg(any(feature = "menu", feature = "hotkey"))]
+#[allow(dead_code)]
+mod key_code;
 #[cfg(feature = "memory")]
 pub mod memory;
 #[cfg(feature = "menu")]

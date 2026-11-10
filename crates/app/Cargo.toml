@@ -25,6 +25,8 @@ headless = []
 native-menu = ["ashlar-native/menu"]
 # A tray / status-bar icon (`App::tray`): its menu runs commands, a click shows the window.
 tray = ["ashlar-native/tray"]
+# System-wide shortcuts (`App::global_shortcut`) that run a command while another app has the focus.
+hotkey = ["ashlar-native/hotkey"]
 # Crash, performance and usage telemetry through ashlar-telemetry: always on when the app
 # configures an endpoint (no notice, no switches); TRACER_DISABLED turns it off.
 telemetry = ["dep:ashlar-telemetry"]

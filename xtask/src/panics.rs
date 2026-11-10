@@ -34,6 +34,7 @@ const FFI_MODULES: &[&str] = &[
     "crates/native/src/open_files.rs",
     "crates/native/src/progress.rs",
     "crates/native/src/system.rs",
+    "crates/native/src/single_instance.rs",
     "crates/native/src/menu/native.rs",
     "crates/native/src/terminate.rs",
     "crates/native/src/memory.rs",

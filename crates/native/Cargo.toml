@@ -54,6 +54,8 @@ menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
 # A tray / status-bar icon with a menu built from a `MenuSpec` (tray-icon; on Linux a
 # StatusNotifierItem over D-Bus, no GTK).
 tray = ["dep:tray-icon", "dep:muda", "dep:objc2"]
+# System-wide shortcuts that reach the app while another app has the focus (global-hotkey).
+hotkey = ["dep:global-hotkey", "dep:objc2"]
 # Whether this process can show a window (Windows: not in a service's window station).
 display = ["windows/Win32_System_StationsAndDesktops"]
 # This process's memory footprint, and returning freed allocator pages to the system.
@@ -81,8 +83,9 @@ open-files = [
     "objc2-app-kit/NSApplication",
     "objc2-app-kit/NSRunningApplication",
 ]
-# A second launch forwards its arguments to the first over a local socket.
-single-instance = []
+# A second launch forwards its arguments to the first over a local socket (and, on Windows, lets
+# it take the foreground).
+single-instance = ["windows/Win32_UI_WindowsAndMessaging"]
 # System notifications.
 notify = [
     "dep:objc2",
@@ -125,6 +128,10 @@ secrets = [
 # Appearance, accent colour, reduced motion; open a URL, reveal a file.
 system = [
     "dep:objc2",
+    "dep:raw-window-handle",
+    "objc2-app-kit/NSApplication",
+    "objc2-app-kit/NSResponder",
+    "windows/Win32_System_Threading",
     "objc2-app-kit/NSColor",
     "objc2-app-kit/NSColorSpace",
     "objc2-app-kit/NSWorkspace",
@@ -159,6 +166,7 @@ arboard = { version = "3.6", optional = true }
 png = { version = "0.18", optional = true }
 muda = { workspace = true, optional = true }
 tray-icon = { version = "0.26", default-features = false, optional = true }
+global-hotkey = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

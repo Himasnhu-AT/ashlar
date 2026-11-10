@@ -72,6 +72,9 @@ pub(crate) struct Shared<D: Document> {
     /// The tray icon to show (see [`App::tray`]).
     #[cfg(feature = "tray")]
     pub tray: Option<ashlar_native::tray::TraySpec>,
+    /// System-wide shortcuts: (command id, chord text) (see [`App::global_shortcut`]).
+    #[cfg(feature = "hotkey")]
+    pub global_shortcuts: Vec<(String, String)>,
     /// Named starting states, in declaration order.
     pub scenes: Vec<(String, SceneFn<D>)>,
 }
@@ -140,6 +143,8 @@ pub struct App<D: Document> {
     remember_window: bool,
     #[cfg(feature = "tray")]
     tray: Option<ashlar_native::tray::TraySpec>,
+    #[cfg(feature = "hotkey")]
+    global_shortcuts: Vec<(String, String)>,
     window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
 }
@@ -172,6 +177,8 @@ impl<D: Document> App<D> {
             remember_window: true,
             #[cfg(feature = "tray")]
             tray: None,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: Vec::new(),
             window: WindowSpec::default(),
             scenes: Vec::new(),
         }
@@ -301,6 +308,16 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Run `command` when `chord` (`"Mod+Shift+Space"`, the keymap's syntax) is pressed anywhere,
+    /// even while another app has the focus (feature `hotkey`; macOS, Windows, Linux on X11).
+    /// The window comes to the front first. A chord without Ctrl, Alt or ⌘, or one another app
+    /// holds, is skipped with a log line.
+    #[cfg(feature = "hotkey")]
+    pub fn global_shortcut(mut self, command: impl Into<String>, chord: impl Into<String>) -> Self {
+        self.global_shortcuts.push((command.into(), chord.into()));
+        self
+    }
+
     /// Open files dropped on the window (default on when the app sets a [`App::format`] or a
     /// [`App::file_extension`]). The first file with a known extension opens with `file.open`
     /// (a dirty document asks to save first); the others reach the view as
@@ -413,6 +430,8 @@ impl<D: Document> App<D> {
             remember_window: self.remember_window,
             #[cfg(feature = "tray")]
             tray: self.tray,
+            #[cfg(feature = "hotkey")]
+            global_shortcuts: self.global_shortcuts,
             scenes: self.scenes,
         };
         (Arc::new(shared), self.view, self.setup)

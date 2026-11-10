@@ -70,6 +70,19 @@ pub fn reveal(path: &Path) -> Result<()> {
     crate::guarded("revealing a file", || imp::reveal(&path))
 }
 
+/// Bring the app and `window` to the front and give it the keyboard focus, restoring it if it
+/// is minimized. For "the second launch hands over to the first" and tray / global-shortcut
+/// activations, where the windowing library's focus request alone may be refused.
+///
+/// macOS activates the app (winit then orders the key window front). Windows restores the window
+/// and asks for the foreground, borrowing the foreground thread's input when the foreground lock
+/// refuses; a launch that forwarded to this one through [`crate::single_instance`] has already
+/// allowed it. Elsewhere [`NativeError::Unsupported`]: use the windowing library's focus request.
+pub fn bring_to_front(window: &impl raw_window_handle::HasWindowHandle) -> Result<()> {
+    let handle = window.window_handle().map_err(|e| NativeError::Os(crate::os_text(e)))?;
+    crate::guarded("bringing the window to the front", || imp::bring_to_front(handle.as_raw()))
+}
+
 fn existing(path: &Path) -> Result<std::path::PathBuf> {
     let abs = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
     if !abs.exists() {
@@ -126,6 +139,16 @@ mod imp {
     pub fn reveal(path: &Path) -> Result<()> {
         let u = NSURL::from_file_path(path).ok_or_else(|| NativeError::Invalid("not a file path".into()))?;
         NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[u]));
+        Ok(())
+    }
+
+    pub fn bring_to_front(_window: raw_window_handle::RawWindowHandle) -> Result<()> {
+        let mtm = objc2::MainThreadMarker::new().ok_or_else(|| NativeError::Os("bring the window to the front from the main thread".into()))?;
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        app.unhide(None);
+        // `activate` is macOS 14+; this one works on every version the crate supports.
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
         Ok(())
     }
 }
@@ -194,6 +217,42 @@ mod imp {
             return Err(NativeError::Invalid("a path with a quote".into()));
         }
         spawn(std::process::Command::new("explorer.exe").raw_arg(format!("/select,\"{p}\"")))
+    }
+
+    pub fn bring_to_front(window: raw_window_handle::RawWindowHandle) -> Result<()> {
+        use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow,
+        };
+        let raw_window_handle::RawWindowHandle::Win32(h) = window else {
+            return Err(NativeError::Invalid("not a Win32 window".into()));
+        };
+        let hwnd = HWND(h.hwnd.get() as *mut core::ffi::c_void);
+        // SAFETY: `hwnd` comes from a live window handle (`HasWindowHandle` borrows the window);
+        // these calls only take the handle by value and fail cleanly on a stale one.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            if SetForegroundWindow(hwnd).as_bool() {
+                return Ok(());
+            }
+        }
+        // The foreground lock refused: share the foreground thread's input for the call.
+        // SAFETY: plain Win32 calls on thread ids and the handle above; the attachment is undone
+        // before returning.
+        let ok = unsafe {
+            let me = GetCurrentThreadId();
+            let fg = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let attached = fg != 0 && fg != me && AttachThreadInput(me, fg, true).as_bool();
+            let _ = BringWindowToTop(hwnd);
+            let ok = SetForegroundWindow(hwnd).as_bool();
+            if attached {
+                let _ = AttachThreadInput(me, fg, false);
+            }
+            ok
+        };
+        if ok { Ok(()) } else { Err(NativeError::Denied("Windows kept another window in front".into())) }
     }
 }
 
@@ -301,6 +360,10 @@ mod imp {
         spawn(std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(path)))
     }
 
+    pub fn bring_to_front(_window: raw_window_handle::RawWindowHandle) -> Result<()> {
+        Err(NativeError::Unsupported)
+    }
+
     #[cfg(test)]
     #[test]
     fn file_uris_are_encoded() {
@@ -340,6 +403,10 @@ mod imp {
     pub fn reveal(_: &Path) -> Result<()> {
         Err(NativeError::Unsupported)
     }
+
+    pub fn bring_to_front(_window: raw_window_handle::RawWindowHandle) -> Result<()> {
+        Err(NativeError::Unsupported)
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux", target_arch = "wasm32")))]
@@ -356,6 +423,10 @@ mod imp {
         Err(NativeError::Unsupported)
     }
     pub fn reveal(_: &Path) -> Result<()> {
+        Err(NativeError::Unsupported)
+    }
+
+    pub fn bring_to_front(_window: raw_window_handle::RawWindowHandle) -> Result<()> {
         Err(NativeError::Unsupported)
     }
 }

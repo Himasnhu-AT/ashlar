@@ -70,6 +70,24 @@ fn tray() {
     drop(Tray::new(TraySpec::new("test", "again", icon, menu("x")), ashlar_native::no_waker()).unwrap());
 }
 
+#[cfg(all(target_os = "macos", feature = "hotkey"))]
+fn hotkey() {
+    use ashlar_native::hotkey::GlobalShortcuts;
+    let menu_chord = |t: &str| ashlar_command::shortcut::Chord::parse(t).ok();
+
+    let mut g = GlobalShortcuts::new(ashlar_native::no_waker()).expect("global shortcuts on the main thread");
+    let rare = menu_chord("Ctrl+Alt+Shift+F19").unwrap();
+    // Another app may hold it: an error is fine, a crash is not.
+    if g.register("test.rare", &rare).is_ok() {
+        assert_eq!(g.ids(), ["test.rare"]);
+        g.register("test.rare", &rare).unwrap();
+        assert!(g.register("test.other", &rare).is_err(), "one id per chord");
+        assert!(g.unregister("test.rare"));
+    }
+    assert!(g.register("test.plain", &menu_chord("Shift+F19").unwrap()).is_err());
+    assert!(g.drain().is_empty());
+}
+
 fn main() {
     #[cfg(all(target_os = "macos", feature = "menu"))]
     menu();
@@ -79,5 +97,7 @@ fn main() {
     progress();
     #[cfg(all(target_os = "macos", feature = "tray"))]
     tray();
+    #[cfg(all(target_os = "macos", feature = "hotkey"))]
+    hotkey();
     println!("main-thread checks passed");
 }
