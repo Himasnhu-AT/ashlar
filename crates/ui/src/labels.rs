@@ -258,7 +258,7 @@ fn id() -> egui::Id {
 /// Installs `labels` for every component on `ctx` (until replaced).
 pub fn install(ctx: &egui::Context, labels: UiLabels) {
     ctx.data_mut(|d| d.insert_temp(id(), Arc::new(labels)));
-    ctx.request_repaint();
+    crate::wake::wake(ctx, crate::wake::Reason::SETTINGS);
 }
 
 /// The installed labels, or the English defaults. Cheap: an `Arc` clone.
