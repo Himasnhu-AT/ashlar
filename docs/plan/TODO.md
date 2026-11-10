@@ -24,7 +24,7 @@ a task's state.
 | IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
 | IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | done (726b637, d5bd509) |
 | IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
-| IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | todo |
+| IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | doing (wt-size) |
 | IMP-1.8 | Launch to first present | todo |
 | IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
 
@@ -39,12 +39,13 @@ a task's state.
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | done (bfcafc7) |
-| IMP-2.9 | Binary size | todo (note: IMP-3.3 turned on ashlar-native `system`, which pulls zbus on Linux) |
+| IMP-2.9 | Binary size | doing (wt-size) (note: IMP-3.3 turned on ashlar-native `system`, which pulls zbus on Linux) |
 | IMP-2.10 | Idle memory | todo |
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
-| IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | doing (wt-allocfix) |
+| IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
+| IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | doing (wt-allocreg) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | todo |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
@@ -57,6 +58,7 @@ a task's state.
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | done (2089b8c) |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | done (8ec7a04) |
 | IMP-3.5 | Animated theme switch | doing (wt-animate (if time)) |
+| IMP-3.9 | `motion::f32` tween with `Easing::LINEAR` reached about 12 % at 26 % of its duration (reported by wt-clock): check against a unit test | todo |
 | IMP-3.6 | Presence and component adoption | doing (wt-animate) |
 | IMP-3.7 | Gesture handoff | todo |
 | IMP-3.8 | `Cx` API polish | todo |
@@ -81,7 +83,7 @@ a task's state.
 |---|---|---|
 | IMP-5.1 | Basic controls kit | done (10ee980) |
 | IMP-5.2 | Toast v2 | done (aaf674c) |
-| IMP-5.3 | List and tree accessibility and selection | doing (wt-a11y) |
+| IMP-5.3 | List and tree accessibility and selection | done (b2775e5, fix 9bc416c) |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | doing (wt-syntax) |
 | IMP-5.6 | Diff view | todo |

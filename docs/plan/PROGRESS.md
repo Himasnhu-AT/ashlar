@@ -3,6 +3,38 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/a11y and wt/allocfix merged
+
+- **IMP-5.3:**
+  - Every visible row of `VirtualList`, `VirtualTable` and `TreeView` gets an AccessKit node
+    (ListItem, Row or TreeItem). Each has a name from `row_label`, selected state, and position in
+    set; tree items also report level and expanded.
+  - The nodes are built only while AccessKit is on. A 100k-row list makes 10–60 nodes.
+  - New: `Selection` (anchor, cursor, sorted ranges; ⌘A is one range at 10M rows) and `type_ahead`.
+  - Perf: within noise.
+- **CI caught a regression from IMP-5.3:** the list node took its automation id (`notes.list`) as its
+  accessible name, so a screen reader would read an internal id. The fix (on `imp`) leaves the list
+  unnamed unless the app labels it, and the a11y test now asserts that.
+- **IMP-2.16:**
+
+  | Metric | Before | After |
+  |---|---|---|
+  | `allocs_per_idle_wake_frame` | 958 | 550 (gate 1,000 → 578) |
+  | `allocs_per_frame_scroll_100k` | 472 | 345 |
+  | `keystroke_allocs` | 3,720 | 1,935 |
+
+  - List rows now draw cached, non-selectable galleys (`cache::row_label`, `cache::label`,
+    `cache::button_text`), tested against egui's own layout. That took them from 623 to 138
+    allocations per idle frame.
+  - `refresh_infos` rebuilds command infos and menus only when a command's enabled state changes.
+    Before, about 540 allocations per keystroke went there.
+  - Bug fixed: clicking a note's title text now selects the note. The selectable label used to take
+    the click.
+  - **After merging with IMP-5.3** the perf gate fails: idle frame 652 (gate 578), keystroke 2,246.
+    Each branch passed alone; IMP-2.18 finds the cause, and the gate stays where it is.
+  - Left as is: inside egui, tessellation (about 107), per-row bookkeeping (about 7 per row) and each
+    button (about 17).
+
 ## 2026-11-10: wt/race merged (CI green), a real bug
 
 - **IMP-0.6:** the flaky telemetry test found a real bug in `ashlar-trace`, not in the courier
