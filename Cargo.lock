@@ -610,6 +610,9 @@ dependencies = [
 [[package]]
 name = "ashlar-syntax"
 version = "0.1.0"
+dependencies = [
+ "cpu-time",
+]
 
 [[package]]
 name = "ashlar-telemetry"

@@ -13,5 +13,8 @@ homepage.workspace = true
 
 [dependencies]
 
+[dev-dependencies]
+cpu-time = "1"
+
 [lints]
 workspace = true
