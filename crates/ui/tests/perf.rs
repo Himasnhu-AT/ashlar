@@ -20,6 +20,13 @@ use ashlar_ui::virtual_list::{RowHeights, VirtualList};
 use egui::text::LayoutJob;
 use egui::{Color32, Event, FontId, Rect, pos2, vec2};
 
+#[path = "support/allocs.rs"]
+mod allocs;
+
+/// Counts allocations for the `*_allocs` metrics (this test binary only).
+#[global_allocator]
+static GLOBAL: &stats_alloc::StatsAlloc<std::alloc::System> = &stats_alloc::INSTRUMENTED_SYSTEM;
+
 const SCREEN: Rect = Rect { min: pos2(0.0, 0.0), max: pos2(800.0, 600.0) };
 
 /// One headless pass at time `t`, with `events`; returns the pass's wall time.
@@ -148,6 +155,35 @@ fn perf_markdown_static_50kb() {
     println!("bench: md_static_frame_p95 {:.3} ms", pct(&mut times, 95));
     println!("bench: md_static_layout_jobs {} n", layout_jobs(&ctx));
     println!("md_static: {} bytes, {} blocks", doc.len(), markdown::parse(&doc).len());
+}
+
+/// Heap allocations of one frame of the static 50 KB document, once warm.
+#[test]
+#[ignore = "perf: run with --release --ignored --nocapture"]
+fn perf_markdown_static_50kb_allocs() {
+    let doc = markdown_doc(50 * 1024);
+    let style = md_style();
+    let ctx = egui::Context::default();
+    let draw = |ctx: &egui::Context, t: f64| {
+        frame(ctx, t, Vec::new(), |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                markdown::show(ui, "doc", &doc, &style);
+            });
+        })
+    };
+    for i in 0..20 {
+        draw(&ctx, f64::from(i) / 120.0);
+    }
+    let frames: u32 = 100;
+    let ((), a) = allocs::count(|| {
+        for i in 20..20 + frames {
+            draw(&ctx, f64::from(i) / 120.0);
+        }
+    });
+    let n = a.count / frames as usize;
+    println!("bench: md_static_allocs {n} n");
+    println!("bench: md_static_alloc_bytes {} B", a.bytes / frames as usize);
+    assert!(n > 0, "the counting allocator saw the frames");
 }
 
 #[test]
