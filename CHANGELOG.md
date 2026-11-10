@@ -10,6 +10,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-ui`: screen readers see every visible row of `VirtualList`, `VirtualTable` and
+  `TreeView`: list items, table rows and tree items named by `row_label` (the tree's labels),
+  with selected state, position and set size, and level and expanded state for tree items. Only
+  visible rows get nodes, and only while AccessKit is on.
+- `ashlar-ui`: `selection::Selection`, an app-owned, serializable multi-selection (anchor, cursor,
+  ranges). `VirtualList::selection(&mut sel)` and `VirtualTable::selection` handle Shift-click,
+  Shift+arrows, ⌘/Ctrl-click and ⌘A; `selected` and `is_selected` keep working without it.
+- `ashlar-ui`: `VirtualList::type_ahead(&text)` and `VirtualTable::type_ahead`: letters typed
+  within a second of each other jump to the next row starting with them.
 - `ashlar-app`: `--headless` for every `App::run` binary: `--size WxH --scale S --theme
   light|dark --script file.ui --at SECONDS --snap out.png --tree tree.json` writes a screenshot
   (real pixels when there is a GPU) and the UI tree with no window, in a temporary folder. Exit
