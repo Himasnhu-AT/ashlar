@@ -14,6 +14,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   launch opens the window there, sizes bounded and a window left on no monitor moved back
   (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
   (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
+- `ashlar-native` notifications: stable ids (`Notification::id`; the same id replaces a shown
+  notification), `notify::show` (returns the id), `notify::remove`, `notify::on_click` (a
+  `Receiver<Click>` with the notification's `info` map), `silent`, and `notify::set_app_identity`.
+  Windows now shows toasts (AppUserModelID registered under HKCU for unpackaged apps, escaped XML,
+  tags over 64 characters hashed); macOS installs a notification-center delegate so banners show
+  while the app is frontmost and clicks are reported; Linux sends the `desktop-entry` hint and
+  reports clicks from `ActionInvoked`.
 - `ashlar_ui::chat`: a chat kit over plain data. `Transcript` is a virtualized, variable-height
   message list (heights kept per message key, revision and width; a frame costs O(visible)) that
   follows the newest message while it streams, stays put once the user scrolls up and then offers
@@ -181,6 +188,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   frame that asks for one finishes, the next shows the dialog and acts on the pick. Saving an
   untitled document from the "Save changes?" dialog now goes on to the held-back open or quit
   after Save As. `ashlar_native::dialogs::FileDialog::parent(&window)` parents any picker.
+- `ashlar-native` macOS notifications play the default sound unless `silent` is set, and ask for
+  sound permission only then.
 - A document named on the command line opens on the frame after the first, so the window shows
   before the load runs (it used to load before the first paint).
 - Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower

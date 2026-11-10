@@ -71,6 +71,13 @@ notify = [
     "dep:objc2-user-notifications",
     "objc2-foundation/NSBundle",
     "objc2-foundation/NSError",
+    "objc2-foundation/NSArray",
+    "objc2-foundation/NSDictionary",
+    "windows/UI_Notifications",
+    "windows/Data_Xml_Dom",
+    "windows/Win32_UI_Shell",
+    "windows/Win32_System_Com",
+    "dep:windows-registry",
     "dep:zbus",
 ]
 # Dock / taskbar progress and badge.
@@ -146,6 +153,9 @@ objc2-user-notifications = { version = "0.3", default-features = false, optional
     "UNNotificationContent",
     "UNNotificationTrigger",
     "UNNotificationSettings",
+    "UNNotification",
+    "UNNotificationResponse",
+    "UNNotificationSound",
 ] }
 block2 = { version = "0.6", optional = true }
 apple-native-keyring-store = { version = "1", default-features = false, features = ["keychain"], optional = true }

@@ -31,8 +31,12 @@ the video editor's platform crate these were adapted from):
      added for idle apps that report their footprint and hand freed memory back)
    - `display` (Windows `GetProcessWindowStation`, `GetUserObjectInformationW`; added 2026-10-27 so an
      app started where no window can be shown says so and exits instead of panicking)
+   - `notify::macos` (the `UNUserNotificationCenterDelegate` class, its `init`, and
+     `setUserInfo:`) and `notify::windows` (`SetCurrentProcessExplicitAppUserModelID`,
+     `CoInitializeEx`); added 2026-11-10 so banners show while the app is frontmost, clicks are
+     reported and Windows gets toasts
 
-   Everything else (dialogs, clipboard, secrets, notifications, macOS progress and preferences,
+   Everything else (dialogs, clipboard, secrets, Linux notifications, macOS progress and preferences,
    single instance) uses safe APIs of rfd, arboard, keyring-core, objc2 and zbus.
 2. Every `unsafe` block has a `// SAFETY:` comment saying why it is sound.
 3. The public API is safe: no `pub unsafe fn`, no raw pointers or FFI types in signatures.
