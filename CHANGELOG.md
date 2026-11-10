@@ -56,6 +56,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   blends two token sets.
 - `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
   by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
+- `ashlar_ui::tabs::TabStrip`: a standalone tab strip with one Tab stop (arrows, Home and End
+  move the selection), close by button, middle-click or ⌘W, an overflow menu for tabs that do not
+  fit, drag or ⌘⇧ + arrow reordering (`tabs::reorder` applies a move), the animated selection
+  indicator, an AccessKit tab list with positioned tabs, and automation ids `<id>.tab.<n>`.
+  The gallery has a Tabs page.
+- `ashlar_ui::tabs::Tab::automation`: registers a tab under a dotted automation id.
 - `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
   its exit settles, then `None`), entering and leaving along a token pair as an opacity.
 - `ashlar_ui::code_view::CodeView`: a read-only code view with virtualized lines (O(visible) per
@@ -112,6 +118,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
+  arrow keys, an AccessKit tab list, and the animated selection underline.
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
   0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
   change at once when egui's `animation_time` is 0, which reduced motion sets. Visual regression

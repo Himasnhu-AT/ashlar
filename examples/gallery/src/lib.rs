@@ -19,6 +19,7 @@ use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
 use ashlar::ui::swatches::SwatchGrid;
+use ashlar::ui::tabs::{TabStrip, reorder};
 use ashlar::ui::toasts::{Toast, ToastLevel, Toasts};
 use ashlar::ui::tokens::{self, ThemeMode, Tokens};
 use ashlar::ui::tree::{TreeModel, TreeState, TreeView};
@@ -35,10 +36,11 @@ pub enum Page {
     Lists,
     Overlays,
     Commands,
+    Tabs,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Overlays, Page::Commands];
+    pub const ALL: [Page; 7] = [Page::Inputs, Page::Controls, Page::Content, Page::Lists, Page::Tabs, Page::Overlays, Page::Commands];
     pub fn name(self) -> &'static str {
         match self {
             Page::Inputs => "Inputs",
@@ -47,6 +49,7 @@ impl Page {
             Page::Lists => "Lists",
             Page::Overlays => "Overlays",
             Page::Commands => "Commands",
+            Page::Tabs => "Tabs",
         }
     }
 }
@@ -176,6 +179,10 @@ pub struct Gallery {
     pub ran: Vec<String>,
     pub show_grid: bool,
     revision: u64,
+    doc_tabs: Vec<String>,
+    doc_selected: usize,
+    many_tabs: Vec<String>,
+    many_selected: usize,
 }
 
 impl Default for Gallery {
@@ -251,6 +258,10 @@ impl Gallery {
             ran: Vec::new(),
             show_grid: true,
             revision: 1,
+            doc_tabs: ["main.rs", "lib.rs", "Cargo.toml", "README.md"].map(String::from).to_vec(),
+            doc_selected: 0,
+            many_tabs: (1..=60).map(|i| format!("Scene {i}")).collect(),
+            many_selected: 30,
         }
     }
 
@@ -378,6 +389,7 @@ impl Gallery {
                 Page::Lists => self.lists(ui),
                 Page::Overlays => self.overlays(ui),
                 Page::Commands => self.commands_page(ui),
+                Page::Tabs => self.tabs_page(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
@@ -640,6 +652,37 @@ impl Gallery {
                     self.button_clicks += 1;
                 }
             });
+        });
+    }
+
+    fn tabs_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        section(ui, &t, "Closable, reorderable", |ui| {
+            let out =
+                TabStrip::new("tabs.documents", &self.doc_tabs, &mut self.doc_selected).label("Documents").closable(true).reorderable(true).show(ui);
+            if let Some(m) = out.moved {
+                reorder(&mut self.doc_tabs, &mut self.doc_selected, m);
+            }
+            if let Some(i) = out.closed
+                && i < self.doc_tabs.len()
+            {
+                self.doc_tabs.remove(i);
+                if self.doc_selected > i || self.doc_selected >= self.doc_tabs.len() {
+                    self.doc_selected = self.doc_selected.saturating_sub(1);
+                }
+            }
+            ui.add_space(t.space.sm);
+            match self.doc_tabs.get(self.doc_selected) {
+                Some(name) => ui.label(format!("Editing {name}. Arrows move, \u{2318}W closes, drag or \u{2318}\u{21e7}+arrow reorders.")),
+                None => ui.label("All tabs closed."),
+            };
+            if ui.button("Reset tabs").clicked() {
+                self.doc_tabs = ["main.rs", "lib.rs", "Cargo.toml", "README.md"].map(String::from).to_vec();
+                self.doc_selected = 0;
+            }
+        });
+        section(ui, &t, "Overflow: 60 tabs", |ui| {
+            TabStrip::new("tabs.many", &self.many_tabs, &mut self.many_selected).label("Scenes").show(ui);
         });
     }
 
