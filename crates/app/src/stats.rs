@@ -182,9 +182,121 @@ impl FrameStats {
     }
 }
 
+/// This process, for `app.stats` → `process`. A field is `null` where the platform cannot say:
+/// `threads` is read on Linux only, and everything is `null` on the web.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct ProcessStats {
+    /// What the system charges the process for: macOS physical footprint, Linux private resident
+    /// + swap, Windows private commit (`ashlar_native::memory`).
+    pub footprint_bytes: Option<u64>,
+    /// The highest footprint seen: sampled at most once a second while frames run, and at every
+    /// reading.
+    pub peak_bytes: Option<u64>,
+    /// CPU time used by every thread since the process started, in seconds.
+    pub cpu_s: Option<f64>,
+    /// Threads in the process.
+    pub threads: Option<u64>,
+}
+
+/// Reads [`ProcessStats`] and keeps the peak footprint.
+#[derive(Debug, Default)]
+pub struct ProcessProbe {
+    peak: Option<u64>,
+    last_tick: Option<std::time::Instant>,
+}
+
+impl ProcessProbe {
+    /// Called every frame: sample the footprint for the peak, at most once a second.
+    pub fn tick(&mut self) {
+        let Some(now) = crate::session::now() else { return };
+        if self.last_tick.is_some_and(|t| now.duration_since(t) < Duration::from_secs(1)) {
+            return;
+        }
+        self.last_tick = Some(now);
+        self.footprint();
+    }
+
+    fn footprint(&mut self) -> Option<u64> {
+        let f = ashlar_native::memory::process_memory().map(|m| m.footprint);
+        if let Some(f) = f {
+            self.peak = Some(self.peak.map_or(f, |p| p.max(f)));
+        }
+        f
+    }
+
+    /// Read the process now.
+    pub fn read(&mut self) -> ProcessStats {
+        let footprint_bytes = self.footprint();
+        ProcessStats { footprint_bytes, peak_bytes: self.peak, cpu_s: process_cpu_s(), threads: threads() }
+    }
+}
+
+fn process_cpu_s() -> Option<f64> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cpu_time::ProcessTime::try_now().ok().map(|t| t.as_duration().as_secs_f64())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+fn threads() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        threads_in_status(&std::fs::read_to_string("/proc/self/status").ok()?)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// The `Threads:` field of a `/proc/<pid>/status` text.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn threads_in_status(text: &str) -> Option<u64> {
+    text.lines().find_map(|l| l.strip_prefix("Threads:")).and_then(|v| v.trim().parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_process_is_read_and_its_peak_kept() {
+        let mut p = ProcessProbe::default();
+        p.tick();
+        let s = p.read();
+        if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
+            let f = s.footprint_bytes.unwrap();
+            assert!(f > 0 && s.peak_bytes.unwrap() >= f, "{s:?}");
+            assert!(s.cpu_s.unwrap() > 0.0, "{s:?}");
+        }
+        if cfg!(target_os = "linux") {
+            assert!(s.threads.unwrap() >= 1, "{s:?}");
+        }
+        assert_eq!(threads_in_status("Name:\tx\nThreads:\t7\nVmRSS: 1 kB\n"), Some(7));
+        assert_eq!(threads_in_status("Name: x\n"), None);
+        let v = serde_json::to_value(s).unwrap();
+        for k in ["footprint_bytes", "peak_bytes", "cpu_s", "threads"] {
+            assert!(v.get(k).is_some(), "{k} in {v}");
+        }
+    }
+
+    #[test]
+    fn app_stats_reports_the_process() {
+        let mut d = crate::Driver::new(crate::App::<i64>::new("statstest", "0.0.0").runtime());
+        d.frame();
+        let v = d.call("app.stats", serde_json::json!({})).unwrap();
+        let p = &v["process"];
+        for k in ["footprint_bytes", "peak_bytes", "cpu_s", "threads"] {
+            assert!(p.get(k).is_some(), "{k} in {p}");
+        }
+        if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
+            assert!(p["footprint_bytes"].as_u64().is_some_and(|f| f > 0), "{p}");
+        }
+    }
 
     #[test]
     fn percentiles() {

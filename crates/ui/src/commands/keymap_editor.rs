@@ -29,7 +29,7 @@ pub enum KeymapChange {
 }
 
 /// Labels the editor shows (localized by the app).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeymapLabels {
     pub search: String,
     pub command: String,
@@ -39,6 +39,10 @@ pub struct KeymapLabels {
     pub reset: String,
     pub clear: String,
     pub conflicts_with: String,
+    /// The table's name for screen readers.
+    pub table: String,
+    /// The title of the column with the reset and clear buttons.
+    pub actions: String,
 }
 
 impl Default for KeymapLabels {
@@ -52,6 +56,8 @@ impl Default for KeymapLabels {
             reset: "Reset".into(),
             clear: "Clear".into(),
             conflicts_with: "Also used by".into(),
+            table: "Keyboard shortcuts".into(),
+            actions: "Actions".into(),
         }
     }
 }
@@ -66,6 +72,7 @@ pub struct KeymapEditor {
     conflicts: HashMap<String, Vec<String>>,
     conflicts_key: Option<(u64, u64)>,
     edits: u64,
+    /// Left at its default, the editor shows the installed [`crate::labels`].
     pub labels: KeymapLabels,
 }
 
@@ -175,7 +182,10 @@ impl KeymapEditor {
     pub fn show(&mut self, ui: &mut Ui, keymap: &mut Keymap, commands: &[CommandInfo], revision: u64) -> Option<KeymapChange> {
         let t = tokens::current(ui.ctx());
         let mut change = self.capture(ui, keymap);
-        SearchField::new("keymap.search", &mut self.filter).hint(&self.labels.search).show(ui);
+        // `labels` left at the English default means "use the installed labels"
+        let installed = crate::labels::current(ui.ctx());
+        let custom = self.labels != crate::labels::english().keymap;
+        SearchField::new("keymap.search", &mut self.filter).hint(if custom { &self.labels.search } else { &installed.keymap.search }).show(ui);
         self.refresh(keymap, commands, revision);
         let total_conflicts = self.conflicts.len();
         if total_conflicts > 0 {
@@ -186,92 +196,98 @@ impl KeymapEditor {
         }
         ui.add_space(t.space.xs);
         let width = ui.available_width();
+        let labels = if custom { &self.labels } else { &installed.keymap };
         let cols = [
-            Column::new(&self.labels.command, (width * 0.45).max(120.0)),
-            Column::new(&self.labels.shortcut, (width * 0.35).max(100.0)),
-            Column::new("", (width * 0.2).max(90.0)),
+            Column::new(&labels.command, (width * 0.45).max(120.0)),
+            Column::new(&labels.shortcut, (width * 0.35).max(100.0)),
+            Column::new(&labels.actions, (width * 0.2).max(90.0)),
         ];
         let platform = keymap.platform();
         let rows = &self.rows;
         let recording = self.recording.as_deref();
         let conflicts = &self.conflicts;
-        let labels = &self.labels;
         let keymap_ro: &Keymap = keymap;
         let mut action: Option<(usize, Action)> = None;
         let row_h = t.control_height + 2.0;
         let label_of = |r: usize| rows.get(r).and_then(|i| commands.get(*i)).map_or("", |c| c.label.as_str());
-        VirtualTable::new("keymap.table", &cols, rows.len(), RowHeights::Uniform(row_h)).row_label(&label_of).show(ui, |ui, r, col| {
-            let Some(c) = rows.get(r).and_then(|i| commands.get(*i)) else { return };
-            match col {
-                0 => {
-                    let color = if conflicts.contains_key(&c.id) { t.status.danger } else { t.text.primary };
-                    text(ui, &t, ("label", &c.id), &c.label, color);
-                }
-                1 => {
-                    let rec = recording == Some(c.id.as_str());
-                    let keys = keymap_ro.keys_for(&c.id);
-                    let shown = if rec {
-                        labels.recording.clone()
-                    } else if keys.is_empty() {
-                        labels.unbound.clone()
-                    } else {
-                        super::keys::fit_glyphs(ui.ctx(), display_list(keys, platform), &Tokens::font(t.type_scale.small))
-                    };
-                    let resp = chip(ui, &t, &shown, rec);
-                    let id = &c.id;
-                    automation::register_fmt(
-                        ui,
-                        resp.rect,
-                        format_args!("keymap.{id}.shortcut"),
-                        &shown,
-                        Role::Button,
-                        true,
-                        Details { value: Some(&shown), selected: Some(rec) },
-                    );
-                    if resp.clicked() {
-                        action = Some((r, Action::Record));
+        VirtualTable::new("keymap.table", &cols, rows.len(), RowHeights::Uniform(row_h)).label(&labels.table).row_label(&label_of).show(
+            ui,
+            |ui, r, col| {
+                let Some(c) = rows.get(r).and_then(|i| commands.get(*i)) else { return };
+                match col {
+                    0 => {
+                        let color = if conflicts.contains_key(&c.id) { t.status.danger } else { t.text.primary };
+                        text(ui, &t, ("label", &c.id), &c.label, color);
+                        // the text is painted, so the cell carries it
+                        ui.ctx().accesskit_node_builder(ui.unique_id(), |n| n.set_label(c.label.as_str()));
                     }
-                    if let Some(others) = conflicts.get(&c.id) {
-                        let names: Vec<&str> = others.iter().filter_map(|o| commands.iter().find(|x| &x.id == o)).map(|x| x.label.as_str()).collect();
-                        resp.on_hover_text(format!("{}: {}", labels.conflicts_with, names.join(", ")));
-                    }
-                }
-                _ => {
-                    let customized = keymap_ro.keys_for(&c.id) != keymap_ro.default_keys(&c.id);
-                    let id = &c.id;
-                    if customized {
-                        let r_reset = link(ui, &t, &labels.reset);
+                    1 => {
+                        let rec = recording == Some(c.id.as_str());
+                        let keys = keymap_ro.keys_for(&c.id);
+                        let shown = if rec {
+                            labels.recording.clone()
+                        } else if keys.is_empty() {
+                            labels.unbound.clone()
+                        } else {
+                            super::keys::fit_glyphs(ui.ctx(), display_list(keys, platform), &Tokens::font(t.type_scale.small))
+                        };
+                        let resp = chip(ui, &t, &shown, rec);
+                        let id = &c.id;
                         automation::register_fmt(
                             ui,
-                            r_reset.rect,
-                            format_args!("keymap.{id}.reset"),
-                            &labels.reset,
+                            resp.rect,
+                            format_args!("keymap.{id}.shortcut"),
+                            &shown,
                             Role::Button,
                             true,
-                            Details::default(),
+                            Details { value: Some(&shown), selected: Some(rec) },
                         );
-                        if r_reset.clicked() {
-                            action = Some((r, Action::Reset));
+                        if resp.clicked() {
+                            action = Some((r, Action::Record));
+                        }
+                        if let Some(others) = conflicts.get(&c.id) {
+                            let names: Vec<&str> =
+                                others.iter().filter_map(|o| commands.iter().find(|x| &x.id == o)).map(|x| x.label.as_str()).collect();
+                            resp.on_hover_text(format!("{}: {}", labels.conflicts_with, names.join(", ")));
                         }
                     }
-                    if !keymap_ro.keys_for(&c.id).is_empty() {
-                        let r_clear = link(ui, &t, &labels.clear);
-                        automation::register_fmt(
-                            ui,
-                            r_clear.rect,
-                            format_args!("keymap.{id}.clear"),
-                            &labels.clear,
-                            Role::Button,
-                            true,
-                            Details::default(),
-                        );
-                        if r_clear.clicked() {
-                            action = Some((r, Action::Clear));
+                    _ => {
+                        let customized = keymap_ro.keys_for(&c.id) != keymap_ro.default_keys(&c.id);
+                        let id = &c.id;
+                        if customized {
+                            let r_reset = link(ui, &t, &labels.reset);
+                            automation::register_fmt(
+                                ui,
+                                r_reset.rect,
+                                format_args!("keymap.{id}.reset"),
+                                &labels.reset,
+                                Role::Button,
+                                true,
+                                Details::default(),
+                            );
+                            if r_reset.clicked() {
+                                action = Some((r, Action::Reset));
+                            }
+                        }
+                        if !keymap_ro.keys_for(&c.id).is_empty() {
+                            let r_clear = link(ui, &t, &labels.clear);
+                            automation::register_fmt(
+                                ui,
+                                r_clear.rect,
+                                format_args!("keymap.{id}.clear"),
+                                &labels.clear,
+                                Role::Button,
+                                true,
+                                Details::default(),
+                            );
+                            if r_clear.clicked() {
+                                action = Some((r, Action::Clear));
+                            }
                         }
                     }
                 }
-            }
-        });
+            },
+        );
         if let Some((r, a)) = action
             && let Some(c) = self.rows.get(r).and_then(|i| commands.get(*i))
         {
@@ -331,11 +347,15 @@ fn chip(ui: &mut Ui, t: &Tokens, s: &str, active: bool) -> egui::Response {
     ui.painter().rect_filled(rect, t.radius.sm, fill);
     ui.painter().rect_stroke(rect, t.radius.sm, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     ui.painter().galley(egui::Align2::CENTER_CENTER.align_size_within_rect(g.size(), rect).min, g, color);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, s));
     resp
 }
 
 fn link(ui: &mut Ui, t: &Tokens, s: &str) -> egui::Response {
     let r = ui.add(egui::Label::new(egui::RichText::new(s).color(t.accent).size(t.type_scale.small)).sense(Sense::click()));
+    // it acts as a button, so it is announced as one
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, s));
+    ui.ctx().accesskit_node_builder(r.id, |n| n.clear_value());
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }

@@ -1,0 +1,133 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=true]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="Command palette"
+  Label value="Open with the Help menu, the status bar, or its shortcut."
+  Button "Open palette"
+  Label value="Keymap"
+  TextInput "Search" placeholder="Search commands or keys"
+  Label value="2 commands share a shortcut"
+  Table "Keyboard shortcuts"
+    Row
+      ColumnHeader "Command"
+      ColumnHeader "Shortcut"
+      ColumnHeader "Actions"
+    Row "New" [1/15]
+      Cell "New"
+      Cell
+        Button "⌘N"
+      Cell
+        Button "Clear"
+    Row "Open…" [2/15]
+      Cell "Open…"
+      Cell
+        Button "⌘O"
+      Cell
+        Button "Clear"
+    Row "Save" [3/15]
+      Cell "Save"
+      Cell
+        Button "⌘S"
+      Cell
+        Button "Clear"
+    Row "PNG Image…" [4/15]
+      Cell "PNG Image…"
+      Cell
+        Button "—"
+      Cell
+    Row "PDF Document…" [5/15]
+      Cell "PDF Document…"
+      Cell
+        Button "Shift+⌘E"
+      Cell
+        Button "Clear"
+    Row "Undo" [6/15]
+      Cell "Undo"
+      Cell
+        Button "⌘Z"
+      Cell
+        Button "Clear"
+    Row "Redo" [7/15]
+      Cell "Redo"
+      Cell
+        Button "Shift+⌘Z"
+      Cell
+        Button "Clear"
+    Row "Find…" [8/15]
+      Cell "Find…"
+      Cell
+        Button "⌘F"
+      Cell
+        Button "Clear"
+    Row "Show Grid" [9/15]
+      Cell "Show Grid"
+      Cell
+        Button "⌘'"
+      Cell
+        Button "Clear"
+    Row "Light Theme" [10/15]
+      Cell "Light Theme"
+      Cell
+        Button "—"
+      Cell
+    Row "Dark Theme" [11/15]
+      Cell "Dark Theme"
+      Cell
+        Button "—"
+      Cell
+    Row "Follow System" [12/15]
+      Cell "Follow System"
+      Cell
+        Button "—"
+      Cell
+    Row "Command Palette…" [13/15]
+      Cell "Command Palette…"
+      Cell
+        Button "Shift+⌘P"
+      Cell
+        Button "Clear"
+    Row "Show a Notification" [14/15]
+      Cell "Show a Notification"
+      Cell
+        Button "—"
+      Cell
+    Row "Save As (conflicting key)" [15/15]
+      Cell "Save As (conflicting key)"
+      Cell
+        Button "⌘S"
+      Cell
+        Button "Clear"
+  TextInput "Command palette" placeholder="Type a command"
+  List
+    ListItem "New" [selected, 1/15]
+    ListItem "Open…" [2/15]
+    ListItem "Save" [3/15]
+    ListItem "PNG Image…" [4/15]
+    ListItem "PDF Document…" [5/15]
+    ListItem "Find…" [6/15]
+    ListItem "Show Grid" [7/15]
+    ListItem "Light Theme" [8/15]
+    ListItem "Dark Theme" [9/15]
+    ListItem "Follow System" [10/15]
+    ListItem "Command Palette…" [11/15]
+    ListItem "Show a Notification" [12/15]
+    ListItem "Save As (conflicting key)" [13/15]
+    ScrollBar

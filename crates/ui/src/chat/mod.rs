@@ -32,8 +32,6 @@ mod transcript;
 #[cfg(test)]
 mod tests;
 
-use std::sync::OnceLock;
-
 pub use composer::{Composer, ComposerResponse, Trigger};
 pub use message::Message;
 pub use popup_list::PopupList;
@@ -139,10 +137,4 @@ impl Default for ChatLabels {
             composer: "Message".into(),
         }
     }
-}
-
-/// The English labels, built once.
-pub(crate) fn default_labels() -> &'static ChatLabels {
-    static LABELS: OnceLock<ChatLabels> = OnceLock::new();
-    LABELS.get_or_init(ChatLabels::default)
 }

@@ -15,7 +15,7 @@ use crate::automation::{self, Details, Role};
 use crate::cache;
 use crate::edit::{Bounds, DragMode, Edit, drive_drag, snap};
 use crate::tokens::{self, Tokens};
-use crate::value_field::{Decimal, ValueFormat, ValueResponse};
+use crate::value_field::{Decimal, ValueFormat, ValueResponse, final_text, fling, fling_shown};
 
 const DEFAULT_FORMAT: Decimal = Decimal { decimals: 2, suffix: "" };
 
@@ -72,11 +72,18 @@ pub struct Slider<'a> {
     step: f64,
     width: Option<f32>,
     format: Option<&'a dyn ValueFormat>,
+    fling: bool,
 }
 
 impl<'a> Slider<'a> {
     pub fn new(id: &'a str, label: &'a str, value: &'a mut f64, range: RangeInclusive<f64>) -> Self {
-        Slider { id, label, value, range, step: 0.0, width: None, format: None }
+        Slider { id, label, value, range, step: 0.0, width: None, format: None, fling: true }
+    }
+    /// Whether a drag let go while moving keeps going and eases to rest (default on; never under
+    /// reduced motion). The commit carries the value it comes to rest at.
+    pub fn fling(mut self, on: bool) -> Self {
+        self.fling = on;
+        self
     }
     /// Snap to multiples of `step`; arrow keys move by one step.
     pub fn step(mut self, step: f64) -> Self {
@@ -111,6 +118,7 @@ impl<'a> Slider<'a> {
         let mut edit = None;
         if bounds.finite() {
             edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::<fn(Vec2, f64) -> f64>::Absolute(pointer_value));
+            fling(ui, id, self.fling, &mut edit, value, bounds, self.step);
             if edit.is_none()
                 && response.clicked()
                 && let Some(v) = pointer_value
@@ -131,7 +139,9 @@ impl<'a> Slider<'a> {
         }
 
         let shown = bounds.clamp(*value);
-        let frac = bounds.fraction(shown) as f32;
+        // mid-fling, the value drawn is where the fling has got to
+        let drawn = bounds.clamp(fling_shown(ui, id, shown));
+        let frac = bounds.fraction(drawn) as f32;
         let painter = ui.painter_at(outer.expand(2.0));
         let rail_h = 4.0;
         let rail_rect = Rect::from_center_size(rail.center(), vec2(rail.width(), rail_h));
@@ -147,14 +157,15 @@ impl<'a> Slider<'a> {
             painter.circle_stroke(center, handle_r + 3.0, Stroke::new(1.5, t.focus));
         }
         let format = self.format.unwrap_or(&DEFAULT_FORMAT);
-        let galley = value_text(ui, id, shown, format, &t, if enabled { t.text.secondary } else { t.text.disabled });
+        let galley = value_text(ui, id, drawn, format, &t, if enabled { t.text.secondary } else { t.text.disabled });
         if self.format.is_some() {
             let text_rect = Rect::from_min_max(pos2(track.right(), outer.top()), outer.max);
             let pos = Align2::RIGHT_CENTER.align_size_within_rect(galley.size(), text_rect).min;
             painter.galley(pos, galley.clone(), t.text.secondary);
         }
         response.widget_info(|| WidgetInfo::slider(enabled, shown, self.label));
-        automation::register_with(ui, &response, self.id, self.label, Role::Slider, Details { value: Some(galley.text()), selected: None });
+        let text = final_text(format, drawn, shown, galley.text());
+        automation::register_with(ui, &response, self.id, self.label, Role::Slider, Details { value: Some(&text), selected: None });
         ValueResponse { response, edit }
     }
 }
@@ -168,6 +179,7 @@ pub struct Knob<'a> {
     default: Option<f64>,
     step: f64,
     diameter: Option<f32>,
+    fling: bool,
 }
 
 /// The knob's sweep: from 7:30 to 4:30, clockwise.
@@ -177,11 +189,17 @@ const ARC_SEGMENTS: usize = 32;
 
 impl<'a> Knob<'a> {
     pub fn new(id: &'a str, label: &'a str, value: &'a mut f64, range: RangeInclusive<f64>) -> Self {
-        Knob { id, label, value, range, default: None, step: 0.0, diameter: None }
+        Knob { id, label, value, range, default: None, step: 0.0, diameter: None, fling: true }
     }
     /// The value a double click restores.
     pub fn default_value(mut self, value: f64) -> Self {
         self.default = Some(value);
+        self
+    }
+    /// Whether a drag let go while moving keeps turning and eases to rest (default on; never
+    /// under reduced motion). The commit carries the value it comes to rest at.
+    pub fn fling(mut self, on: bool) -> Self {
+        self.fling = on;
         self
     }
     pub fn step(mut self, step: f64) -> Self {
@@ -206,6 +224,7 @@ impl<'a> Knob<'a> {
         if bounds.finite() && bounds.max > bounds.min {
             let per_point = (bounds.max - bounds.min) / 200.0;
             edit = drive_drag(ui, &response, value, bounds, self.step, DragMode::Relative(|delta: Vec2, mult| -(delta.y as f64) * per_point * mult));
+            fling(ui, id, self.fling, &mut edit, value, bounds, self.step);
             if edit.is_none()
                 && response.double_clicked()
                 && let Some(default) = self.default
@@ -225,7 +244,9 @@ impl<'a> Knob<'a> {
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
         }
         let shown = bounds.clamp(*value);
-        let frac = bounds.fraction(shown) as f32;
+        // mid-fling, the value drawn is where the fling has got to
+        let drawn = bounds.clamp(fling_shown(ui, id, shown));
+        let frac = bounds.fraction(drawn) as f32;
         let painter = ui.painter_at(rect.expand(3.0));
         let c = rect.center();
         let r = d / 2.0 - 2.0;
@@ -240,9 +261,10 @@ impl<'a> Knob<'a> {
         if response.has_focus() {
             painter.circle_stroke(c, r + 2.0, Stroke::new(1.5, t.focus));
         }
-        let galley = value_text(ui, id, shown, &DEFAULT_FORMAT, &t, t.text.secondary);
+        let galley = value_text(ui, id, drawn, &DEFAULT_FORMAT, &t, t.text.secondary);
+        let text = final_text(&DEFAULT_FORMAT, drawn, shown, galley.text());
         response.widget_info(|| WidgetInfo::slider(enabled, shown, self.label));
-        automation::register_with(ui, &response, self.id, self.label, Role::Knob, Details { value: Some(galley.text()), selected: None });
+        automation::register_with(ui, &response, self.id, self.label, Role::Knob, Details { value: Some(&text), selected: None });
         ValueResponse { response, edit }
     }
 }
@@ -332,7 +354,8 @@ mod tests {
     fn knob_turns_with_vertical_drag_and_double_click_resets() {
         let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).with_step_dt(0.02).build_ui_state(
             |ui, s: &mut State| {
-                let out = Knob::new("eq.freq", "Frequency", &mut s.value, 0.0..=1.0).default_value(0.5).diameter(48.0).show(ui);
+                // the drag mapping, without the fling a quick release adds
+                let out = Knob::new("eq.freq", "Frequency", &mut s.value, 0.0..=1.0).default_value(0.5).diameter(48.0).fling(false).show(ui);
                 s.rect = out.response.rect;
                 s.edits.extend(out.edit);
             },

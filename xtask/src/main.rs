@@ -36,6 +36,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-motion", 0),
     ("ashlar-syntax", 0),
     ("ashlar-diff", 0),
+    ("ashlar-i18n", 0),
     ("ashlar-store", 1),
     ("ashlar-native", 2),
     ("ashlar-control", 2),

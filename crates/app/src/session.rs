@@ -51,6 +51,9 @@ pub enum Effect {
     },
 }
 
+/// How many commands [`Session::take_ran`] keeps between two calls.
+const RAN_CAP: usize = 64;
+
 pub(crate) fn now() -> Option<std::time::Instant> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -79,6 +82,9 @@ struct Work<D> {
 pub struct Session<D: Document> {
     store: Store<D>,
     journal: Journal,
+    /// Top-level commands run since the runtime last took them (the frame log and perf warnings
+    /// name them); at most [`RAN_CAP`].
+    ran: Vec<&'static str>,
     format: Arc<Format<D>>,
     path: Option<PathBuf>,
     /// Schema version of the opened file when it was migrated on load.
@@ -98,6 +104,7 @@ impl<D: Document> Session<D> {
         Session {
             store: Store::new(D::default()),
             journal: Journal::new(),
+            ran: Vec::new(),
             format,
             path: None,
             migrated_from: None,
@@ -357,6 +364,11 @@ impl<D: Document> Session<D> {
         self.effects.push(Effect::Toast { level, text: text.into() });
     }
 
+    /// The top-level commands run since the last call (oldest first), and forget them.
+    pub(crate) fn take_ran(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.ran)
+    }
+
     pub(crate) fn take_effects(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.effects)
     }
@@ -435,6 +447,9 @@ impl<D: Document> Host for Session<D> {
             return;
         }
         let took = self.end(spec.label, result.is_ok());
+        if self.ran.len() < RAN_CAP {
+            self.ran.push(spec.id);
+        }
         self.telemetry.command(spec.id, result.is_ok(), took);
         match result {
             Ok(_) => log::debug!("command {} ok", spec.id),

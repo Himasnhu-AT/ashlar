@@ -9,10 +9,15 @@
 //! choice inside an event loop. On the web only [`FileDialog::open_bytes_async`] exists (browsers
 //! give the page a file's contents, never its path); everything else is `Unsupported`.
 //!
+//! Parent a dialog to a window with [`FileDialog::parent`]: it then opens over that window (a
+//! sheet on macOS) and keeps it from taking input until it closes.
+//!
 //! [`message`] shows a modal message box, for what must be said before (or without) a window:
 //! a start-up failure, command-line output in an app that has no console.
 
 use std::path::{Path, PathBuf};
+
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{NativeError, Result};
 
@@ -142,12 +147,53 @@ pub fn message(level: MessageLevel, title: &str, text: &str) -> Result<()> {
     }
 }
 
+/// A [`FileDialog`] shown over a window ([`FileDialog::parent`]). Its pickers block like the
+/// unparented ones, so call them between frames, not inside one.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub struct Parented<'a, W: ?Sized> {
+    dialog: &'a FileDialog,
+    parent: &'a W,
+}
+
+impl FileDialog {
+    /// Show the dialog over `window` (any window with a raw handle, such as `eframe::Frame`).
+    pub fn parent<'a, W: HasWindowHandle + HasDisplayHandle + ?Sized>(&'a self, window: &'a W) -> Parented<'a, W> {
+        Parented { dialog: self, parent: window }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
 
     fn sync(d: &FileDialog) -> rfd::FileDialog {
+        sync_in::<NoWindow>(d, None)
+    }
+
+    /// Stands in for "no parent window" in [`sync_in`]; never built.
+    enum NoWindow {}
+
+    impl raw_window_handle::HasWindowHandle for NoWindow {
+        fn window_handle(&self) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            match *self {}
+        }
+    }
+
+    impl raw_window_handle::HasDisplayHandle for NoWindow {
+        fn display_handle(&self) -> std::result::Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+            match *self {}
+        }
+    }
+
+    pub(super) fn sync_in<W: HasWindowHandle + HasDisplayHandle + ?Sized>(d: &FileDialog, parent: Option<&W>) -> rfd::FileDialog {
         let mut r = rfd::FileDialog::new();
+        // a window without a usable handle (closing, headless) gets an unparented dialog
+        if let Some(w) = parent
+            && w.window_handle().is_ok()
+            && w.display_handle().is_ok()
+        {
+            r = r.set_parent(w);
+        }
         if let Some(t) = &d.title {
             r = r.set_title(clip(t));
         }
@@ -236,6 +282,28 @@ mod native {
         }
     }
 
+    impl<W: HasWindowHandle + HasDisplayHandle + ?Sized> Parented<'_, W> {
+        /// Ask for one existing file, over the parent window.
+        pub fn open_file(&self) -> Result<PathBuf> {
+            picked("the open dialog", || sync_in(self.dialog, Some(self.parent)).pick_file())
+        }
+
+        /// Ask for one or more existing files, over the parent window.
+        pub fn open_files(&self) -> Result<Vec<PathBuf>> {
+            picked("the open dialog", || sync_in(self.dialog, Some(self.parent)).pick_files()).and_then(non_empty)
+        }
+
+        /// Ask for a folder, over the parent window.
+        pub fn pick_folder(&self) -> Result<PathBuf> {
+            picked("the folder dialog", || sync_in(self.dialog, Some(self.parent)).pick_folder())
+        }
+
+        /// Ask where to save, over the parent window.
+        pub fn save_file(&self) -> Result<PathBuf> {
+            picked("the save dialog", || sync_in(self.dialog, Some(self.parent)).save_file())
+        }
+    }
+
     fn non_empty<T>(v: Vec<T>) -> Result<Vec<T>> {
         if v.is_empty() { Err(NativeError::Cancelled) } else { Ok(v) }
     }
@@ -244,6 +312,21 @@ mod native {
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
+
+    impl<W: ?Sized> Parented<'_, W> {
+        pub fn open_file(&self) -> Result<PathBuf> {
+            Err(NativeError::Unsupported)
+        }
+        pub fn open_files(&self) -> Result<Vec<PathBuf>> {
+            Err(NativeError::Unsupported)
+        }
+        pub fn pick_folder(&self) -> Result<PathBuf> {
+            Err(NativeError::Unsupported)
+        }
+        pub fn save_file(&self) -> Result<PathBuf> {
+            Err(NativeError::Unsupported)
+        }
+    }
 
     impl FileDialog {
         pub fn open_file(&self) -> Result<PathBuf> {
@@ -339,5 +422,30 @@ mod tests {
         let v = serde_json::to_string(&d).unwrap_or_default();
         let back: FileDialog = serde_json::from_str(&v).unwrap_or_default();
         assert_eq!(back, d);
+    }
+
+    /// A window that has no handle (closing, or never shown).
+    struct Gone;
+
+    impl HasWindowHandle for Gone {
+        fn window_handle(&self) -> std::result::Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            Err(raw_window_handle::HandleError::Unavailable)
+        }
+    }
+
+    impl HasDisplayHandle for Gone {
+        fn display_handle(&self) -> std::result::Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+            Err(raw_window_handle::HandleError::Unavailable)
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_window_without_a_handle_gets_an_unparented_dialog() {
+        let d = FileDialog::new().title("Open");
+        // building the dialog must not panic or need the handle; nothing is shown
+        let _ = native::sync_in(&d, Some(&Gone));
+        let p = d.parent(&Gone);
+        assert_eq!(p.dialog, &d);
     }
 }

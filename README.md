@@ -122,6 +122,7 @@ you need, for example `cargo add ashlar-store` for documents and undo in a headl
 | [`ashlar-docs`](crates/docs) | Documentation for agents, embedded at build time |
 | [`ashlar-update`](crates/update) | Update checks against a releases API |
 | [`ashlar-print`](crates/print) | Send a PDF to the system print spooler (CUPS, Windows) |
+| [`ashlar-i18n`](crates/i18n) | Translations: JSON catalogs, plural rules, number formatting, locale negotiation |
 | [`ashlar-obfuscate`](crates/obfuscate) | Compile-time string obfuscation |
 | [`ashlar-telemetry`](crates/telemetry), [`ashlar-trace`](crates/trace), [`ashlar-trace-server`](crates/trace-server), [`ashlar-trace-proto`](crates/trace-proto) | Self-hosted crash, performance and usage telemetry ([docs](docs/trace/README.md)) |
 
