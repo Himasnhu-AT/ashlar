@@ -123,6 +123,27 @@ fn app_stats_reports_frames_and_requests_per_reason() {
     assert!(typed.requests() >= 2);
 }
 
+/// The control port asks for no frame after answering: the frame that serves an engine command
+/// runs it before the view draws, so that frame already shows the change, and nothing is left
+/// pending.
+#[test]
+fn an_engine_command_is_drawn_by_the_frame_that_answers_it() {
+    use ashlar::ui::automation;
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = windowed(dir.path(), Duration::from_secs(3600));
+    d.call("engine.execute", json!({"command": "note.add", "params": {"title": "drawn now"}})).unwrap();
+    let id = d.call("engine.execute", json!({"command": "note.list", "params": {}})).unwrap()["notes"][0]["id"].as_u64().unwrap();
+    d.settle(20);
+    let before = d.frames();
+    let control_before = d.runtime.wakes().requests_for(Reason::CONTROL);
+    d.call("engine.execute", json!({"command": "note.select", "params": {"id": id}})).unwrap();
+    assert_eq!(d.frames() - before, 1, "one frame served the request");
+    let title = automation::find(d.ctx(), "notes.title").expect("the answering frame drew the selected note");
+    assert_eq!(title.value, "drawn now");
+    // the port's own wake is the only control request: none after answering
+    assert_eq!(d.runtime.wakes().requests_for(Reason::CONTROL) - control_before, 1);
+}
+
 /// A note is open and its title field has the keyboard (clicked, as a person would), then the
 /// app settles: returns the driver.
 fn focused_title(root: &Path) -> Driver<Notes> {

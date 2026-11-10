@@ -1033,7 +1033,10 @@ impl<D: Document> Runtime<D> {
         for req in std::mem::take(&mut queue.pending) {
             self.answer_ui(ctx, req);
         }
-        wake::wake(ctx, Reason::CONTROL);
+        // No wake after answering: the port's waker asked for this frame, and requests are served
+        // in `logic`, before the view draws, so this frame already draws what they changed.
+        // Debugger requests that need later frames (input, screenshots, waits) ask for them in
+        // `devtools`, and effects ask for their own.
     }
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {

@@ -300,6 +300,8 @@ impl<D: Document> Driver<D> {
     pub fn request(&mut self, method: &str, params: Value) -> Reply {
         let (req, rx) = Request::new(method, params);
         self.runtime.inject_request(req);
+        // the port's waker asks for the frame that serves a request
+        crate::wake::wake(&self.ctx, crate::wake::Reason::CONTROL);
         self.time += 1.0 / 120.0;
         self.frame();
         let limit = self.time + 600.0;
