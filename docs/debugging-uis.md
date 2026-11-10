@@ -72,8 +72,11 @@ hint: 5 step(s) passed before line 7
 ```
 
 Each step's result is in the `--json` output (`detail.steps`). If you add `trace start <dir>` at the
-top, every action leaves a screenshot and a snapshot in `<dir>`, numbered in order. That is the
-first place to look when a script fails on a CI machine.
+top, every action leaves a screenshot and a snapshot in `<dir>`, numbered in order
+(`001-click.png`, `001-click.txt`, one line per step in `steps.jsonl`). That is the first place to
+look when a script fails on a CI machine. With `--port` or `--app` (no session) the trace lasts for
+that one batch run; outside a batch they refuse `trace` with a usage error, since there is no session
+to keep it in.
 
 Running a script from Rust gives you the same thing in-process. `ashlar_debug::run(args, &env, &mut io)`
 takes an `Env` that points the state and key search at a temporary folder:

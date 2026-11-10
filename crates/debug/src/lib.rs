@@ -144,6 +144,8 @@ pub(crate) struct Ctx<'e, 'io, 'a> {
     pub conn: Option<Client>,
     /// Inside `batch` (no nested batches; step output is quieter).
     pub in_batch: bool,
+    /// A trace started inside a `batch` run with `--port`/`--app` (no session file to keep it in).
+    pub batch_trace: Option<session::Trace>,
 }
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -236,7 +238,19 @@ pub fn run(args: Vec<String>, env: &Env, io: &mut Io<'_>) -> Exit {
         help(io.err);
         return Exit::Usage;
     };
-    let mut ctx = Ctx { env, io, json, session, port, key_dir, app, timeout: timeout.unwrap_or(DEFAULT_TIMEOUT), conn: None, in_batch: false };
+    let mut ctx = Ctx {
+        env,
+        io,
+        json,
+        session,
+        port,
+        key_dir,
+        app,
+        timeout: timeout.unwrap_or(DEFAULT_TIMEOUT),
+        conn: None,
+        in_batch: false,
+        batch_trace: None,
+    };
     let r = ctx.run_verb(&verb, a, &shown);
     finish(json, ctx.io, r)
 }

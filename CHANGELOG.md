@@ -15,6 +15,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-debug`: `trace start <dir>` inside `--port P batch -` (or `--app NAME`) recorded nothing,
+  since the trace was kept only in a session file. The trace now lives in that batch run; outside
+  a batch, `trace` with `--port`/`--app` is a usage error instead of doing nothing.
 - `ashlar-ui`: a value field's typed entry lost what was typed in the frame its editor opened (a
   value typed straight after the click, as the control channel does), and while its window
   did not have the operating system's focus (an app driven without being activated) the editor

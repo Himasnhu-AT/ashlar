@@ -100,6 +100,8 @@ impl Ctx<'_, '_, '_> {
         self.in_batch = true;
         let r = self.run_script(&file, &text, verbose);
         self.in_batch = false;
+        // A trace kept in this run ends with it (its files are already written).
+        self.batch_trace = None;
         r
     }
 

@@ -764,41 +764,81 @@ impl Ctx<'_, '_, '_> {
 
     // ------------------------------------------------------------------ trace
 
+    /// `--port`/`--app`: no session file, so a trace lives in the running batch.
+    fn direct(&self) -> bool {
+        self.port.is_some() || self.app.is_some()
+    }
+
     fn trace(&mut self, mut a: Args) -> Res {
         let what = need(a.positional(), "start <dir> or stop", "trace")?;
         let dir = a.positional();
         a.finish().map_err(usage("trace"))?;
-        let mut s = self.load_session()?;
+        if self.direct() && !self.in_batch {
+            return Err(Fail::Usage(
+                "with --port or --app a trace runs only inside `batch` (put `trace start <dir>` at the top of the script), \
+                 or start a session with `connect <port>`"
+                    .into(),
+                usage_of("trace"),
+            ));
+        }
+        let mut s = if self.direct() { None } else { Some(self.load_session()?) };
         match (what.as_str(), dir) {
             ("start", Some(d)) => {
                 let d = PathBuf::from(d);
                 std::fs::create_dir_all(&d).map_err(|e| Fail::msg(format!("cannot create {}: {e}", d.display())))?;
                 let d = d.canonicalize().unwrap_or(d);
-                s.trace = Some(Trace { dir: d.clone(), step: 0 });
-                session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
+                let t = Trace { dir: d.clone(), step: 0 };
+                match s.as_mut() {
+                    Some(s) => {
+                        s.trace = Some(t);
+                        session::save(self.env, &self.session, s).map_err(Fail::msg)?;
+                    }
+                    None => self.batch_trace = Some(t),
+                }
                 Ok(Done::new(json!({"dir": d}), format!("tracing to {}", d.display())))
             }
             ("stop", None) => {
-                let t = s.trace.take().ok_or_else(|| Fail::msg("no trace is running"))?;
-                session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
+                let running = match s.as_mut() {
+                    Some(s) => s.trace.take(),
+                    None => self.batch_trace.take(),
+                };
+                let t = running.ok_or_else(|| Fail::msg("no trace is running"))?;
+                if let Some(s) = &s {
+                    session::save(self.env, &self.session, s).map_err(Fail::msg)?;
+                }
                 Ok(Done::new(json!({"dir": t.dir, "steps": t.step}), format!("{} steps in {}", t.step, t.dir.display())))
             }
             _ => Err(Fail::Usage("trace start <dir> | trace stop".into(), usage_of("trace"))),
         }
     }
 
-    /// After an action in a traced session: `NNN-verb.png`, `NNN-verb.txt` (the snapshot) and a
-    /// line in `steps.jsonl`. Problems are reported on stderr; the action's outcome stands.
+    /// After an action while a trace runs (in the session, or in this batch with `--port`/`--app`):
+    /// `NNN-verb.png`, `NNN-verb.txt` (the snapshot) and a line in `steps.jsonl`. Problems are
+    /// reported on stderr; the action's outcome stands.
     pub(crate) fn record(&mut self, verb: &str, words: &[String], outcome: &Res) {
-        if self.port.is_some() || self.app.is_some() {
-            return;
+        let mut problems = Vec::new();
+        if self.direct() {
+            let Some(mut t) = self.batch_trace.take() else { return };
+            self.record_step(&mut t, verb, words, outcome, &mut problems);
+            self.batch_trace = Some(t);
+        } else {
+            let Ok(Some(mut s)) = session::load(self.env, &self.session) else { return };
+            let Some(mut t) = s.trace.take() else { return };
+            self.record_step(&mut t, verb, words, outcome, &mut problems);
+            s.trace = Some(t);
+            if let Err(e) = session::save(self.env, &self.session, &s) {
+                problems.push(e);
+            }
         }
-        let Ok(Some(mut s)) = session::load(self.env, &self.session) else { return };
-        let Some(t) = s.trace.as_mut() else { return };
+        for p in problems {
+            let _ = writeln!(self.io.err, "trace: {p}");
+        }
+    }
+
+    fn record_step(&mut self, t: &mut Trace, verb: &str, words: &[String], outcome: &Res, problems: &mut Vec<String>) {
         t.step = t.step.saturating_add(1);
         let (n, dir) = (t.step, t.dir.clone());
         let base = format!("{n:03}-{verb}");
-        let mut problems = Vec::new();
         let png = dir.join(format!("{base}.png"));
         let shot = if self.no_raise() { json!({"raise": false}) } else { json!({}) };
         match self.call("ui.screenshot", shot).map_err(|e| e.text()).and_then(|v| save_png(&v, &png)) {
@@ -828,12 +868,6 @@ impl Ctx<'_, '_, '_> {
         let appended = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("steps.jsonl")).and_then(|mut f| writeln!(f, "{line}"));
         if let Err(e) = appended {
             problems.push(format!("steps.jsonl: {e}"));
-        }
-        if let Err(e) = session::save(self.env, &self.session, &s) {
-            problems.push(e);
-        }
-        for p in problems {
-            let _ = writeln!(self.io.err, "trace: {p}");
         }
     }
 }
