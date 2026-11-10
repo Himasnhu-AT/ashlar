@@ -227,7 +227,7 @@ impl Scheduler {
         let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
         let delay = Duration::try_from_secs_f64((next - now).max(0.0)).unwrap_or_default();
         if delay.is_zero() {
-            ctx.request_repaint();
+            repaint_now(ctx);
         } else {
             let early = Duration::try_from_secs_f32(predicted_dt).unwrap_or_default();
             ctx.request_repaint_after(delay.saturating_add(early).saturating_add(Duration::from_millis(1)));
@@ -245,7 +245,15 @@ impl Scheduler {
 /// closure, which holds the context's lock).
 pub fn wake(ctx: &egui::Context, reason: Reason) {
     Scheduler::of(ctx).request(reason, f64::NEG_INFINITY);
-    ctx.request_repaint();
+    repaint_now(ctx);
+}
+
+/// Ask egui for one frame now. `request_repaint` (an exactly-zero delay) makes egui run a second
+/// frame after it as well, for its own frame-delayed responses; an ashlar wake wants one frame,
+/// and code that needs another asks for it. A 1 ns delay is still immediate (egui subtracts the
+/// predicted frame time), but egui counts it as a timed request and runs one frame.
+fn repaint_now(ctx: &egui::Context) {
+    ctx.request_repaint_after(Duration::from_nanos(1));
 }
 
 /// Ask for a frame after `delay` (measured from the current frame's time). The frame starts no
@@ -267,7 +275,7 @@ fn request_after(ctx: &egui::Context, s: &Scheduler, reason: Reason, delay: Dura
     }
     if delay.is_zero() {
         s.request(reason, f64::NEG_INFINITY);
-        ctx.request_repaint();
+        repaint_now(ctx);
         return;
     }
     let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
@@ -297,7 +305,7 @@ impl Waker {
     /// Ask for a frame now.
     pub fn wake(&self) {
         self.scheduler.request(self.reason, f64::NEG_INFINITY);
-        self.ctx.request_repaint();
+        repaint_now(&self.ctx);
     }
 
     /// Make a frame after `delay` this reason's only pending wake (see [`reschedule`]).

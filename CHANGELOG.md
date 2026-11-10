@@ -76,6 +76,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   a destructive one); a disabled one is drawn at the disabled opacity instead of in the sunken
   colours, and its automation entry no longer reports the default button as `selected`.
 
+- `ashlar-ui`: `wake::wake`, `Waker::wake` and a zero-delay `wake_after`/`reschedule` ask egui for
+  one frame instead of two (egui adds a second frame to every zero-delay repaint request). A command
+  sent through the control port now costs 2.2 frames instead of 3.2.
+- `ashlar-app`: the control port no longer asks for a frame after answering a request; the frame
+  that serves it runs before the view draws and already shows the change. An engine command sent
+  through the port now costs about 1.3 frames (was 2.2). `Driver::request` wakes for the
+  `control` reason as the port does.
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 

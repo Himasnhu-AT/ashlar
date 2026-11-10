@@ -602,6 +602,7 @@ name = "ashlar-trace"
 version = "0.1.0"
 dependencies = [
  "ashlar-trace-proto",
+ "cpu-time",
  "flate2",
  "getrandom 0.4.3",
  "log",

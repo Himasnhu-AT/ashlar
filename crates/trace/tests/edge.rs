@@ -96,10 +96,16 @@ fn drops(server: &Chaos) -> std::collections::BTreeMap<String, u64> {
 /// "whatever state the folder is in, the SDK comes up and works".
 fn comes_up_and_works(dir: &Path, what: &str) {
     let server = recorder();
+    // Two bounds. The caller's thread CPU time catches init doing too much work (it is about 2 ms,
+    // under 10 ms in a debug build), and machine load barely moves it. Wall-clock time also counts
+    // waiting (a disk under parallel builds took 588 ms once), so its ceiling only catches init
+    // blocking on something (the network, a lock, a sleep), which would take seconds.
     let started = Instant::now();
+    let cpu = cpu_time::ThreadTime::now();
     let tracer = builder(dir, &server).init();
-    let took = started.elapsed();
-    assert!(took < Duration::from_millis(500), "{what}: init took {took:?}");
+    let (took, cpu) = (started.elapsed(), cpu.elapsed());
+    assert!(cpu < Duration::from_millis(250), "{what}: init used {cpu:?} of CPU");
+    assert!(took < Duration::from_secs(5), "{what}: init took {took:?}");
     tracer.track(AppEvent::FileOpen);
     assert!(tracer.flush_blocking(WAIT), "{what}: could not flush");
     assert_eq!(event_names(&server).iter().filter(|name| *name == "file.open").count(), 1, "{what}");
