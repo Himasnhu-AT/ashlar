@@ -42,7 +42,7 @@ ashlar-ui = { workspace = true }
 ashlar-motion = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
-ashlar-native = { workspace = true, features = ["dialogs", "display", "system", "open-files", "single-instance"] }
+ashlar-native = { workspace = true, features = ["dialogs", "display", "system", "open-files", "single-instance", "memory"] }
 png = "0.18"
 thiserror = { workspace = true }
 ashlar-telemetry = { workspace = true, optional = true }
@@ -53,6 +53,8 @@ tempfile = "3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `.ui` scripts in-process on a `Driver` (`Driver::run_ui`).
 ashlar-debug = { workspace = true }
+# the UI thread's CPU time (perf warnings, frame log) and the process's (`app.stats` → `process`)
+cpu-time = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["console", "Window", "Document", "Element", "HtmlCanvasElement"] }
