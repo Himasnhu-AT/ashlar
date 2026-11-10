@@ -193,6 +193,7 @@ fn perf_markdown_static_50kb_allocs() {
 #[test]
 #[ignore = "perf: run with --release --ignored --nocapture"]
 fn perf_markdown_long_paragraph() {
+    let _serial = allocs::serial();
     let mut para = String::new();
     let mut n = 0usize;
     while para.len() < 50 * 1024 {
