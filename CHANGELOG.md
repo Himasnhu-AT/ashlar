@@ -9,6 +9,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+
+- `ashlar-rs`: the `tray` and `hotkey` features pass through to `ashlar-app`, so an app on the
+  umbrella crate can use `App::tray` and `App::global_shortcut`.
 - Windows menu shortcuts (IMP-6.17): `NativeMenuBar::attach_window` subclasses the window and runs
   `TranslateAcceleratorW` with the bar's table on key-downs, so a native menu's key equivalents
   fire as item activations (once; the key press doesn't also reach the window). Compile-checked
