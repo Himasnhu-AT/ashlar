@@ -256,9 +256,20 @@ fn clamp_between(x: f32, a: f32, b: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Edges, Spring};
+    use crate::{Easing, Edges, Spring};
 
     const P: MotionPrefs = MotionPrefs::DEFAULT;
+
+    #[test]
+    fn linear_tween_from_rest_is_linear() {
+        let mut a = Animated::new(0.0_f32, Class::Spatial);
+        assert!(a.animate_to(100.0, Curve::tween(2.0, Easing::LINEAR), 1.0, &P));
+        for t in [0.0_f64, 0.1, 0.525, 1.0, 1.5, 1.99] {
+            let x = a.sample(1.0 + t);
+            assert!((x - 50.0 * t as f32).abs() < 1e-4, "t={t}: {x}");
+        }
+        assert_eq!(a.sample(3.0), 100.0);
+    }
 
     #[test]
     fn lands_exactly_and_settles() {
