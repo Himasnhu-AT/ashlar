@@ -2,8 +2,9 @@
 //! frame costs O(visible rows) whatever the row count.
 //!
 //! Rows have one uniform height, or variable heights given by a function. Variable heights are
-//! summed once into an offset table (O(rows)) and kept until the row count or the caller's
-//! `revision` changes; each frame then finds the first visible row by binary search.
+//! read once into a Fenwick tree (O(rows)) and kept until the row count or the caller's
+//! `revision` changes; rows named in [`VirtualList::changed_rows`] are read again in O(log rows)
+//! each. Each frame then finds the first visible row in O(log rows).
 //!
 //! The list draws hover, selection and stripes, handles the keyboard (arrows, Home/End, Page
 //! Up/Down, Enter) when it has the focus, and calls the app's painter for each visible row. The app
@@ -38,7 +39,8 @@ pub const MAX_ROWS: usize = 10_000_000;
 pub enum RowHeights<'a> {
     Uniform(f32),
     /// `height(i)` for every row; called for all rows only when `revision` or the row count
-    /// changes. Non-finite or negative heights count as 0, heights are capped at 10 000 points.
+    /// changes, and for the rows in [`VirtualList::changed_rows`]. Non-finite or negative heights
+    /// count as 0, heights are capped at 10 000 points.
     Variable {
         revision: u64,
         height: &'a dyn Fn(usize) -> f32,
@@ -49,60 +51,139 @@ fn sane_height(h: f32) -> f64 {
     if h.is_finite() { h.clamp(0.0, 10_000.0) as f64 } else { 0.0 }
 }
 
-/// Offsets of variable-height rows: `offsets[i]` is row `i`'s top, `offsets[rows]` the total.
+/// Variable row heights and their running sums, in a Fenwick tree: a row's top, the row at a
+/// given y and a change to one row's height each cost O(log rows).
 #[derive(Clone, Default)]
-struct Offsets {
-    offsets: Vec<f64>,
+pub(crate) struct Offsets {
+    heights: Vec<f32>,
+    /// `tree[k]` (1-based) sums the heights of rows `k - lowbit(k) .. k`.
+    tree: Vec<f64>,
+    total: f64,
     revision: u64,
-    rows: usize,
+}
+
+fn lowbit(k: usize) -> usize {
+    k & k.wrapping_neg()
 }
 
 impl Offsets {
-    fn update(&mut self, rows: usize, revision: u64, height: &dyn Fn(usize) -> f32) -> bool {
-        if self.rows == rows && self.revision == revision && self.offsets.len() == rows + 1 {
-            return false;
+    /// Read every row's height when the row count or `revision` changed, else only `changed`
+    /// rows. True when anything was read.
+    fn update(&mut self, rows: usize, revision: u64, height: &dyn Fn(usize) -> f32, changed: &[usize]) -> bool {
+        if self.heights.len() == rows && self.revision == revision && self.tree.len() == rows + 1 {
+            let mut any = false;
+            for &row in changed {
+                if let Some(old) = self.heights.get(row).copied() {
+                    let new = sane_height(height(row)) as f32;
+                    if new != old {
+                        self.set(row, old, new);
+                        any = true;
+                    }
+                }
+            }
+            return any;
         }
-        self.offsets.clear();
-        self.offsets.reserve(rows + 1);
-        let mut y = 0.0f64;
-        self.offsets.push(0.0);
+        // two linear passes: every node takes its prefix sum, then (from the top down, so the
+        // lower prefixes are still there) the prefix before its range is taken off
+        self.heights.clear();
+        self.heights.reserve(rows);
+        self.tree.clear();
+        self.tree.reserve(rows + 1);
+        self.tree.push(0.0);
+        let mut sum = 0.0f64;
         for i in 0..rows {
-            y += sane_height(height(i));
-            self.offsets.push(y);
+            let h = sane_height(height(i));
+            self.heights.push(h as f32);
+            sum += h;
+            self.tree.push(sum);
         }
-        self.rows = rows;
+        for k in (1..=rows).rev() {
+            let before = self.tree.get(k - lowbit(k)).copied().unwrap_or(0.0);
+            if let Some(node) = self.tree.get_mut(k) {
+                *node -= before;
+            }
+        }
+        self.total = sum;
         self.revision = revision;
         true
+    }
+
+    fn set(&mut self, row: usize, old: f32, new: f32) {
+        if let Some(h) = self.heights.get_mut(row) {
+            *h = new;
+        }
+        let delta = new as f64 - old as f64;
+        let mut k = row + 1;
+        while let Some(node) = self.tree.get_mut(k) {
+            *node += delta;
+            k += lowbit(k);
+        }
+        // sums drift by rounding with each change; the total is read from the tree
+        self.total = self.prefix(self.heights.len());
+    }
+
+    fn rows(&self) -> usize {
+        self.heights.len()
+    }
+
+    /// Sum of the heights of rows `0..i` (row `i`'s top).
+    fn prefix(&self, i: usize) -> f64 {
+        let mut k = i.min(self.heights.len());
+        let mut sum = 0.0;
+        while k > 0 {
+            sum += self.tree.get(k).copied().unwrap_or(0.0);
+            k -= lowbit(k);
+        }
+        sum.max(0.0)
+    }
+
+    fn height(&self, i: usize) -> f64 {
+        self.heights.get(i).copied().unwrap_or(0.0) as f64
+    }
+
+    /// The last row whose top is at or above `y` (rows of zero height are passed over).
+    fn row_at(&self, y: f64) -> usize {
+        let n = self.heights.len();
+        let mut pos = 0usize;
+        let mut rest = y;
+        let mut step = if n == 0 { 0 } else { 1usize << (usize::BITS - 1 - n.leading_zeros()) };
+        while step > 0 {
+            if let Some(&sum) = self.tree.get(pos + step)
+                && sum <= rest
+            {
+                pos += step;
+                rest -= sum;
+            }
+            step >>= 1;
+        }
+        pos
     }
 }
 
 /// Geometry of the rows (no egui involved): total height, row spans and visible ranges.
 pub(crate) enum Layout<'o> {
     Uniform { rows: usize, height: f64 },
-    Variable(&'o [f64]),
+    Variable(&'o Offsets),
 }
 
 impl Layout<'_> {
     fn rows(&self) -> usize {
         match self {
             Layout::Uniform { rows, .. } => *rows,
-            Layout::Variable(o) => o.len().saturating_sub(1),
+            Layout::Variable(o) => o.rows(),
         }
     }
     fn total(&self) -> f64 {
         match self {
             Layout::Uniform { rows, height } => *rows as f64 * height,
-            Layout::Variable(o) => o.last().copied().unwrap_or(0.0),
+            Layout::Variable(o) => o.total,
         }
     }
     /// (top, height) of row `i`.
     fn span(&self, i: usize) -> (f64, f64) {
         match self {
             Layout::Uniform { height, .. } => (i as f64 * height, *height),
-            Layout::Variable(o) => {
-                let top = o.get(i).copied().unwrap_or(0.0);
-                (top, o.get(i + 1).copied().unwrap_or(top) - top)
-            }
+            Layout::Variable(o) => (o.prefix(i), o.height(i)),
         }
     }
     /// The row containing `y` (clamped to the rows).
@@ -119,7 +200,7 @@ impl Layout<'_> {
                     0
                 }
             }
-            Layout::Variable(o) => o.partition_point(|top| *top <= y).saturating_sub(1),
+            Layout::Variable(o) => o.row_at(y),
         };
         i.min(rows - 1)
     }
@@ -173,6 +254,7 @@ pub struct VirtualList<'a> {
     scroll_to: Option<usize>,
     max_height: Option<f32>,
     row_label: Option<&'a dyn Fn(usize) -> &'a str>,
+    changed_rows: &'a [usize],
 }
 
 impl<'a> VirtualList<'a> {
@@ -188,7 +270,14 @@ impl<'a> VirtualList<'a> {
             scroll_to: None,
             max_height: None,
             row_label: None,
+            changed_rows: &[],
         }
+    }
+    /// Rows whose height changed since the last frame, with [`RowHeights::Variable`]: only these
+    /// are measured again (O(log rows) each) while the revision and row count stay the same.
+    pub fn changed_rows(mut self, rows: &'a [usize]) -> Self {
+        self.changed_rows = rows;
+        self
     }
     /// The selected (cursor) row: highlighted and moved by the keyboard.
     pub fn selected(mut self, row: Option<usize>) -> Self {
@@ -261,10 +350,10 @@ pub(crate) fn show_rows(
         RowHeights::Uniform(h) => Layout::Uniform { rows: list.rows, height: sane_height(h).max(1.0) },
         RowHeights::Variable { revision, height } => {
             let mut o: Offsets = ui.data_mut(|d| d.remove_temp::<Offsets>(offsets_id)).unwrap_or_default();
-            o.update(list.rows, revision, height);
+            o.update(list.rows, revision, height, list.changed_rows);
             offsets = Some(o);
             match &offsets {
-                Some(o) => Layout::Variable(&o.offsets),
+                Some(o) => Layout::Variable(o),
                 None => Layout::Uniform { rows: 0, height: 1.0 },
             }
         }
@@ -509,6 +598,11 @@ impl<'a> VirtualTable<'a> {
     }
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.list = self.list.row_label(f);
+        self
+    }
+    /// See [`VirtualList::changed_rows`].
+    pub fn changed_rows(mut self, rows: &'a [usize]) -> Self {
+        self.list = self.list.changed_rows(rows);
         self
     }
 

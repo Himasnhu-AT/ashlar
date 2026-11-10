@@ -650,6 +650,7 @@ dependencies = [
 name = "ashlar-ui"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "ashlar-command",
  "ashlar-control",
  "ashlar-motion",

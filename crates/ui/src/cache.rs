@@ -3,7 +3,8 @@
 //! A cached value is identified by a key (what it is: a row id, a label's widget id) and is valid
 //! while its revision (what it was built from: a document revision, a value's bits) is
 //! unchanged. Nothing is diffed: the caller says when the input changed by changing the revision.
-//! Entries unused for a number of frames are evicted.
+//! Entries unused for a number of frames are evicted; a full cache drops its least recently used
+//! half, never the entries in use this frame while older ones remain.
 //!
 //! ```
 //! # use ashlar_ui::cache;
@@ -20,16 +21,20 @@
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry as MapEntry;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use egui::{Galley, Mesh, text::LayoutJob};
 
+/// The hasher of every cache here: fast, and with fixed seeds, so a value hashes the same in every
+/// run (keys are not attacker-chosen: they are widget ids and revisions).
+fn hasher() -> ahash::RandomState {
+    ahash::RandomState::with_seeds(0x6173_686c, 0x6172_5f75, 0x695f_6361, 0x6368_6573)
+}
+
 /// Hash anything into a revision or key value.
 pub fn hash_of(value: &impl Hash) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut h);
-    h.finish()
+    hasher().hash_one(value)
 }
 
 struct Entry<V> {
@@ -47,7 +52,7 @@ pub struct Stats {
 
 /// Values keyed by `K`, each valid for one revision, evicted after `keep_frames` unused frames.
 pub struct RevisionCache<K, V> {
-    entries: HashMap<K, Entry<V>>,
+    entries: HashMap<K, Entry<V>, ahash::RandomState>,
     frame: u64,
     keep_frames: u64,
     max_entries: usize,
@@ -57,7 +62,7 @@ pub struct RevisionCache<K, V> {
 impl<K: Eq + Hash, V> RevisionCache<K, V> {
     /// Keep entries for `keep_frames` frames after their last use, and at most `max_entries`.
     pub fn new(keep_frames: u64, max_entries: usize) -> Self {
-        Self { entries: HashMap::new(), frame: 0, keep_frames, max_entries: max_entries.max(1), stats: Stats::default() }
+        Self { entries: HashMap::with_hasher(hasher()), frame: 0, keep_frames, max_entries: max_entries.max(1), stats: Stats::default() }
     }
 
     /// The value for `key` if it was built for `revision`.
@@ -76,8 +81,8 @@ impl<K: Eq + Hash, V> RevisionCache<K, V> {
     /// The value for `key` at `revision`, building it with `make` when missing or stale.
     pub fn get_or_insert_with(&mut self, key: K, revision: u64, make: impl FnOnce() -> V) -> &V {
         let frame = self.frame;
-        if !self.entries.contains_key(&key) && self.entries.len() >= self.max_entries {
-            self.evict_older_than(frame);
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
+            self.make_room();
         }
         match self.entries.entry(key) {
             MapEntry::Occupied(o) => {
@@ -111,9 +116,33 @@ impl<K: Eq + Hash, V> RevisionCache<K, V> {
 
     fn evict_older_than(&mut self, frame: u64) {
         self.entries.retain(|_, e| e.last_used >= frame);
-        // still full (every entry used this frame): drop everything rather than grow
-        if self.entries.len() >= self.max_entries {
-            self.entries.clear();
+    }
+
+    /// The cache is full: drop about the least recently used half. Entries last used in the same
+    /// frame go together, so the ones in use stay while older ones remain; only when nearly all of
+    /// them were used this frame (more entries in use than fit) does it drop half of those.
+    /// O(entries), once every `max_entries / 2` inserts at most.
+    fn make_room(&mut self) {
+        let len = self.entries.len();
+        let mut used: Vec<u64> = self.entries.values().map(|e| e.last_used).collect();
+        let (_, &mut cutoff, _) = used.select_nth_unstable(len / 2);
+        // everything older than the median frame
+        self.entries.retain(|_, e| e.last_used >= cutoff);
+        if self.entries.len() + self.max_entries / 8 <= len && self.entries.len() < self.max_entries {
+            return;
+        }
+        // the median frame's entries too, unless that is the current frame
+        if cutoff < self.frame {
+            self.entries.retain(|_, e| e.last_used > cutoff);
+        }
+        // more entries in use than fit: drop any half rather than grow
+        if self.entries.len() + self.max_entries / 8 > len || self.entries.len() >= self.max_entries {
+            let mut n = 0usize;
+            let keep = self.entries.len() / 2;
+            self.entries.retain(|_, _| {
+                n += 1;
+                n <= keep
+            });
         }
     }
 
@@ -267,8 +296,18 @@ impl MeshCache {
 #[derive(Clone, Default)]
 struct Shared(Arc<egui::mutex::Mutex<GalleyCache>>);
 
+fn shared_id() -> egui::Id {
+    static ID: std::sync::OnceLock<egui::Id> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| egui::Id::new("ashlar_ui::cache::galleys"))
+}
+
+/// The context-wide cache: a read lock on the context (the write lock only the first time).
 fn shared(ctx: &egui::Context) -> Shared {
-    ctx.data_mut(|d| d.get_temp_mut_or_default::<Shared>(egui::Id::new("ashlar_ui::cache::galleys")).clone())
+    let id = shared_id();
+    match ctx.data(|d| d.get_temp::<Shared>(id)) {
+        Some(s) => s,
+        None => ctx.data_mut(|d| d.get_temp_mut_or_default::<Shared>(id).clone()),
+    }
 }
 
 /// A galley from the context-wide cache, keyed by anything hashable plus a revision.
@@ -338,6 +377,37 @@ mod tests {
             c.get_or_insert_with(i, 0, || i);
         }
         assert!(c.len() <= 8);
+    }
+
+    #[test]
+    fn a_full_cache_drops_old_entries_and_keeps_the_ones_in_use() {
+        // 60 entries used every frame, 5 new ones a frame: the cache (100) fills with old new ones
+        let mut c: RevisionCache<u32, u32> = RevisionCache::new(1000, 100);
+        let mut fresh = 1000;
+        let mut rebuilt_steady = 0;
+        for frame in 0..50 {
+            for i in 0..60 {
+                if i % 12 == 0 {
+                    fresh += 1;
+                    c.get_or_insert_with(fresh, 0, || fresh);
+                }
+                c.get_or_insert_with(i, 0, || {
+                    if frame > 0 {
+                        rebuilt_steady += 1;
+                    }
+                    i
+                });
+            }
+            assert!(c.len() <= 100);
+            c.end_frame();
+        }
+        assert_eq!(rebuilt_steady, 0, "entries in use survive every overflow");
+    }
+
+    #[test]
+    fn hash_of_is_stable() {
+        assert_eq!(hash_of(&("label", 7u32)), hash_of(&("label", 7u32)));
+        assert_ne!(hash_of(&("label", 7u32)), hash_of(&("label", 8u32)));
     }
 
     #[test]
