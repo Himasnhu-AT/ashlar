@@ -106,7 +106,7 @@ a task's state.
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | done (a3aff34) |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
-| IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
+| IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | review (wt/ui3) |
 
 ## Phase 6: platform
 | Id | Task | Status |

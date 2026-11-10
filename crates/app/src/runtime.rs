@@ -794,6 +794,7 @@ impl<D: Document> Runtime<D> {
         self.draw_modals(&ctx);
         self.draw_tools(&ctx);
         self.toasts.show(&ctx);
+        self.run_toast_actions(&ctx);
         self.handle_close(&ctx);
         self.poll_session_end(&ctx);
         self.apply_effects(&ctx);
@@ -954,6 +955,18 @@ impl<D: Document> Runtime<D> {
                 Ok(()) => info.enabled,
                 Err(reason) => !info.enabled && info.disabled_reason.as_deref() == Some(reason.as_str()),
             })
+    }
+
+    /// With [`App::run_toast_actions`](crate::App::run_toast_actions) on: run the clicked toast
+    /// actions that name a registered command.
+    fn run_toast_actions(&mut self, ctx: &egui::Context) {
+        if !self.shared.toast_commands {
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        for a in self.toasts.take_actions_where(|a| shared.registry.find(&a.command).is_some()) {
+            self.run_ui_command(ctx, &a.command, json!({}));
+        }
     }
 
     /// Run a command the user chose (menu, key, palette, button): errors become toasts.

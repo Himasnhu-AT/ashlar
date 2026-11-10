@@ -209,6 +209,8 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    /// The toast demo's export progress, in quarters (0 = not started).
+    pub toast_progress: u8,
     // settings
     pub settings_query: String,
     pub launch_at_login: bool,
@@ -299,6 +301,7 @@ impl Gallery {
             dialog_open: false,
             dialog_opener: None,
             toasts: Toasts::new(),
+            toast_progress: 0,
             last_dialog: None,
             font_size: 1,
             font: ComboboxState::new(),
@@ -476,7 +479,9 @@ impl Gallery {
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
             self.run(&ctx, &id);
         }
-        self.toasts.show(&ctx);
+        for action in self.toasts.show_actions(&ctx) {
+            self.run(&ctx, &action.command);
+        }
     }
 
     fn settings(&mut self, ui: &mut Ui) {
@@ -986,6 +991,23 @@ impl Gallery {
                     self.toasts.push(Toast::new(ToastLevel::Warning, "This one stays until you close it").sticky());
                 }
             });
+            ui.add_space(t.space.sm);
+            ui.horizontal(|ui| {
+                if Button::new("overlays.toast.action", "With actions").show(ui).clicked() {
+                    // the actions name gallery commands: the gallery runs them when clicked
+                    let toast = Toast::success("24 files written to Exports").title("Export finished").action("Toggle grid", "view.grid");
+                    self.toasts.push(toast.action("Palette", "help.palette").sticky());
+                }
+                if Button::new("overlays.toast.progress", "Advance export").show(ui).clicked() {
+                    self.toast_progress = (self.toast_progress + 1) % 5;
+                    if self.toast_progress == 0 {
+                        self.toasts.push(Toast::success("Export finished").key("gallery.export").duration(Duration::from_secs(3)));
+                    } else {
+                        self.toasts.progress("gallery.export", "Exporting…", Some(f32::from(self.toast_progress) / 4.0));
+                    }
+                }
+            });
+            ui.label(egui::RichText::new("F6 moves focus to the newest toast and back; Escape dismisses it.").color(t.text.secondary));
         });
         if self.dialog_open {
             let buttons = [DialogButton::new("Don't Save"), DialogButton::cancel("Cancel"), DialogButton::new("Save").default()];

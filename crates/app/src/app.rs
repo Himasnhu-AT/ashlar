@@ -67,6 +67,8 @@ pub(crate) struct Shared<D: Document> {
     pub motion: Option<ashlar_motion::MotionPrefs>,
     pub single_instance: bool,
     pub accept_drops: bool,
+    /// Run toast actions whose command is registered (see [`App::run_toast_actions`]).
+    pub toast_commands: bool,
     /// Save the window's placement and restore it on launch (see [`App::remember_window`]).
     pub remember_window: bool,
     /// Named starting states, in declaration order.
@@ -134,6 +136,7 @@ pub struct App<D: Document> {
     motion: Option<ashlar_motion::MotionPrefs>,
     single_instance: bool,
     accept_drops: Option<bool>,
+    toast_commands: bool,
     remember_window: bool,
     window: WindowSpec,
     scenes: Vec<(String, SceneFn<D>)>,
@@ -164,6 +167,7 @@ impl<D: Document> App<D> {
             motion: None,
             single_instance: false,
             accept_drops: None,
+            toast_commands: false,
             remember_window: true,
             window: WindowSpec::default(),
             scenes: Vec::new(),
@@ -293,6 +297,16 @@ impl<D: Document> App<D> {
         self
     }
 
+    /// Run a toast's action when it is clicked (default off). With it on, a clicked
+    /// [`ToastAction`](ashlar_ui::toasts::ToastAction) whose `command` is a registered command id
+    /// runs like a menu pick, with empty params, after the frame's toasts are drawn; errors become
+    /// toasts. Actions naming anything else stay queued for the view's
+    /// [`Toasts::take_actions`](ashlar_ui::toasts::Toasts::take_actions).
+    pub fn run_toast_actions(mut self, on: bool) -> Self {
+        self.toast_commands = on;
+        self
+    }
+
     /// Change the window before it opens: a minimum size, decorations, transparency… `f` gets
     /// the builder ashlar made (title, size, app id, the restored placement) and returns it.
     /// Desktop only; the headless driver has no window.
@@ -393,6 +407,7 @@ impl<D: Document> App<D> {
             motion: self.motion,
             single_instance: self.single_instance,
             accept_drops,
+            toast_commands: self.toast_commands,
             remember_window: self.remember_window,
             scenes: self.scenes,
         };

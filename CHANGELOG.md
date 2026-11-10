@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Toasts (IMP-5.17): F6 moves keyboard focus into the newest toast (its first action, else its
+  close button) and back to where it was; `Toasts::take_actions_where` drains only the actions a
+  caller accepts; `App::run_toast_actions(true)` makes the runtime run a clicked toast action
+  whose command is registered (other actions stay for the view). The gallery's Overlays page
+  demos action and progress toasts.
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down

@@ -271,3 +271,30 @@ fn settings_page_filter_and_reset() {
     h.run_steps(2);
     assert!(automation::find(&h.ctx, "settings.project.error").is_some());
 }
+
+#[test]
+fn overlays_page_toasts_run_their_actions_and_progress() {
+    let mut h = harness(Page::Overlays, ThemeMode::Light, false);
+    h.state_mut().dialog_open = false;
+    h.state_mut().toasts.clear();
+    h.run_steps(3);
+    let click = |h: &mut egui_kittest::Harness<'_, ashlar_example_gallery::Gallery>, id: &str| {
+        let p = automation::find(&h.ctx, id).unwrap_or_else(|| panic!("{id}")).center();
+        h.hover_at(p);
+        h.step();
+        h.drag_at(p);
+        h.step();
+        h.drop_at(p);
+        h.run_steps(3);
+    };
+    click(&mut h, "overlays.toast.action");
+    assert_eq!(h.state().toasts.len(), 1);
+    let grid = h.state().show_grid;
+    let action = automation::query(&h.ctx, "toast.").into_iter().find(|n| n.id.ends_with(".action.0")).map(|n| n.id).unwrap();
+    click(&mut h, &action);
+    assert_eq!(h.state().show_grid, !grid, "the toast's action ran its gallery command");
+    assert!(h.state().toasts.is_empty());
+    click(&mut h, "overlays.toast.progress");
+    click(&mut h, "overlays.toast.progress");
+    assert_eq!(h.state().toasts.len(), 1, "a progress toast updates in place");
+}
