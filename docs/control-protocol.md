@@ -93,6 +93,25 @@ and hands the debugger methods (next section) to `ashlar_ui::devtools`:
 | `app.quit` | `{discard?}` | `{closing}`, then the app quits |
 | `app.stats` | `{reset?}` | frame times, passes, jobs, `wakes` (frames and requests per reason) |
 | `app.logs` | `{limit?, level?}` | `{lines: [{unix, level, target, message}]}` |
+| `app.clock` | one of `{pause: true}`, `{step_ms}`, `{resume: true}`, or `{}` to read | `{paused, time}` |
+
+`app.clock` holds the time the app's frames see, to look at an animation at an exact moment.
+`pause` freezes it at the current frame's time; `step_ms` (0 < ms ≤ 60000; pauses first) moves the
+frozen time on and runs one frame there; `resume` lets time run again from the frozen value, so
+nothing jumps (the app's time then lags the wall clock by the time spent paused). `time` is the
+egui time in seconds the next frame sees. While paused:
+
+- input still runs frames, at the frozen time. Two clicks are then 0 s apart, so egui counts them
+  as a double click; step between clicks that must stay single.
+- everything timed by egui time stands still: egui's animations, `ashlar_ui::motion`, tooltip
+  delays, toast timeouts, the caret's blink phase and other timed wakes. A timed wake still runs
+  a frame about once per its delay (the frame finds it not yet due), and an egui animation that
+  is mid-flight keeps asking for frames that draw the same picture.
+- settings and autosave run on the host's clock, so saves are not held up. Background jobs and
+  control requests run as usual.
+
+`ashlar-debug clock pause|step <ms>|resume` (also a `.ui` script line) and the MCP tool `ui_clock`
+send it. A headless session refuses it.
 
 Apps may add their own methods (`ui.timeline.hit`…); list them in `UiHandler::methods` so they show
 in `app.version`.
@@ -234,10 +253,11 @@ ref string (`"@e3"`, `"e3"`), `"id=…"`, `"text=…"`, or an object as in the d
 | `ui_set {…}` | `ui.set` (app-defined keys) |
 | `app_stats {reset?}` | `app.stats` |
 | `app_logs {limit?, level?}` | `app.logs` (`level`: error, warn, info, debug or trace) |
+| `ui_clock {pause?, step_ms?, resume?}` | `app.clock` |
 | `docs_categories {category?}`, `list_docs {category?, query?, recursive?}`, `read_doc {path}` | the app's documentation library (no control method) |
 | `save_doc {path, content, replace_builtin?}`, `append_doc {path, text}`, `delete_doc {path}` | the user's own pages, when the server has a user folder |
 
-`screenshot`, the `ui_*` tools and `app_stats`/`app_logs` are listed only when the backend's
+`screenshot`, the `ui_*` tools (`ui_clock` included) and `app_stats`/`app_logs` are listed only when the backend's
 `app.version` reports their method, so an agent never sees a tool the app cannot serve. The
 documentation tools are listed when the server has a library or a user folder. With
 `ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its real input

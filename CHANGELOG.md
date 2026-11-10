@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `app.clock` control method: `{pause: true}`, `{step_ms}` (one frame that much later) and
+  `{resume: true}` hold the time an `ashlar-app` window's frames see, so an animation can be
+  screenshotted or measured at an exact moment; input still runs while paused and resume does not
+  jump. `ashlar-debug clock pause|step <ms>|resume` (also in `.ui` scripts) and the MCP tool
+  `ui_clock` send it; `ashlar_control::{APP_CLOCK, ClockOp}` parse it.
 
 - `ashlar-ui`: screen readers see every visible row of `VirtualList`, `VirtualTable` and
   `TreeView`: list items, table rows and tree items named by `row_label` (the tree's labels),

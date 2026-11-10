@@ -204,6 +204,8 @@ pub struct Runtime<D: Document> {
     picker: Option<FilePicker>,
     passes: u64,
     caret: Caret,
+    /// `app.clock`: the time frames see (pause, step, resume).
+    clock: crate::clock::Clock,
     /// Running in a real window (not the headless driver): OS menus may be installed.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
@@ -280,6 +282,7 @@ impl<D: Document> Runtime<D> {
             picker: None,
             passes: 0,
             caret: Caret::default(),
+            clock: crate::clock::Clock::default(),
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
@@ -487,7 +490,8 @@ impl<D: Document> Runtime<D> {
         raw.dropped_files.clear();
         raw.viewport_id = egui::ViewportId::ROOT;
         // eframe hands no time to a hidden window: go on from the last pass on the wall clock
-        let last = ctx.input(|i| i.time);
+        // (host time: `app.clock` turns it into the app's in `raw_input_hook`)
+        let last = self.clock.host_time();
         raw.time = Some(time.unwrap_or_else(|| self.created.map_or(last, |c| c.elapsed().as_secs_f64())).max(last));
         if raw.screen_rect.is_none()
             && let Some(r) = raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.inner_rect)
@@ -511,10 +515,11 @@ impl<D: Document> Runtime<D> {
         Some(out)
     }
 
-    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
-    /// frame to the wake reasons that were due. (Injected agent input is handed to egui by the
-    /// debugger's plugin.)
+    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): set the
+    /// frame's time (`app.clock` may hold it), then credit the frame to the wake reasons that were
+    /// due. (Injected agent input is handed to egui by the debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        self.clock.begin_frame(raw);
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
@@ -878,7 +883,8 @@ impl<D: Document> Runtime<D> {
     }
 
     fn tick_storage(&mut self, ctx: &egui::Context) {
-        let t = ctx.input(|i| i.time).max(0.0);
+        // host time: saves go on while `app.clock` holds the app's time
+        let t = self.clock.host_time().max(ctx.input(|i| i.time)).max(0.0);
         let now = Duration::from_secs_f64(t);
         // a pending save asks for its own frame through the settings' wake hook
         if let Err(e) = self.settings.tick(now) {
@@ -1201,6 +1207,27 @@ impl<D: Document> Runtime<D> {
                     self.stats.reset_window();
                 }
                 req.ok(v);
+            }
+            ashlar_control::APP_CLOCK => {
+                let op = match ashlar_control::ClockOp::from_params(&p) {
+                    Ok(op) => op,
+                    Err(e) => return req.fail(e),
+                };
+                let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
+                match op {
+                    ashlar_control::ClockOp::Read => {}
+                    ashlar_control::ClockOp::Pause => self.clock.pause(now, predicted_dt),
+                    ashlar_control::ClockOp::Step { ms } => {
+                        self.clock.step(now, predicted_dt, ms / 1000.0);
+                        // the frame at the new time
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                    ashlar_control::ClockOp::Resume => {
+                        self.clock.resume();
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                }
+                req.ok(json!({"paused": self.clock.is_paused(), "time": self.clock.time(now)}));
             }
             "app.logs" => {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200).min(crate::logging::RING_LINES as u64) as usize;
