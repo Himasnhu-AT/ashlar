@@ -158,6 +158,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   input latency and one swapchain image fewer (about 10 MB less idle footprint for a 960×640
   window on a Retina screen). Apps with heavy per-frame GPU work can ask for 2.
 
+- `ashlar_ui::list::Row` gains `indent`, `text_style` and `weak`. The devtools Elements list draws
+  its rows with it (about 6.7× cheaper per row than its old selectable labels: 0.10 ms against
+  0.67 ms for 1k rows), and the tab strip's overflow menu runs inside `list::checked`.
 - `ashlar_ui::docking`: group tab strips use the shared tab strip: one Tab stop per group with
   arrow keys, an AccessKit tab list, and the animated selection underline.
 - `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about

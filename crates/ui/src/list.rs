@@ -46,12 +46,24 @@ pub struct Row<'a> {
     selected: bool,
     height: Option<f32>,
     automation_id: Option<&'a str>,
+    indent: f32,
+    text_style: Option<TextStyle>,
+    weak: bool,
 }
 
 impl<'a> Row<'a> {
     /// A row whose id is `id_salt` within the parent `Ui` (a row index or a stable item key).
     pub fn new(id_salt: impl Hash, text: &'a str) -> Self {
-        Self { id_salt: cache::hash_of(&id_salt), text, selected: false, height: None, automation_id: None }
+        Self {
+            id_salt: cache::hash_of(&id_salt),
+            text,
+            selected: false,
+            height: None,
+            automation_id: None,
+            indent: 0.0,
+            text_style: None,
+            weak: false,
+        }
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
@@ -70,6 +82,25 @@ impl<'a> Row<'a> {
     /// little per row, and most rows are never driven by an agent).
     pub fn automation_id(mut self, id: &'a str) -> Self {
         self.automation_id = Some(id);
+        self
+    }
+
+    /// Move the label right by `points` (a tree depth, say); the fill still spans the row.
+    /// Non-finite or negative values count as zero.
+    pub fn indent(mut self, points: f32) -> Self {
+        self.indent = if points.is_finite() { points.max(0.0) } else { 0.0 };
+        self
+    }
+
+    /// The label's text style (default: [`TextStyle::Button`]).
+    pub fn text_style(mut self, style: TextStyle) -> Self {
+        self.text_style = Some(style);
+        self
+    }
+
+    /// Draw the label in the weak text color unless the row is selected.
+    pub fn weak(mut self, weak: bool) -> Self {
+        self.weak = weak;
         self
     }
 }
@@ -105,8 +136,9 @@ impl Widget for Row<'_> {
             ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, StrokeKind::Inside);
         }
         let pad = ui.spacing().button_padding.x;
-        let max_width = (rect.width() - 2.0 * pad).max(0.0);
-        let font = TextStyle::Button.resolve(ui.style());
+        let left = (pad + self.indent).min(rect.width());
+        let max_width = (rect.width() - left - pad).max(0.0);
+        let font = self.text_style.unwrap_or(TextStyle::Button).resolve(ui.style());
         // the revision covers everything the galley is built from, so a changed label never shows stale
         let revision = cache::hash_of(&(text, &font, max_width.to_bits()));
         let galley = cache::galley(ui, id, revision, || {
@@ -114,8 +146,9 @@ impl Widget for Row<'_> {
             job.wrap = TextWrapping::truncate_at_width(max_width);
             job
         });
-        let pos = pos2(rect.left() + pad, rect.center().y - galley.size().y / 2.0);
-        ui.painter().galley(pos, galley, visuals.text_color());
+        let pos = pos2(rect.left() + left, rect.center().y - galley.size().y / 2.0);
+        let color = if self.weak && !selected { ui.visuals().weak_text_color() } else { visuals.text_color() };
+        ui.painter().galley(pos, galley, color);
         response
     }
 }
@@ -208,6 +241,28 @@ mod tests {
         h.key_press(Key::Enter);
         h.run();
         assert_eq!(*h.state(), Some(0));
+    }
+
+    #[test]
+    fn indent_style_and_weak_rows_still_click_and_bad_indents_are_safe() {
+        let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).build_ui_state(
+            |ui, sel: &mut Option<usize>| {
+                for (i, (name, indent)) in [("Deep", 40.0), ("Huge", 1e9), ("Nan", f32::NAN), ("Neg", -5.0)].iter().enumerate() {
+                    let row = Row::new(i, name).selected(*sel == Some(i)).indent(*indent).text_style(TextStyle::Monospace).weak(i % 2 == 0);
+                    if ui.add(row).clicked() {
+                        *sel = Some(i);
+                    }
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label("Deep").click();
+        h.run();
+        assert_eq!(*h.state(), Some(0));
+        h.get_by_label("Nan").click();
+        h.run();
+        assert_eq!(*h.state(), Some(2));
     }
 
     #[test]
