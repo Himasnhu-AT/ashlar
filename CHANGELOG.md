@@ -10,6 +10,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar-ui`: `markdown::show` keeps its parse while the text is the same and parses streamed
+  text again only from its last open block; each block's layout is kept per width and style, and
+  blocks outside the clip rect only reserve their space (a 50 KB document: about 1.9 ms → 0.02 ms
+  a frame). Automation ids (`<id>.link.<n>`, `<id>.code.<n>`) now exist only for blocks drawn,
+  with the same numbering. `MdBlock`, `Span` and `Marker` implement `Hash`.
 - `ashlar-ui`: the galley cache (`cache::galley`, `RevisionCache`, `MeshCache`) hashes with a fast
   fixed-seed hasher (`cache::hash_of` values differ from before), reads the shared cache under the
   context's read lock, and when full drops its least recently used half instead of everything, so
