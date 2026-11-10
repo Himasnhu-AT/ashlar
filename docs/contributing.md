@@ -16,7 +16,7 @@ and design principles are in [architecture.md](architecture.md).
 | deps | `cargo deny check bans sources` (skipped with a note when cargo-deny isn't installed) |
 | `clippy` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo test --workspace` |
-| `wasm` | `cargo check --target wasm32-unknown-unknown` on the rank 0–1 crates |
+| `wasm` | `cargo check --target wasm32-unknown-unknown` on the rank 0–1 crates, `ashlar-ui` and `ashlar-app` |
 
 The quick checks run first and are all reported; then clippy, wasm and the tests run side by side
 (clippy and wasm in their own target dirs under `target/`, their output shown only on failure). If
