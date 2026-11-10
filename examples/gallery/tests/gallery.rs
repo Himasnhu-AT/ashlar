@@ -68,6 +68,7 @@ fn expected(page: Page) -> &'static [&'static str] {
         ],
         Page::Overlays => &["overlays.dialog", "overlays.dialog.button.2"],
         Page::Commands => &["palette", "palette.search", "palette.results.row.0", "keymap.search", "keymap.file.save.shortcut"],
+        Page::Settings => &["settings.search", "general", "general.launch", "general.updates", "appearance.theme", "appearance.icons"],
     }
 }
 
@@ -238,4 +239,31 @@ fn content_page_banner_and_sections() {
     click(&mut h, "content.advanced");
     assert!(!h.state().advanced_open);
     assert!(automation::find(&h.ctx, "content.advanced.logs").is_none());
+}
+
+#[test]
+fn settings_page_filter_and_reset() {
+    let mut h = harness(Page::Settings, ThemeMode::Light, false);
+    h.run_steps(3);
+    h.state_mut().settings_query = "dark".into();
+    h.run_steps(2);
+    assert!(automation::find(&h.ctx, "appearance.theme").is_some());
+    assert!(automation::find(&h.ctx, "general").is_none());
+    h.state_mut().settings_query = "nothing like this".into();
+    h.run_steps(2);
+    assert!(automation::find(&h.ctx, "settings.empty").is_some());
+    h.state_mut().settings_query.clear();
+    h.state_mut().launch_at_login = true;
+    h.run_steps(2);
+    let p = automation::find(&h.ctx, "general.launch.reset").unwrap().center();
+    h.hover_at(p);
+    h.step();
+    h.drag_at(p);
+    h.step();
+    h.drop_at(p);
+    h.run_steps(2);
+    assert!(!h.state().launch_at_login);
+    h.state_mut().project_name.clear();
+    h.run_steps(2);
+    assert!(automation::find(&h.ctx, "settings.project.error").is_some());
 }

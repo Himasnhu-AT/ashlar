@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
+  modified marker and reset button, a filter that hides non-matching rows and empty sections,
+  highlights matches and shows "No settings match", and `Field` with a required marker and an
+  announced error. Row controls get automation ids `<section>.<row>`; strings come from
+  `FormLabels`. The gallery has a Settings page.
 - `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
   the running app opens the first file with `file.open` (a dirty document asks to save first) and
   comes to the front. Desktop only.

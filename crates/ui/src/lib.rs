@@ -33,6 +33,7 @@ pub mod dialog;
 pub mod docking;
 pub mod edit;
 pub mod fonts;
+pub mod form;
 pub mod icons;
 pub mod idle;
 pub mod layout;
