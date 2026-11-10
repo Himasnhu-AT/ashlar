@@ -40,6 +40,7 @@ pub mod layout;
 pub mod list;
 pub mod markdown;
 pub mod motion;
+pub mod overlay;
 pub mod printing;
 pub mod search;
 pub mod selection;
@@ -56,6 +57,8 @@ pub mod tree;
 pub mod value_field;
 pub mod virtual_list;
 pub mod wake;
+
+pub use overlay::help;
 
 #[cfg(test)]
 pub(crate) mod test_support;
