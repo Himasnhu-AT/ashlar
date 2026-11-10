@@ -1042,7 +1042,7 @@ impl<D: Document> Runtime<D> {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         self.bring_front = true;
-        ctx.request_repaint();
+        wake::wake(ctx, Reason::MENU);
     }
 
     /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
