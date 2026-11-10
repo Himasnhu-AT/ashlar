@@ -10,6 +10,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar_ui::code_view::CodeView`: a read-only code view with virtualized lines (O(visible) per
+  frame), a line-number gutter, optional wrapping, mouse selection, select all and copy, search
+  marks and syntax colours from `SyntaxTheme::from_tokens`. Line galleys are cached per line and
+  revision; lexer states are computed lazily. Automation `<id>.line.<n>` for visible lines only;
+  AccessKit document and paragraphs. About 0.06 ms per scrolled frame at 100k lines.
+- `ashlar_ui::markdown`: fenced code blocks in a known language are syntax-coloured.
 - `ashlar-syntax` (new crate, rank 0, no dependencies, builds for wasm32): syntax highlighting
   with hand-written, linear-time lexers for Rust, TypeScript/JavaScript, Go, C, C++, Java, C#,
   Python, shell, SQL, JSON, TOML, YAML, HTML (with script and style), CSS, Markdown (fenced code

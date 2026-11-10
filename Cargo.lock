@@ -660,6 +660,7 @@ dependencies = [
  "ashlar-command",
  "ashlar-control",
  "ashlar-motion",
+ "ashlar-syntax",
  "ashlar-telemetry",
  "egui",
  "egui_extras",
