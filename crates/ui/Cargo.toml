@@ -27,6 +27,8 @@ thiserror = { workspace = true }
 png = "0.18"
 # same version egui's epaint uses: validates app-supplied font bytes before egui would panic on them
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
+# the fast hasher egui and epaint already use (same version), for cache keys and cache maps
+ahash = { version = "0.8.12", default-features = false, features = ["std"] }
 
 [features]
 # docking layout persistence (serde is always available for menus, automation and keymaps)

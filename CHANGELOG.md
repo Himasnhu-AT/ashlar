@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar-ui`: the galley cache (`cache::galley`, `RevisionCache`, `MeshCache`) hashes with a fast
+  fixed-seed hasher (`cache::hash_of` values differ from before), reads the shared cache under the
+  context's read lock, and when full drops its least recently used half instead of everything, so
+  labels in use are not laid out again.
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
