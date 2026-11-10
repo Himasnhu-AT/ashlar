@@ -98,7 +98,7 @@ a task's state.
 | IMP-5.11 | Dialog focus | done (9fcbdd7) |
 | IMP-5.12 | Rolling numbers | done (14fdc63) |
 | IMP-5.13 | Small content components | done (05f44af) |
-| IMP-5.14 | Sidebar / source list | todo |
+| IMP-5.14 | Sidebar / source list | review (wt/ui3) |
 | IMP-5.15 | Accessibility goldens | done (bcdeb0e) |
 | IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | review (wt/ui3; tab indicator done in IMP-5.10; dialog copy: 173 → 21 allocs per frame) |
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |

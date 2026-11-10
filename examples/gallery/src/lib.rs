@@ -21,6 +21,7 @@ use ashlar::ui::form::{self, Field};
 use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
 use ashlar::ui::rolling::RollingText;
 use ashlar::ui::search::SearchField;
+use ashlar::ui::sidebar::{Sidebar, SidebarItem, SidebarSection, SidebarState};
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
 use ashlar::ui::swatches::SwatchGrid;
@@ -45,10 +46,11 @@ pub enum Page {
     Settings,
     Chat,
     Code,
+    Sidebar,
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 11] = [
         Page::Inputs,
         Page::Controls,
         Page::Content,
@@ -59,6 +61,7 @@ impl Page {
         Page::Settings,
         Page::Chat,
         Page::Code,
+        Page::Sidebar,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -72,6 +75,7 @@ impl Page {
             Page::Settings => "Settings",
             Page::Chat => "Chat",
             Page::Code => "Code",
+            Page::Sidebar => "Sidebar",
         }
     }
 }
@@ -245,6 +249,12 @@ pub struct Gallery {
     pub keymap_editor: KeymapEditor,
     pub ran: Vec<String>,
     pub show_grid: bool,
+    pub sidebar: SidebarState,
+    /// The sidebar page's mailboxes (renamable) and tags.
+    pub sidebar_places: Vec<String>,
+    pub sidebar_tags: Vec<String>,
+    /// What the sidebar last reported.
+    pub sidebar_last: String,
     /// The code page wraps long lines.
     pub code_wrap: bool,
     /// The code page shows line numbers.
@@ -343,6 +353,10 @@ impl Gallery {
             dialog_open: false,
             dialog_opener: None,
             toasts: Toasts::new(),
+            sidebar: SidebarState::new(),
+            sidebar_places: ["Inbox", "Drafts", "Sent", "Archive", "Trash"].map(String::from).to_vec(),
+            sidebar_tags: (0..5_000).map(|i| format!("Tag {i:04}")).collect(),
+            sidebar_last: String::new(),
             code_wrap: false,
             code_numbers: true,
             toast_progress: 0,
@@ -519,6 +533,7 @@ impl Gallery {
                 Page::Settings => self.settings(ui),
                 Page::Chat => self.chat(ui),
                 Page::Code => self.code_page(ui),
+                Page::Sidebar => self.sidebar_page(ui),
             }
         });
         if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
@@ -875,6 +890,83 @@ impl Gallery {
                 }
             });
         });
+    }
+
+    fn sidebar_page(&mut self, ui: &mut Ui) {
+        let t = tokens::current(ui.ctx());
+        let tray = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+            let s = egui::Stroke::new(1.2, c);
+            let r = r.shrink(r.width() * 0.12);
+            p.rect_stroke(r, 2.0, s, egui::StrokeKind::Inside);
+            p.hline(r.x_range(), r.center().y, s);
+        };
+        let dot = |p: &egui::Painter, r: egui::Rect, c: Color32| {
+            p.circle_filled(r.center(), r.width() * 0.25, c);
+        };
+        let details = ["12", "", "", "1.2k", ""];
+        let places: Vec<SidebarItem> = self
+            .sidebar_places
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let item = SidebarItem::new(name).icon(&tray).detail(details.get(i).copied().unwrap_or(""));
+                if i == 0 { item.badge("3") } else { item }
+            })
+            .collect();
+        let tags: Vec<SidebarItem> = self.sidebar_tags.iter().map(|n| SidebarItem::new(n).icon(&dot)).collect();
+        let sections = [SidebarSection::new("Mailboxes", &places).count(3), SidebarSection::new("Tags", &tags)];
+        let mut renamed = None;
+        ui.horizontal_top(|ui| {
+            egui::Frame::new()
+                .fill(t.surface.panel)
+                .stroke(egui::Stroke::new(1.0, t.border))
+                .corner_radius(t.radius.lg)
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.set_width(240.0);
+                    let out = Sidebar::new("sidebar.nav", "Navigation", &mut self.sidebar, &sections).max_height(560.0).show(ui);
+                    let name = |r: ashlar::ui::sidebar::ItemRef| {
+                        sections.get(r.section).and_then(|s| s.items.get(r.item)).map_or("", |i| i.label).to_owned()
+                    };
+                    if let Some(r) = out.activated {
+                        self.sidebar_last = format!("Opened {}", name(r));
+                    } else if let Some(r) = out.context {
+                        self.sidebar_last = format!("Context menu for {}", name(r));
+                    } else if let Some(s) = out.toggled {
+                        self.sidebar_last = format!(
+                            "{} {}",
+                            if self.sidebar.is_collapsed(s) { "Folded" } else { "Unfolded" },
+                            sections.get(s).map_or("", |s| s.title)
+                        );
+                    }
+                    if let Some((r, new)) = out.renamed {
+                        self.sidebar_last = format!("Renamed {} to {new}", name(r));
+                        renamed = Some((r, new));
+                    }
+                });
+            ui.add_space(t.space.lg);
+            ui.vertical(|ui| {
+                let selected = self
+                    .sidebar
+                    .selected
+                    .and_then(|r| sections.get(r.section).and_then(|s| s.items.get(r.item)))
+                    .map_or("Nothing selected", |i| i.label);
+                ui.label(egui::RichText::new(selected).size(t.type_scale.heading).strong());
+                ui.label(
+                    egui::RichText::new("Tab focuses the sidebar. Arrows move, Left and Right fold, F2 renames, typing jumps.")
+                        .color(t.text.secondary),
+                );
+                if !self.sidebar_last.is_empty() {
+                    ui.label(&self.sidebar_last);
+                }
+            });
+        });
+        if let Some((r, new)) = renamed
+            && r.section == 0
+            && let Some(slot) = self.sidebar_places.get_mut(r.item)
+        {
+            *slot = new;
+        }
     }
 
     fn code_page(&mut self, ui: &mut Ui) {

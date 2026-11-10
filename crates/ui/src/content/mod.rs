@@ -32,6 +32,7 @@ mod empty_state;
 
 pub use banner::{Banner, BannerOutput};
 pub use card::Card;
+pub(crate) use collapsible::chevron as chevron_points;
 pub use collapsible::{Accordion, Collapsible, CollapsibleOutput};
 pub use empty_state::{EmptyState, EmptyStateOutput};
 

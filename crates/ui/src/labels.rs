@@ -27,6 +27,7 @@ use crate::commands::keymap_editor::KeymapLabels;
 use crate::diff_view::DiffLabels;
 use crate::form::FormLabels;
 use crate::markdown::MarkdownLabels;
+use crate::sidebar::SidebarLabels;
 use crate::toasts::ToastLabels;
 
 /// The built-in catalogs (`ui.*` keys), as `(locale, json)`.
@@ -108,6 +109,7 @@ pub struct UiLabels {
     pub search: SearchLabels,
     pub markdown: MarkdownLabels,
     pub controls: ControlLabels,
+    pub sidebar: SidebarLabels,
 }
 
 /// Words of the everyday [`controls`](crate::controls) that do not take one from the caller.
@@ -202,6 +204,8 @@ pub const KEYS: &[&str] = &[
     "ui.markdown.code",
     "ui.markdown.more_rows",
     "ui.controls.loading",
+    "ui.sidebar.rename",
+    "ui.sidebar.items",
 ];
 
 /// Adds the built-in catalogs to `i18n` (add the app's own catalogs after, to override keys).
@@ -307,6 +311,8 @@ impl UiLabels {
             }
         }
         set(&mut l.controls.loading, "ui.controls.loading");
+        set(&mut l.sidebar.rename, "ui.sidebar.rename");
+        set(&mut l.sidebar.items, "ui.sidebar.items");
         l
     }
 }

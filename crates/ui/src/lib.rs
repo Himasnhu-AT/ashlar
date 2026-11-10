@@ -51,6 +51,7 @@ pub mod printing;
 pub mod rolling;
 pub mod search;
 pub mod selection;
+pub mod sidebar;
 pub mod slider;
 pub mod status_bar;
 pub mod swatches;

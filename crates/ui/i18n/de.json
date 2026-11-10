@@ -59,5 +59,7 @@
   "ui.markdown.copied": "Kopiert",
   "ui.markdown.code": "Code",
   "ui.markdown.more_rows": "{n} weitere Zeilen",
-  "ui.controls.loading": "Wird geladen"
+  "ui.controls.loading": "Wird geladen",
+  "ui.sidebar.rename": "Umbenennen",
+  "ui.sidebar.items": "{n} Einträge"
 }

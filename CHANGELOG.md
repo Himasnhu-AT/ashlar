@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::sidebar` (IMP-5.14): a source list of folding sections with counts and rows with an
+  icon, detail and badge, built on `list::Row` and virtualized. One Tab stop: arrows, Home/End,
+  Left/Right to fold, Enter to activate, F2 to rename in place, type-ahead; click, double click
+  and context clicks reported in `SidebarResponse`. Automation ids `<id>`, `<id>.section.<s>`,
+  `<id>.section.<s>.item.<i>`, `<id>.rename`; labels `UiLabels::sidebar` (`ui.sidebar.rename`,
+  `ui.sidebar.items`, English and German). `list::Row` gains `icon`, `detail`, `badge` and
+  `focusable`. The gallery has a Sidebar page.
 - CodeView and DiffView follow-ups (IMP-5.20): unwrapped long lines scroll sideways (horizontal
   wheel or Shift+wheel, and a draggable bar along the bottom; a split diff's sides move together);
   both views register the new automation role `Role::Document` (`"document"` in `ui.inspect`). The

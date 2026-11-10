@@ -393,7 +393,7 @@ fn starts_with_ci(s: &str, prefix: &str) -> bool {
 }
 
 /// Feed this frame's typed text into the type-ahead buffer and find the row it names.
-fn type_ahead<'t>(ui: &Ui, base: Id, rows: usize, cursor: Option<usize>, text: &dyn Fn(usize) -> &'t str) -> Option<usize> {
+pub(crate) fn type_ahead<'t>(ui: &Ui, base: Id, rows: usize, cursor: Option<usize>, text: &dyn Fn(usize) -> &'t str) -> Option<usize> {
     let typed: String = ui.input(|i| {
         if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
             return String::new();
