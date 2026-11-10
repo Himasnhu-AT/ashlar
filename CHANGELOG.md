@@ -10,6 +10,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar_ui::tabs::indicator`: where to paint a tab strip's selection underline or pill, sliding
+  by its edges to the newly selected tab (paint only; tabs keep their rects for hit testing).
 - `ashlar_ui::motion::presence`: keeps an item drawn while it leaves (`Some(progress)` until
   its exit settles, then `None`), entering and leaving along a token pair as an opacity.
 - `ashlar-app`: `Driver::with_renderer(runtime, Renderer::wgpu())` renders real screenshots
