@@ -371,7 +371,8 @@ impl<D: Document> App<D> {
     /// [`crate::Driver`] in a temporary folder that writes `--snap out.png` and `--tree tree.json`
     /// (after `--script file.ui` and `--at SECONDS`, at `--size WxH`, `--scale S`, `--theme
     /// light|dark`, `--scene NAME`), then exits with 0 (done), 1 (a step failed) or 2 (bad
-    /// arguments). `--scene NAME` also works with a window; `--list-scenes` prints the scenes.
+    /// arguments). (`--headless` needs the `headless` feature, on by default.) `--scene NAME` also
+    /// works with a window; `--list-scenes` prints the scenes.
     pub fn run(self) -> Result<(), Error> {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -382,12 +383,16 @@ impl<D: Document> App<D> {
                 }
                 std::process::exit(0);
             }
-            if let Some(name) = crate::headless_run::scene_arg(&args)
+            if let Some(name) = scene_arg(&args)
                 && !self.scenes.iter().any(|(n, _)| *n == name)
             {
                 eprintln!("error: no scene `{name}` (scenes: {})", self.scene_names().join(", "));
                 std::process::exit(i32::from(ashlar_debug::Exit::Usage.code()));
             }
+        }
+        #[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
+        {
+            let args: Vec<String> = std::env::args().skip(1).collect();
             if crate::headless_run::requested(&args) {
                 let code = crate::headless_run::run(self, &args);
                 std::process::exit(i32::from(code));
@@ -395,6 +400,21 @@ impl<D: Document> App<D> {
         }
         crate::runtime::run_native(self)
     }
+}
+
+/// The scene named by `--scene NAME` (or `--scene=NAME`), if any.
+#[cfg(not(target_arch = "wasm32"))]
+fn scene_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--scene" {
+            return it.next().cloned();
+        }
+        if let Some(v) = a.strip_prefix("--scene=") {
+            return Some(v.to_string());
+        }
+    }
+    None
 }
 
 /// `fn main() -> ExitCode { ashlar_app::cli_main(my_app::app()) }`: an app's `-cli` binary.

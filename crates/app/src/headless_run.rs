@@ -39,20 +39,6 @@ impl Default for Options {
     }
 }
 
-/// The scene named by `--scene NAME` (or `--scene=NAME`), if any.
-pub(crate) fn scene_arg(args: &[String]) -> Option<String> {
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        if a == "--scene" {
-            return it.next().cloned();
-        }
-        if let Some(v) = a.strip_prefix("--scene=") {
-            return Some(v.to_string());
-        }
-    }
-    None
-}
-
 /// The arguments ask for `--headless`.
 pub(crate) fn requested(args: &[String]) -> bool {
     args.iter().any(|a| a == "--headless")
@@ -215,8 +201,6 @@ mod tests {
         assert_eq!(o.snap, Some(PathBuf::from("a.png")));
         let o = parse(&args("--headless --scene two-notes")).unwrap();
         assert_eq!(o.scene.as_deref(), Some("two-notes"));
-        assert_eq!(scene_arg(&args("--scene=empty --headless")).as_deref(), Some("empty"));
-        assert_eq!(scene_arg(&args("--headless")), None);
         for bad in ["--size 10", "--size 0x5", "--scale nan", "--theme blue", "--at -1", "--snap", "--frobnicate"] {
             assert!(parse(&args(&format!("--headless {bad}"))).is_err(), "{bad}");
         }

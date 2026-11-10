@@ -14,6 +14,9 @@
 //! A test that prints no `bench:` line is measured by its wall time. `--compare <bench.json>`
 //! fails when a metric is more than `--threshold` percent (default 5) worse than in that file.
 //!
+//! One step is not a test: `perf_hello_size` builds `examples/hello` in release, strips a copy
+//! and reports `hello_stripped_bytes`, what the framework adds to every app.
+//!
 //! ```text
 //! cargo xtask bench [--filter <text>] [--repeat N] [--compare <file>] [--threshold <percent>]
 //! ```
@@ -146,6 +149,52 @@ fn run_test(krate: &str, dir: &Path, exe: &Path, test: &str) -> TestRun {
     TestRun { krate: krate.to_owned(), test: test.to_owned(), ok, wall_ms, metrics: parse_metrics(&output), output }
 }
 
+const HELLO_SIZE: &str = "perf_hello_size";
+
+/// Builds `examples/hello` in release (the build dir the tests use), strips a copy into
+/// `target/bench/` and reports `bench: hello_stripped_bytes <n> B`.
+fn hello_size(root: &Path) -> TestRun {
+    let started = Instant::now();
+    let result = stripped_hello(root);
+    let wall_ms = started.elapsed().as_secs_f64() * 1e3;
+    let (ok, output) = match result {
+        Ok(bytes) => (true, format!("bench: hello_stripped_bytes {bytes} B")),
+        Err(e) => (false, e),
+    };
+    println!("{output}");
+    TestRun { krate: "ashlar-example-hello".into(), test: HELLO_SIZE.into(), ok, wall_ms, metrics: parse_metrics(&output), output }
+}
+
+fn stripped_hello(root: &Path) -> Result<u64, String> {
+    let out = Command::new(crate::cargo())
+        .current_dir(root)
+        .args(["build", "--release", "-p", "ashlar-example-hello", "--message-format=json-render-diagnostics"])
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("bench: cargo build hello: {e}"))?;
+    if !out.status.success() {
+        return Err("bench: building examples/hello failed".into());
+    }
+    let exe = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "ashlar-example-hello")
+        .find_map(|m| m["executable"].as_str().map(PathBuf::from))
+        .ok_or("bench: cargo reported no hello executable")?;
+    let dir = root.join("target").join("bench");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("bench: {}: {e}", dir.display()))?;
+    let copy = dir.join(exe.file_name().unwrap_or_default());
+    std::fs::copy(&exe, &copy).map_err(|e| format!("bench: copy {}: {e}", exe.display()))?;
+    // A Windows release exe keeps its symbols in the .pdb: the copy is already stripped.
+    if !cfg!(windows) {
+        let status = Command::new("strip").arg(&copy).status().map_err(|e| format!("bench: strip: {e}"))?;
+        if !status.success() {
+            return Err(format!("bench: strip {} failed", copy.display()));
+        }
+    }
+    std::fs::metadata(&copy).map(|m| m.len()).map_err(|e| format!("bench: {}: {e}", copy.display()))
+}
+
 /// The metrics a run is judged by: its own, or its wall time when it reports none.
 fn gated(run: &TestRun) -> Vec<Metric> {
     if run.metrics.is_empty() { vec![Metric { name: "wall".into(), value: run.wall_ms, unit: "ms".into() }] } else { run.metrics.clone() }
@@ -256,7 +305,8 @@ pub fn bench(root: &Path, args: &[String]) -> Result<(), String> {
             tests.push((krate.clone(), dir.clone(), exe.clone(), t));
         }
     }
-    if tests.is_empty() {
+    let size_step = HELLO_SIZE.contains(o.filter.as_str());
+    if tests.is_empty() && !size_step {
         return Err("bench: no ignored tests named `perf…` found".into());
     }
     let mut runs: Vec<TestRun> = Vec::new();
@@ -277,6 +327,10 @@ pub fn bench(root: &Path, args: &[String]) -> Result<(), String> {
                 None => runs.push(run),
             }
         }
+    }
+    if size_step {
+        eprintln!("bench: {HELLO_SIZE} (release build of examples/hello)");
+        runs.push(hello_size(root));
     }
     let results: Vec<Value> = runs
         .iter()

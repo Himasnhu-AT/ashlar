@@ -76,12 +76,24 @@ cargo run -p ashlar-example-notes      # a small document app
 cargo run -p ashlar-example-gallery    # every UI component
 ```
 
-The umbrella crate's optional features are `native-menu` (the app's commands in the macOS and
-Windows menu bar) and `telemetry` (crash, performance and usage reports to a server you host):
+The umbrella crate's features:
+
+| Feature | Default | What it adds |
+| --- | --- | --- |
+| `accesskit` | on | Screen readers and other assistive technology see the window (AccessKit) |
+| `headless` | on | `--headless` on the app's command line: no window, `.ui` scripts, `--snap`, `--tree` |
+| `native-menu` | off | The app's commands in the macOS and Windows menu bar |
+| `telemetry` | off | Crash, performance and usage reports to a server you host |
 
 ```sh
 cargo add ashlar-rs --features native-menu,telemetry
 ```
+
+Binary size: the smallest app (`examples/hello`) is 13.6 MB stripped in a release build on macOS
+arm64. `cargo build --profile release-small` (a profile in this workspace: fat LTO, one codegen
+unit, `opt-level = "s"`, stripped) brings it to 9.0 MB; copy the profile into your own
+`Cargo.toml`. `default-features = false` saves about 1 MB more, at the cost of accessibility and
+`--headless`. `cargo xtask bench` tracks the number as `hello_stripped_bytes`.
 
 ## Crates
 

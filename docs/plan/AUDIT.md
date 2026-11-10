@@ -34,7 +34,7 @@ task IMP-1.9.
 |---|---|---|---|
 | Clean release build, hello app | 45.4 s wall, 380 CPU-s | not measured | naga 32 s, egui 22 s, wgpu-core 20 s, font stack ~57 s, image stack ~37 s |
 | Incremental rebuild (touch main.rs) | 1.45 s | not measured | ashlar's release profile is not incremental |
-| Stripped binary, hello app | 12.76 MB | target ≤ 5 MiB (published target) | image, png, rfd, muda, arboard, accesskit, full wgpu/naga all linked |
+| Stripped binary, hello app | 12.76 MB (13.55 MB at IMP-2.9 with the newer features; **8.96 MB with `--profile release-small`**) | target ≤ 5 MiB (published target) | image, png, rfd, muda, arboard, accesskit, full wgpu/naga all linked |
 | Launch → window created | 89.8 ms median | not measured | |
 | Launch → first UI pass | 91.9 ms median | 59–98 ms "process to pixels" (published, headless) | different boundaries; ~70 ms of ashlar's is window + wgpu setup |
 | Idle CPU, 10 s | 0.0 % (0 ms CPU) | not measured | repaint on demand works (window was off screen) |

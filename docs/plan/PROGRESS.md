@@ -3,6 +3,37 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/tween, wt/openfiles, wt/size merged
+
+- **IMP-3.9:** a real bug. `tween()` (`crates/motion/src/curve.rs`) applied its velocity-continuity
+  term from rest, which forced every tween to start at zero velocity. A 2 s linear 0→100 tween read
+  11.97 at 0.525 s instead of 26.25. A tween from rest now follows its easing exactly. Three new tests
+  were added, and the retarget property tests still pass.
+- **IMP-6.2:** single instance, opening files from Finder, and dropped files.
+  - `App::single_instance(true)`: a second launch forwards its files and exits 0. The running app
+    opens the first file and focuses its window.
+  - macOS `listen_os` runs before the event loop.
+  - `App::accept_drops`: a file with a known extension goes to `file.open`; other files reach the view
+    through `Cx::dropped_files()`.
+  - A dirty document asks first.
+  - Only the first file of a batch is opened, and URLs are only logged.
+  - The real socket and Finder paths were not run in a live app.
+- **IMP-1.7 / 2.9:** `examples/hello` and `bench: hello_stripped_bytes`.
+
+  | Hello (stripped, macOS arm64) | Default features | No default features |
+  |---|---|---|
+  | release | 13.55 MB | 12.58 MB |
+  | `release-small` (fat LTO, 1 codegen unit, opt-level s, strip; still unwinds) | 8.96 MB (−34 %) | 8.38 MB (−38 %) |
+
+  - Where the size goes: epaint 1.8 MB, wgpu-core 1.6, naga 1.4, font shaping 1.0, egui 0.8,
+    ashlar-ui 0.6, ashlar-debug 0.45 (through `--headless`), the image stack about 0.45 (egui-winit's
+    clipboard), and accesskit about 0.25.
+  - `rfd`, `muda`, MCP and the CLI are already dropped by the linker when unused.
+  - New: the `accesskit` and `headless` features, both on by default.
+  - The reference framework's 5 MiB target is out of reach while ashlar uses wgpu and egui's font
+    stack.
+- Started: wt-tabs (IMP-5.10), wt-snap (IMP-4.8, 4.9).
+
 ## 2026-11-10: wt/clock, wt/animate, wt/syntax merged
 
 - **IMP-4.7:** `app.clock {pause|step_ms|resume}` (`crates/app/src/clock.rs`,
