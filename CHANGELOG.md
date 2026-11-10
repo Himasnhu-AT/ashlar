@@ -51,6 +51,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Added
 
+- `ashlar-ui`: toasts v2. Each toast is an AccessKit live region (polite; assertive for errors), so
+  screen readers announce it. New on `Toast`: `title`, `action(label, command)` (up to three
+  buttons, reachable as `toast.<id>.action.<n>`; clicks arrive from `Toasts::take_actions` or
+  `show_actions`), `key` (pushing a toast with a queued toast's key updates it in place), and
+  `progress`; `Toasts::progress(key, text, fraction)` keeps a progress toast up to date and
+  `dismiss_key` removes it. Escape dismisses the focused or newest toast (not while a field or a
+  popup has it), keyboard focus pauses a toast's timer, close and action buttons show a focus
+  ring, the close target is a full control high, toasts past `max_visible` show as "+N more", and
+  the words come from `ToastLabels` (English by default). `Toast` gained public fields, so code
+  that builds one with a struct literal must add them (`Toast::new` is unchanged).
 - `ashlar-mcp`: `app_stats {reset?}` and `app_logs {limit?, level?}` tools over the runtime's
   `app.stats` and `app.logs`, listed only when the app reports those methods.
 - `ashlar-assistant`: `HistoryStore::offload_images` keeps only a chat's newest pictures in
