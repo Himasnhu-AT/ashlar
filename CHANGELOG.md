@@ -9,6 +9,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `App::single_instance(true)`: a second launch hands its arguments to the running app and exits 0;
+  the running app opens the first file with `file.open` (a dirty document asks to save first) and
+  comes to the front. Desktop only.
+- Files from Finder (macOS `odoc` / `GURL` Apple events: a double-click, a drop on the Dock icon)
+  open with `file.open` while the app runs and at launch.
+- `App::accept_drops(bool)` (on by default when the app sets a format or a file extension): the
+  first dropped file with a known extension opens with `file.open`; the others reach the view as
+  `Cx::dropped_files()`. `Driver::drop_files` and `Driver::forward_launch` test both paths.
 - `app.clock` control method: `{pause: true}`, `{step_ms}` (one frame that much later) and
   `{resume: true}` hold the time an `ashlar-app` window's frames see, so an animation can be
   screenshotted or measured at an exact moment; input still runs while paused and resume does not

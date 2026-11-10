@@ -33,6 +33,7 @@ mod headless_run;
 mod native_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
+mod open;
 mod renderer;
 pub mod runtime;
 pub mod session;
@@ -47,6 +48,7 @@ pub use ashlar_log::{crash, logging};
 pub use ashlar_ui::wake;
 
 pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
+pub use ashlar_native::single_instance::Forwarded;
 pub use driver::Driver;
 pub use renderer::Renderer;
 pub use runtime::{Cx, FilePicker, Pick, Runtime};
