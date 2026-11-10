@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Rich clipboard: `clipboard::set_rich` / `rich` (text, HTML, PNG, file lists; read HTML is
+  sanitized by `clipboard::sanitize_html`, every form size-capped), `clipboard::set_secret(text,
+  clear_after)` (kept out of clipboard history where supported, cleared only if still ours) and a
+  `Backend` trait with `MemoryClipboard` for tests.
 - Dock ▸ Quit, logout, restart and shutdown go through the "Save changes?" check and flush
   settings, autosave and telemetry (`ashlar_native::session_end`, feature `session-end`, on by
   default): macOS answers `applicationShouldTerminate:` later until the user chooses; Windows
@@ -295,6 +299,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
 ### Fixed
+- Linux: copied text and images no longer vanish when the copy call returns; one clipboard lives
+  on a worker thread for the life of the process.
 
 - `ashlar-ui` devtools: AccessKit that the debugger turned on to answer a request (`ui.click`,
   `ui.snapshot`, a script) goes back off once nothing needs the tree, so a driven app no longer builds
