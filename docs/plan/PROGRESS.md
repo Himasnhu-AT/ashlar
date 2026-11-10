@@ -3,6 +3,20 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/race merged (CI green), a real bug
+
+- **IMP-0.6:** the flaky telemetry test found a real bug in `ashlar-trace`, not in the courier
+  hand-off.
+  - Cause: `end(1ms)` timed out, so `shutdown_with` called `Spool::release()` and unlocked the run's
+    own unsent folder. The worker's last pass then re-locked it through `adopt_orphans` and held it
+    until the process exited. Couriers saw it as live and skipped it, so that session was never
+    delivered while the process stayed alive.
+  - Fix: a released spool adopts nothing (`crates/trace/src/pipeline/spool.rs`).
+  - Test: `a_released_spool_adopts_nothing_and_leaves_its_folders_to_others`, which fails without the
+    fix. The telemetry test is unchanged.
+  - Failure rate under load: 4/60 before, 0/100 after. With a forced delay: 10/10 before, 0/10 after.
+- Started: wt-a11y (IMP-5.3), wt-clock (IMP-4.7).
+
 ## 2026-11-10: wt/theme and wt/uiscript merged
 
 - **IMP-3.4:** `with_accent` works in OKLCH (same hue, lightness steps, capped chroma).

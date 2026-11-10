@@ -11,7 +11,8 @@ a task's state.
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | todo |
-| IMP-0.6 | `ashlar-telemetry` courier test lost 1 of 14 sessions once under load: race or timing? | doing (wt-race) |
+| IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
+| IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
@@ -69,7 +70,7 @@ a task's state.
 | IMP-4.4 | Headless wgpu renderer for `Driver` | done (c2d7270) |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | done (3669d42) |
 | IMP-4.6 | `--headless --snap --tree` flags | done (11a4853) |
-| IMP-4.7 | `app.clock` | todo |
+| IMP-4.7 | `app.clock` | doing (wt-clock) |
 | IMP-4.8 | App-level golden snapshots | todo |
 | IMP-4.9 | Named scenes | todo |
 | IMP-4.10 | Motion and jank gate | todo |
@@ -80,7 +81,7 @@ a task's state.
 |---|---|---|
 | IMP-5.1 | Basic controls kit | done (10ee980) |
 | IMP-5.2 | Toast v2 | done (aaf674c) |
-| IMP-5.3 | List and tree accessibility and selection | todo |
+| IMP-5.3 | List and tree accessibility and selection | doing (wt-a11y) |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | doing (wt-syntax) |
 | IMP-5.6 | Diff view | todo |
