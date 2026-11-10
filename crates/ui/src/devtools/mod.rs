@@ -197,6 +197,16 @@ pub fn has_pending(ctx: &egui::Context) -> bool {
 
 /// Tell `ui.wait {for: "idle"}` whether the app has work of its own pending (background jobs,
 /// a save in flight). Cheap: call it every frame.
+/// Whether a platform AccessKit adapter (a screen reader) can turn AccessKit on for `ctx`
+/// (`true` by default). With `false` (a context with no window, or a build without the adapter)
+/// devtools switches AccessKit off again once it has answered the requests that needed the tree.
+/// With `true` AccessKit stays on once a request turned it on: egui does not say whether a screen
+/// reader turned it on meanwhile, and turning it off under one would leave it a stale tree.
+pub fn set_platform_accesskit(ctx: &egui::Context, possible: bool) {
+    install(ctx);
+    ctx.with_plugin::<Plugin, _>(|p| p.st.platform_accesskit = possible);
+}
+
 pub fn set_busy(ctx: &egui::Context, busy: bool) {
     ctx.with_plugin::<Plugin, _>(|p| p.st.busy = busy);
 }
@@ -351,6 +361,9 @@ struct State {
     /// AccessKit was off until a request needed the tree: switch it back off when done, so a
     /// driven app does not build a screen reader's tree on every later frame
     accesskit_ours: bool,
+    /// A platform adapter (a screen reader) may turn AccessKit on in this context. egui does not
+    /// say who turned it on, so then devtools never turns it off.
+    platform_accesskit: bool,
 }
 
 impl Default for State {
@@ -370,6 +383,7 @@ impl Default for State {
             overlay: overlay::Overlay::default(),
             offscreen: None,
             accesskit_ours: false,
+            platform_accesskit: true,
         }
     }
 }
@@ -540,11 +554,12 @@ impl State {
         self.schedule(ctx, now);
     }
 
-    /// Turn AccessKit off again once nothing needs the tree, if this turned it on (a screen
-    /// reader that had it on keeps it). The next request turns it on for one frame.
+    /// Turn AccessKit off again once nothing needs the tree, if this turned it on and no platform
+    /// adapter can have turned it on meanwhile (see [`set_platform_accesskit`]). The next request
+    /// turns it on for one frame.
     fn release_accesskit(&mut self, ctx: &egui::Context) {
         let needed = !self.inbox.is_empty() || !self.waits.is_empty() || self.overlay.open || self.script.is_busy();
-        if self.accesskit_ours && !needed {
+        if self.accesskit_ours && !self.platform_accesskit && !needed {
             ctx.disable_accesskit();
             self.accesskit_ours = false;
         }

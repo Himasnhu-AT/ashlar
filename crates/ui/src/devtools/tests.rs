@@ -342,10 +342,14 @@ fn closed_and_idle_asks_for_no_frames() {
     assert!(app.ctx.with_plugin::<Plugin, _>(|p| p.st.inbox.is_empty() && !p.st.script.is_busy() && p.st.shots.is_empty()).unwrap());
 }
 
+fn has_tree(app: &App) -> bool {
+    app.last.as_ref().unwrap().platform_output.accesskit_update.is_some()
+}
+
 #[test]
-fn accesskit_goes_back_off_after_requests_unless_a_screen_reader_had_it_on() {
-    let has_tree = |app: &App| app.last.as_ref().unwrap().platform_output.accesskit_update.is_some();
+fn accesskit_goes_back_off_after_requests_when_no_screen_reader_can_exist() {
     let mut app = App::new();
+    set_platform_accesskit(&app.ctx, false);
     app.settle();
     assert!(!has_tree(&app));
     app.ok("ui.click", json!({"id": "toolbar.save"}));
@@ -357,14 +361,35 @@ fn accesskit_goes_back_off_after_requests_unless_a_screen_reader_had_it_on() {
     app.ok("ui.click", json!({"id": "toolbar.save"}));
     app.settle();
     assert_eq!(app.saves, saves + 1);
+}
 
+#[test]
+fn accesskit_stays_on_when_a_screen_reader_had_it_on() {
     let mut app = App::new();
-    app.ctx.enable_accesskit(); // a screen reader
+    set_platform_accesskit(&app.ctx, false);
+    app.ctx.enable_accesskit(); // already on before any request
     app.settle();
     app.ok("ui.click", json!({"id": "toolbar.save"}));
     app.settle();
     app.frame();
     assert!(has_tree(&app), "AccessKit that was on before stays on");
+}
+
+#[test]
+fn accesskit_stays_on_when_a_screen_reader_activates_during_a_request() {
+    let mut app = App::new(); // a window: a platform adapter may turn AccessKit on
+    app.settle();
+    // a request turns AccessKit on; before it is answered, a screen reader activates (eframe
+    // calls `enable_accesskit` on its adapter's first tree request)
+    let rx = call(&app.ctx, "ui.click", json!({"id": "toolbar.save"}));
+    app.frame();
+    app.ctx.enable_accesskit();
+    app.settle();
+    assert!(matches!(rx.try_recv(), Ok(Reply::Ok(_))), "the request was answered");
+    for _ in 0..3 {
+        app.frame();
+    }
+    assert!(has_tree(&app), "AccessKit stays on: devtools cannot tell the screen reader's activation from its own");
 }
 
 #[test]
