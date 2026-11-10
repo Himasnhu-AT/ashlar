@@ -126,7 +126,8 @@ fn app_stats_reports_frames_and_requests_per_reason() {
 /// A note is open and its title field has the keyboard (clicked, as a person would), then the
 /// app settles: returns the driver.
 fn focused_title(root: &Path) -> Driver<Notes> {
-    let mut d = windowed(root, Duration::from_secs(60));
+    // no autosave falls due during the measurements
+    let mut d = windowed(root, Duration::from_secs(3600));
     d.call("engine.execute", json!({"command": "note.add", "params": {"title": "focus me"}})).unwrap();
     let id = d.call("engine.execute", json!({"command": "note.list", "params": {}})).unwrap()["notes"][0]["id"].as_u64().unwrap();
     d.call("engine.execute", json!({"command": "note.select", "params": {"id": id}})).unwrap();
@@ -197,4 +198,34 @@ fn perf_frames_per_command() {
     assert_eq!(d.runtime.session().doc().notes.len(), notes + RUNS as usize, "each chord ran note.add");
     let per = (d.frames() - start) as f64 / RUNS as f64;
     println!("bench: frames_per_key_command {per:.2} frames");
+}
+
+#[test]
+fn a_focused_text_field_blinks_for_a_while_then_goes_idle() {
+    use ashlar::app::caret::{BLINK_FOR, CARET};
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = focused_title(dir.path());
+    let before = d.runtime.wakes();
+    let frames = idle_focused_frames(&mut d);
+    let after = d.runtime.wakes();
+    // one frame per phase change (on, off) while blinking, and the settings write of the selection
+    let bound = 2 * BLINK_FOR as u64 + 2;
+    assert!(frames <= bound, "{frames} frames over 30 s with a focused field (bound {bound}): {after:?}");
+    assert!(after.frames_for(CARET) > before.frames_for(CARET), "the blink frames are the caret's: {after:?}");
+    assert_eq!(after.frames_for(Reason::INPUT), before.frames_for(Reason::INPUT), "no blink frame counts as input: {after:?}");
+    assert_eq!(d.advance(30.0), 0, "idle with a focused field: {:?}", d.runtime.wakes());
+    // the caret is left solid, in the theme's color
+    let caret = d.ctx().global_style().visuals.text_cursor.clone();
+    assert!(!caret.blink && caret.stroke.color != ashlar::egui::Color32::TRANSPARENT, "{caret:?}");
+
+    // typing starts the blink again, and it stops again
+    d.push_event(egui::Event::Text("x".into()));
+    d.settle(20);
+    let caret_frames = d.runtime.wakes().frames_for(CARET);
+    let frames = d.advance(30.0);
+    assert!(frames > 0 && frames <= bound, "{frames} frames after typing: {:?}", d.runtime.wakes());
+    assert!(d.runtime.wakes().frames_for(CARET) > caret_frames, "{:?}", d.runtime.wakes());
+    assert_eq!(d.advance(30.0), 0);
+    let title = d.call("ui.get", json!({"target": {"id": "notes.title"}, "what": "value"})).unwrap();
+    assert_eq!(title["value"], "focus mex", "the typing reached the field");
 }

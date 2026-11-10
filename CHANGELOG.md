@@ -22,6 +22,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- `ashlar-app`: a focused text field no longer keeps an idle app drawing: egui's caret blink cost
+  about 6 frames a second for as long as the field had focus. The runtime blinks the caret itself,
+  one frame per phase change credited to the new `caret` wake reason, and leaves it solid after
+  10 s without input (`ashlar_app::caret`); input starts it again. 30 s idle with a focused field:
+  194 frames before, 21 after.
 - `ashlar-ui`: a value field's typed entry lost what was typed in the frame its editor opened (a
   value typed straight after the click, as the control channel does), and while its window
   did not have the operating system's focus (an app driven without being activated) the editor

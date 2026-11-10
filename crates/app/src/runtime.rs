@@ -2,7 +2,8 @@
 //! dialogs), the repaint policy, and the eframe glue.
 //!
 //! Repaints happen only for: input (egui/eframe), a store revision change made during a frame, a
-//! job's wake, a control request, toasts and egui animations, injected agent input, and pending
+//! job's wake, a control request, toasts and egui animations, injected agent input, the text
+//! caret's blink for a while after input ([`crate::caret`]), and pending
 //! work that asks for its own frame (settings and autosave wake hooks when a save is due, the
 //! autosave writer when a write finished). Every request goes through [`crate::wake`] with a
 //! reason (`app.stats` → `wakes`). An idle app, clean or dirty, requests nothing and draws no
@@ -30,6 +31,7 @@ use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
 use crate::app::{App, Error, SetupFn, Shared, ViewFn};
+use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::session::{Document, Effect, Session, now};
@@ -191,6 +193,7 @@ pub struct Runtime<D: Document> {
     shown_title: String,
     picker: Option<FilePicker>,
     passes: u64,
+    caret: Caret,
     /// Running in a real window (not the headless driver): OS menus may be installed.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
@@ -257,6 +260,7 @@ impl<D: Document> Runtime<D> {
             shown_title: String::new(),
             picker: None,
             passes: 0,
+            caret: Caret::default(),
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
@@ -493,6 +497,8 @@ impl<D: Document> Runtime<D> {
         self.passes = self.passes.saturating_add(1);
         // timed wakes not yet due when this frame ran (input came first) stay scheduled
         self.wakes.rearm(&ctx);
+        // before anything consumes this frame's input events
+        self.caret.begin(&ctx);
         let rev_before = self.session.revision();
         let (focused, active) = ctx.input(|i| (i.focused, !i.events.is_empty()));
         self.launch.telemetry.input(focused, active);
@@ -529,6 +535,7 @@ impl<D: Document> Runtime<D> {
         if self.session.revision() != rev_before {
             wake::wake(&ctx, Reason::DOCUMENT);
         }
+        self.caret.end(&ctx);
         if let Some(s) = started {
             let took = s.elapsed();
             self.stats.record(took);
