@@ -56,6 +56,8 @@ pub enum Role {
     Disclosure,
     /// A message that screen readers announce when it appears (a banner).
     Alert,
+    /// A hyperlink (`value` is its URL).
+    Link,
     #[default]
     Other,
 }

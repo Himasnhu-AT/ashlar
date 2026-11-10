@@ -9,6 +9,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
+  them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
+  the pointer on every row they wrap onto; tables size columns to their content and wrap them down
+  to their longest word, with a "N more rows" footer (`<id>.table.<n>.more`) past
+  `MAX_TABLE_ROWS` (500) instead of dropping rows silently; the `Markdown` builder adds
+  `.on_task(|index, checked| ..)` (clickable task checkboxes, `<id>.task.<n>`), `.find(query)`
+  (highlighted matches, counted in `MarkdownResponse::matches`; `find_ranges` gives the byte
+  ranges), `.streaming(true)` (an unclosed `**`, `*`, `~~`, `` ` `` or link at the end is drawn as
+  already styled, so markers never flash; also `parse_streaming`) and `.labels(&MarkdownLabels)`
+  for "Copy", "Copied", "code" and the table footer. `MarkdownStyle` gains `find_bg`.
 - `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
   modified marker and reset button, a filter that hides non-matching rows and empty sections,
   highlights matches and shows "No settings match", and `Field` with a required marker and an
