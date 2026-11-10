@@ -246,12 +246,17 @@ pub fn set_secret(text: &str, clear_after: Duration) -> Result<()> {
 // ------------------------------------------------------------------ HTML
 
 /// Elements dropped with everything inside them.
-const DROP_WITH_CONTENT: &[&str] =
-    &["script", "style", "iframe", "object", "embed", "noscript", "noembed", "noframes", "template", "frame", "frameset", "applet", "svg", "math", "xml"];
+const DROP_WITH_CONTENT: &[&str] = &[
+    "script", "style", "iframe", "object", "embed", "noscript", "noembed", "noframes", "template", "frame", "frameset", "applet", "svg", "math",
+    "xml",
+];
 /// Elements dropped, their content kept.
-const DROP_TAG: &[&str] = &["base", "link", "meta", "form", "input", "button", "textarea", "select", "option", "param", "source", "track", "portal", "html", "head", "body"];
+const DROP_TAG: &[&str] = &[
+    "base", "link", "meta", "form", "input", "button", "textarea", "select", "option", "param", "source", "track", "portal", "html", "head", "body",
+];
 /// Attributes holding a URL.
-const URL_ATTRS: &[&str] = &["href", "src", "xlink:href", "action", "formaction", "background", "poster", "cite", "longdesc", "lowsrc", "dynsrc", "data", "ping"];
+const URL_ATTRS: &[&str] =
+    &["href", "src", "xlink:href", "action", "formaction", "background", "poster", "cite", "longdesc", "lowsrc", "dynsrc", "data", "ping"];
 
 /// Make pasted HTML safe to show or keep: drops comments, scripts, styles, frames and embedded
 /// objects (with their content), form controls, event attributes (`on…`), `srcdoc`/`srcset`,
@@ -948,7 +953,8 @@ mod tests {
         assert!(matches!(write(&mut m, &many), Err(NativeError::Invalid(_))));
         assert_eq!(m.content, Rich::default(), "nothing was written");
         // what another app put there is bounded on read
-        m.content = Rich { text: "ok".into(), png: Some(b"not a png".to_vec()), files: vec!["rel".into(), std::env::temp_dir()], html: Some("  ".into()) };
+        m.content =
+            Rich { text: "ok".into(), png: Some(b"not a png".to_vec()), files: vec!["rel".into(), std::env::temp_dir()], html: Some("  ".into()) };
         let r = read(&mut m).unwrap();
         assert_eq!((r.png, r.files, r.html), (None, vec![std::env::temp_dir()], None));
     }
@@ -988,12 +994,18 @@ mod tests {
             (r#"<a href="javascript&colon;x">x</a>"#, "<a>x</a>"),
             (r#"<a href="https://e.com/?q=a&b" title='say "hi"'>x</a>"#, r#"<a href="https://e.com/?q=a&b" title="say &quot;hi&quot;">x</a>"#),
             (r#"<a href="docs/a.html">x</a>"#, r#"<a href="docs/a.html">x</a>"#),
-            (r#"<img src="data:image/png;base64,AA"><img src="data:image/svg+xml,x"><img src=data:text/html,x>"#, r#"<img src="data:image/png;base64,AA"><img><img>"#),
+            (
+                r#"<img src="data:image/png;base64,AA"><img src="data:image/svg+xml,x"><img src=data:text/html,x>"#,
+                r#"<img src="data:image/png;base64,AA"><img><img>"#,
+            ),
             (r#"<a href="data:image/png;base64,AA">x</a>"#, "<a>x</a>"),
             ("<iframe src=x>inside</iframe><object>o</object>k", "k"),
             ("<!-- <script>x</script> -->c", "c"),
             ("<!DOCTYPE html><html><body>t</body></html>", "t"),
-            (r#"<span style="color:red">r</span><span style="background:url(javascript:x)">s</span>"#, r#"<span style="color:red">r</span><span>s</span>"#),
+            (
+                r#"<span style="color:red">r</span><span style="background:url(javascript:x)">s</span>"#,
+                r#"<span style="color:red">r</span><span>s</span>"#,
+            ),
             ("<div srcdoc=x srcset=y>d</div>", "<div>d</div>"),
             ("a < b && c > d", "a &lt; b && c > d"),
             ("<br/><br />", "<br /><br />"),

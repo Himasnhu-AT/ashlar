@@ -73,7 +73,11 @@ pub enum State {
 pub enum Event {
     /// The OS asks to end. `dirty`: the document has unsaved changes. `can_wait`: the OS waits
     /// for a dialog ([`CAN_WAIT`]).
-    Requested { kind: EndKind, dirty: bool, can_wait: bool },
+    Requested {
+        kind: EndKind,
+        dirty: bool,
+        can_wait: bool,
+    },
     /// Answers to the question.
     Save,
     Discard,
