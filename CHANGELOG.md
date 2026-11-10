@@ -56,6 +56,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar_ui::controls`: button, switch, segmented and radio hover and press fills ease over about
+  0.1 s, like egui's own widgets (`tokens::state_color`, `Tokens::interact_fill_animated`); they
+  change at once when egui's `animation_time` is 0, which reduced motion sets. Visual regression
+  tests now run with reduced motion.
 - `ashlar_ui::dialog`: on open the backdrop fades in and the panel fades in while growing from
   97 %; when the app stops showing a dialog, its last frame fades out a little faster without
   taking input. No growing under reduced motion; hit testing uses the resting layout.

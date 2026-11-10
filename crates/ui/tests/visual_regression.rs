@@ -75,6 +75,8 @@ fn capture(
         Probe::default(),
     );
     h.ctx.set_fonts(FontDefinitions::empty());
+    // deterministic snapshots: reduced motion, and egui's own animations off
+    ashlar_ui::motion::set_prefs(&h.ctx, ashlar_motion::MotionPrefs::REDUCED);
     h.ctx.all_styles_mut(|s| {
         s.animation_time = 0.0;
         s.visuals.text_cursor.blink = false;

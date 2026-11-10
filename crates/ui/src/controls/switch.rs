@@ -81,6 +81,7 @@ impl<'a> Switch<'a> {
             let pressed = enabled && response.is_pointer_button_down_on();
             let hovered = enabled && response.hovered();
             let (fill, stroke, knob) = colors(&t, on, hovered, pressed);
+            let fill = crate::tokens::state_color(ui.ctx(), response.id, fill);
             let radius = CornerRadius::same((th / 2.0).round().clamp(0.0, 255.0) as u8);
             let painter = ui.painter();
             painter.rect(track, radius, fill, stroke, StrokeKind::Inside);

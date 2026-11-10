@@ -451,6 +451,11 @@ impl Tokens {
         }
     }
 
+    /// [`interact_fill`](Tokens::interact_fill) eased between states with [`state_color`].
+    pub fn interact_fill_animated(&self, ctx: &egui::Context, response: &egui::Response) -> Color32 {
+        state_color(ctx, response.id, self.interact_fill(response))
+    }
+
     /// egui `Visuals` built from these tokens.
     pub fn visuals(&self) -> egui::Visuals {
         let mut v = if self.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -506,6 +511,23 @@ impl Tokens {
         style.text_styles.insert(TextStyle::Monospace, FontId::new(t.mono, FontFamily::Monospace));
         style.visuals = self.visuals();
     }
+}
+
+/// A hover or press colour for the widget `id`, eased toward `target` over about 0.1 s (the
+/// instant spring), like egui's own widgets. Like them it follows egui's `animation_time`: at 0
+/// (reduced motion sets it, and snapshot tests do) the colour changes at once. Paint only.
+pub fn state_color(ctx: &egui::Context, id: egui::Id, target: Color32) -> Color32 {
+    let id = id.with("ashlar_ui::state_color");
+    if ctx.global_style().animation_time <= 0.0 {
+        crate::motion::set(ctx, id, to_motion_rgba(target));
+        return target;
+    }
+    crate::motion::color(ctx, id, target, motion_tokens::INSTANT.enter)
+}
+
+fn to_motion_rgba(c: Color32) -> Rgba {
+    let [r, g, b, a] = egui::Rgba::from(c).to_rgba_unmultiplied();
+    Rgba::new(r, g, b, a)
 }
 
 /// WCAG 2 contrast ratio of `fg` on `bg` (1..=21); a translucent `fg` is composited over `bg`.
@@ -891,5 +913,39 @@ mod tests {
         assert_eq!(thick.window_stroke.width, 2.0);
         assert_eq!(thick.text_cursor.stroke.width, 3.0);
         assert!(Tokens::light().elevation.popup.color.a() < t.elevation.popup.color.a());
+    }
+    #[test]
+    fn state_color_eases_settles_and_snaps_without_animation_time() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("button");
+        let requests = |ctx: &egui::Context| crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION);
+        let pass = |t: f64, target: Color32| {
+            let input = egui::RawInput { time: Some(t), predicted_dt: 1.0 / 60.0, ..Default::default() };
+            let mut out = Color32::TRANSPARENT;
+            ctx.run_ui(input, |ui| out = state_color(ui.ctx(), id, target)).textures_delta.clear();
+            out
+        };
+        let (rest, hover) = (Color32::from_rgb(30, 30, 30), Color32::from_rgb(90, 90, 90));
+        assert_eq!(pass(0.0, rest), rest);
+        assert_eq!(requests(&ctx), 0);
+        pass(1.0 / 60.0, hover);
+        let mid = pass(2.0 / 60.0, hover);
+        assert!(mid.r() > rest.r() && mid.r() < hover.r(), "{mid:?}");
+        let mut t = 2.0 / 60.0;
+        let mut last = mid;
+        for _ in 0..20 {
+            t += 1.0 / 60.0;
+            last = pass(t, hover);
+        }
+        assert_eq!(last, hover);
+        let flat = requests(&ctx);
+        for _ in 0..100 {
+            t += 1.0 / 60.0;
+            pass(t, hover);
+        }
+        assert_eq!(requests(&ctx), flat);
+        // egui animations off (reduced motion, snapshot tests): at once
+        crate::motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::REDUCED);
+        assert_eq!(pass(t + 1.0 / 60.0, rest), rest);
     }
 }
