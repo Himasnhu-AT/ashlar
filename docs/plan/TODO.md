@@ -12,7 +12,7 @@ a task's state.
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | done (9744596) |
 | IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
-| IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
+| IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | done (wt/tel) |
 | IMP-0.8 | `ashlar-syntax` `time_is_linear_in_input_size` failed once under machine load (passes alone): make it robust like IMP-0.4 | done (3956c2c) |
 | IMP-0.9 | `perf_warn` Driver scroll test passes on one clean run out of three (load): make it robust without retries | todo |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
