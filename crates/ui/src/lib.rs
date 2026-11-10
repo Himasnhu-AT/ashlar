@@ -40,6 +40,7 @@ pub mod layout;
 pub mod list;
 pub mod markdown;
 pub mod motion;
+pub mod motion_gate;
 pub mod printing;
 pub mod search;
 pub mod selection;
