@@ -3,6 +3,30 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/notify and wt/perfwarn merged (CI green)
+
+- **IMP-6.6:** `Notification { id, silent, info }`, `notify::show`, `remove`, `on_click`,
+  `set_app_identity`. Showing a notification with an existing id replaces it.
+  - macOS: a delegate shows banners while the app is in front and reports clicks, under
+    `catch_unwind`.
+  - Windows: toasts, with the app id registered for unpackaged apps, escaped XML and hashed tags.
+    Compile-checked for x86_64-pc-windows-msvc only.
+  - Linux: the `desktop-entry` hint and `ActionInvoked` clicks.
+  - New FFI modules are on the ADR 0001 list and in the deny-panics allow list.
+  - **Changed:** macOS notifications play the default sound unless `silent` is set.
+- **IMP-2.7:** `perf_warn` reports stalls (wall time far above thread CPU) and the same frame drawn
+  60 times on non-input wakes, in debug builds, once per site. `ASHLAR_FRAME_BUDGET_MS` works in any
+  build, at most one line per second. `ASHLAR_PERF_WARN=0` silences it.
+- **IMP-2.12:** `ASHLAR_FRAME_LOG` (or `Runtime::log_frames`) writes one JSON line per pass from a
+  writer thread, capped at 64 MiB.
+- **IMP-4.2:** `app.stats.process` gives `{footprint_bytes, peak_bytes, cpu_s, threads}`.
+  - `peak_bytes` is the highest footprint sampled, not the OS lifetime peak.
+  - `threads` is reported on Linux only (IMP-6.18).
+- The perf_warn Driver scroll test passes on one clean run out of three because of machine load
+  (IMP-0.9).
+- The syntax timing test also failed once under load (IMP-0.8). wt-flakes is fixing IMP-0.8 and
+  IMP-1.10.
+
 ## 2026-11-10: wt/chat merged
 
 - **IMP-5.7:** `chat::{Transcript, Message, ToolCard, Composer, PopupList}`. It is UI over plain data

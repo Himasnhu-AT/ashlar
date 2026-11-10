@@ -13,6 +13,8 @@ a task's state.
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | done (9744596) |
 | IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
 | IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
+| IMP-0.8 | `ashlar-syntax` `time_is_linear_in_input_size` failed once under machine load (passes alone): make it robust like IMP-0.4 | todo |
+| IMP-0.9 | `perf_warn` Driver scroll test passes on one clean run out of three (load): make it robust without retries | todo |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
@@ -38,12 +40,12 @@ a task's state.
 | IMP-2.4 | Galley cache hot path | done (342ab80) |
 | IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
-| IMP-2.7 | Debug-only perf warnings | doing (wt-perfwarn) |
+| IMP-2.7 | Debug-only perf warnings | done (wt/perfwarn) |
 | IMP-2.8 | Non-virtualized content cost | done (bfcafc7) |
 | IMP-2.9 | Binary size | done (c8e3e97) |
 | IMP-2.10 | Idle memory | done (wt/launch, 4356a62) |
 | IMP-2.11 | Launch time | dropped (eframe 0.36 already creates the window hidden until the first paint) |
-| IMP-2.12 | Per-frame JSON log | doing (wt-perfwarn) |
+| IMP-2.12 | Per-frame JSON log | done (wt/perfwarn) |
 | IMP-2.13 | Telemetry incident rules | todo |
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
@@ -68,7 +70,7 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-4.1 | Fix `trace` with `--port`/`--app` | done (5ef4d81) |
-| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (MCP tools done 550ce99; process numbers: wt-perfwarn) |
+| IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | done (550ce99, wt/perfwarn) |
 | IMP-4.3 | Control-protocol doc drift | done (1084a69) |
 | IMP-4.4 | Headless wgpu renderer for `Driver` | done (c2d7270) |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | done (3669d42) |
@@ -107,12 +109,13 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
+| IMP-6.18 | Native follow-ups: OS peak footprint and thread count for `app.stats` (macOS/Windows), a monitor list before the window exists so restored placement is fully checked at launch | todo |
 | IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | done (b090f59) |
 | IMP-6.3 | OS preference watch | done (2089b8c, with IMP-3.3) |
 | IMP-6.4 | Window placement and viewport hook | doing (wt-window) |
 | IMP-6.5 | Parented, non-blocking file dialogs | doing (wt-window) |
-| IMP-6.6 | Notifications | doing (wt-notify) |
+| IMP-6.6 | Notifications | done (77beeae; Windows compile-checked only) |
 | IMP-6.7 | Dock Quit, logout and shutdown | todo |
 | IMP-6.8 | Web target gate | doing (gate and warnings done 766bdf8; web example and DOM error todo) |
 | IMP-6.9 | Honest launch timing and ready signal | done (wt/launch, 4356a62) |
