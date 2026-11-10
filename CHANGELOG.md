@@ -124,6 +124,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Fixed
 
+- Telemetry: a run whose shutdown wait ran out no longer takes back its own unsent session folder (and
+  other leftover ones) as its worker finishes, so a courier delivers them instead of seeing them as in
+  use until the process exits.
 - `native-menu`: picks in the OS menu bar no longer run while a dialog (such as "Save changes?") or
   the command palette is open.
 - ⌘Z / Ctrl+Z in a text field undoes the text, not the document. Text-editing shortcuts (undo,
