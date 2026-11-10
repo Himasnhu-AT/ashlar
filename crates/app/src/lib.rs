@@ -24,6 +24,7 @@
 mod app;
 mod builtins;
 pub mod caret;
+mod clock;
 mod control;
 pub mod driver;
 #[cfg(not(target_arch = "wasm32"))]

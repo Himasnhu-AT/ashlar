@@ -205,6 +205,7 @@ pub(crate) const VERBS: &[(&str, &str, &str)] = &[
     ("menu", "menu [id]", "print the menu tree, or invoke the item `id`"),
     ("logs", "logs [--lines N] [--level LEVEL]", "the app's recent log lines"),
     ("stats", "stats [--reset]", "the app's frame and job statistics"),
+    ("clock", "clock [pause | step <ms> | resume]", "pause, step or resume the app's animation clock (input still runs while paused)"),
     ("devtools", "devtools [open|close|toggle|state]", "the in-app inspector"),
     ("call", "call <method> [json|-]", "any control method, raw"),
     ("batch", "batch <file|-> [--verbose]", "run a script of these commands and `assert` lines; stops at the first failure"),

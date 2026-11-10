@@ -299,6 +299,19 @@ fn app_table() -> Vec<(&'static str, &'static str, &'static str, &'static str, V
             ),
             Access::Read,
         ),
+        (
+            "ui_clock",
+            ashlar_control::APP_CLOCK,
+            "Clock",
+            "Pause, step or resume the time the app's frames see, to look at an animation at an exact moment. `pause` freezes it; `step_ms` (pausing first) runs one frame that much later; `resume` goes on from the frozen time without a jump; no argument only reads. Input still runs frames while paused, at the frozen time (two clicks then count as a double click). Replies {paused, time} (seconds).",
+            obj(
+                json!({"pause": {"type": "boolean", "description": "Freeze time at the current frame's"},
+                    "step_ms": {"type": "number", "exclusiveMinimum": 0, "maximum": ashlar_control::MAX_STEP_MS, "description": "Pause if running, then run one frame this many ms later"},
+                    "resume": {"type": "boolean", "description": "Let time run again from the frozen value"}}),
+                &[],
+            ),
+            Access::Any,
+        ),
     ]
 }
 
@@ -361,7 +374,7 @@ pub fn snapshot_result(r: Reply, with_elements: bool) -> ToolResult {
     }
 }
 
-/// The UI tools (and `app_stats`/`app_logs`) for the methods a backend answers: a tool is listed
+/// The UI tools (and `app_stats`/`app_logs`/`ui_clock`) for the methods a backend answers: a tool is listed
 /// only when `app.version` reports its method.
 pub fn ui_tools(methods: &[String]) -> Vec<Value> {
     method_table().into_iter().filter(|t| methods.iter().any(|m| m == t.1)).map(|(n, _, title, d, s, ro)| tool(n, title, d, s, ro)).collect()
@@ -379,7 +392,7 @@ pub fn custom_tool(name: &str, title: &str, description: &str, schema: Value, ac
 }
 
 /// The control method behind a passthrough tool name (`ui_*`, `screenshot`, `app_stats`,
-/// `app_logs`).
+/// `app_logs`, `ui_clock`).
 pub fn ui_method(tool: &str) -> Option<&'static str> {
     method_table().into_iter().find(|t| t.0 == tool).map(|t| t.1)
 }
@@ -480,6 +493,7 @@ mod tests {
         }
         assert_eq!(ui_tools(&[]).len(), 0);
         assert_eq!(ui_tools(&["app.stats".into()]).len(), 1);
+        assert_eq!(ui_tools(&["app.clock".into()]).len(), 1);
         assert_eq!(ui_tools(&["ui.screenshot".into()]).len(), 1);
         // Every debugger method has a tool (devtools.* are for humans, not agents).
         for m in ashlar_control::DEBUG_METHODS.iter().filter(|m| m.starts_with("ui.")) {
