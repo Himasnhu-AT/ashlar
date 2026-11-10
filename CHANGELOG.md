@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `Cx` polish (IMP-3.8): `cx.tokens()`; `cx.motion(id, target, curve)`, which animates unless
+  the document just changed by the user's own hand; `Origin` (`User`, `Drag`, `Undo`, `Agent`,
+  `Job`) recorded per change (`Session::origin`, `Session::with_origin`, `Cx::origin`), with control
+  requests marked `Agent` and job applies `Job`; `ashlar_ui::layout::{row, column, inset}` taking a
+  `tokens::Space`, `SpaceScale::get`; `Radii::{sm, md, lg}()` as `f32`.
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down

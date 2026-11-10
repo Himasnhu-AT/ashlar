@@ -36,7 +36,7 @@ use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
 use crate::open::Inbox;
-use crate::session::{Document, Effect, Session, now};
+use crate::session::{Document, Effect, Origin, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
 use crate::window_state::{self, WindowState};
@@ -103,9 +103,39 @@ pub struct Cx<'a, D: Document> {
     queued: &'a mut Vec<(String, Value)>,
     dropped: &'a [PathBuf],
     ctx: egui::Context,
+    /// Who changed the document since the view last drew (`None`: unchanged).
+    origin: Option<Origin>,
 }
 
 impl<D: Document> Cx<'_, D> {
+    /// The design tokens of the current theme (`cx.tokens().space.md`).
+    pub fn tokens(&self) -> tokens::Tokens {
+        tokens::current(&self.ctx)
+    }
+
+    /// Who changed the document since the view last drew; `None` when it did not change (or
+    /// changed without an edit: opened, replaced).
+    pub fn origin(&self) -> Option<Origin> {
+        self.origin
+    }
+
+    /// The value to draw for `id`, moving toward `target` along `curve`
+    /// ([`ashlar_ui::motion::value`], [`Class::Other`](ashlar_motion::Class::Other)). When the
+    /// document changed by the user's own hand since the last frame ([`Origin::animates`] is
+    /// false) it jumps to `target` instead ([`ashlar_ui::motion::set`]): typing and drags show at
+    /// once, while undo, agent and job changes animate.
+    pub fn motion<T>(&self, id: impl egui::AsId, target: T, curve: impl Into<ashlar_motion::Curve>) -> T
+    where
+        T: ashlar_motion::Animatable + Send + Sync + 'static,
+    {
+        let id = egui::Id::new(id);
+        if self.origin.is_some_and(|o| !o.animates()) {
+            ashlar_ui::motion::set(&self.ctx, id, target);
+            return target;
+        }
+        ashlar_ui::motion::value(&self.ctx, id, target, ashlar_motion::Class::Other, curve)
+    }
+
     /// The current document.
     pub fn doc(&self) -> &D {
         self.session.doc()
@@ -211,6 +241,8 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
+    /// The revision the view last drew ([`Cx::origin`]).
+    view_rev: Option<Revision>,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -320,6 +352,7 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
+            view_rev: None,
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -584,7 +617,10 @@ impl<D: Document> Runtime<D> {
         self.os_prefs.poll(ctx);
         self.serve_control(ctx);
         self.show_pending_pick(ctx, None);
-        for rec in self.jobs.drain_ready(&mut self.session) {
+        let outer = self.session.swap_source(Some(Origin::Job));
+        let done = self.jobs.drain_ready(&mut self.session);
+        self.session.swap_source(outer);
+        for rec in done {
             if rec.status == ashlar_jobs::Status::Failed {
                 self.toasts.error(format!("{}: {}", rec.label, rec.message));
             }
@@ -838,14 +874,17 @@ impl<D: Document> Runtime<D> {
     }
 
     fn draw_view(&mut self, ui: &mut egui::Ui) {
-        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, .. } = self;
+        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, view_rev, .. } = self;
+        let rev = session.revision();
+        let origin = if *view_rev == Some(rev) { None } else { session.origin() };
+        *view_rev = Some(rev);
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(err) = view_error.as_deref() {
                 ui.centered_and_justified(|ui| ui.label(format!("This view stopped after an internal error:\n{err}")));
                 return;
             }
             let Some(view) = view.as_mut() else { return };
-            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone() };
+            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone(), origin };
             let r = catch_unwind(AssertUnwindSafe(|| view(ui, &mut cx)));
             if let Err(p) = r {
                 let msg = crash::last_panic().map_or_else(|| panic_text(p.as_ref()), |r| format!("{} ({})", r.message, r.location));
@@ -1498,8 +1537,10 @@ impl<D: Document> Runtime<D> {
         let info = self.info();
         let mut queue = UiQueue { scenes: !self.shared.scenes.is_empty(), ..UiQueue::default() };
         for req in reqs {
+            let outer = self.session.swap_source(Some(Origin::Agent));
             let mut bound = self.shared.registry.bind(&mut self.session);
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
+            self.session.swap_source(outer);
             self.apply_effects(ctx);
         }
         for req in std::mem::take(&mut queue.pending) {

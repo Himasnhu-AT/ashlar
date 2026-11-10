@@ -57,7 +57,7 @@ pub use ashlar_native::single_instance::Forwarded;
 pub use driver::Driver;
 pub use renderer::Renderer;
 pub use runtime::{Cx, FilePicker, Pick, Runtime};
-pub use session::{Document, Effect, Session};
+pub use session::{Document, Effect, Origin, Session};
 pub use stats::{FrameStats, LaunchTimes, StatsSummary};
 
 /// Methods the windowed runtime answers on the control port besides the standard ones.

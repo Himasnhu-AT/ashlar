@@ -527,6 +527,35 @@ mod tests {
     }
 
     #[test]
+    fn the_view_sees_who_changed_the_document() {
+        use crate::session::Origin;
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<Option<Origin>>>> = Arc::default();
+        let log = Arc::clone(&seen);
+        let app = App::<i64>::new("drivertest", "0.0.0").view(move |_ui, cx| {
+            log.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(cx.origin());
+            let _ = cx.motion("x", *cx.doc() as f32, ashlar_motion::tokens::SNAP.enter);
+        });
+        let mut d = Driver::new(app.runtime());
+        let last = |d: &mut Driver<i64>| {
+            d.frame();
+            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last().copied().flatten()
+        };
+        assert_eq!(last(&mut d), None);
+        d.runtime.session_mut().edit("bump", |n| *n += 1);
+        assert_eq!(last(&mut d), Some(Origin::User));
+        assert_eq!(last(&mut d), None, "only the frame after a change reports it");
+        d.runtime.session_mut().edit_merged("drag", "k", |n| *n += 1);
+        assert_eq!(last(&mut d), Some(Origin::Drag));
+        let r = d.request("engine.execute", serde_json::json!({"command": "app.undo"}));
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(d.runtime.session().origin(), Some(Origin::Agent), "an agent's undo is the agent's change");
+        d.runtime.session_mut().undo();
+        assert_eq!(last(&mut d), Some(Origin::Undo));
+        assert!(Origin::Agent.animates() && Origin::Job.animates() && !Origin::User.animates());
+    }
+
+    #[test]
     fn native_undo_while_typing_stays_with_the_text_field() {
         let mut d = edited(true);
         assert!(d.ctx().egui_wants_keyboard_input(), "the text field has the keyboard");

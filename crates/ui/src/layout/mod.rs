@@ -4,14 +4,18 @@
 //!   turns a divider movement back into a new [`SplitSize`].
 //! - [`ResizeHandle`] is the divider widget: pointer, keyboard and AccessKit input all come out
 //!   as one per-frame delta; the caller decides what to do with it.
+//! - [`row`], [`column`] and [`inset`] space their contents with a space token
+//!   ([`Space`](crate::tokens::Space)) instead of a literal.
 //! - [`fit_toolbar`] decides which toolbar groups fit and which move into an overflow menu.
 
 mod geometry;
 mod resize;
+mod spacing;
 mod toolbar;
 
 pub use geometry::{SplitAxis, SplitLayout, SplitSize, split_rect};
 pub use resize::{ResizeHandle, ResizeHandleStyle, ResizeResponse};
+pub use spacing::{column, inset, row};
 pub use toolbar::{ToolbarFit, fit_toolbar};
 
 /// Largest coordinate or length these modules accept (points).
