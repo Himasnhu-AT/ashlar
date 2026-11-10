@@ -10,7 +10,7 @@ a task's state.
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
-| IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | doing (wt-wake) |
+| IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
@@ -35,14 +35,14 @@ a task's state.
 | IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
 | IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
-| IMP-2.8 | Non-virtualized content cost | todo |
+| IMP-2.8 | Non-virtualized content cost | doing (wt-rows) |
 | IMP-2.9 | Binary size | todo |
 | IMP-2.10 | Idle memory | todo |
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
-| IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | doing (wt-wake) |
-| IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | doing (wt-wake) |
+| IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
+| IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
 
 ## Phase 3: motion and theming
 | Id | Task | Status |

@@ -3,6 +3,23 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/wake merged (CI green)
+
+| Metric (release) | Before | After IMP-2.14 | After IMP-2.15 |
+|---|---|---|---|
+| `frames_per_command` | 3.20 | 2.23 | 1.26 |
+| `frames_per_key_command` | 3.00 | 3.00 | 3.00 |
+
+- **IMP-2.14:** `wake::repaint_now` asks egui for a repaint 1 ns away, so egui no longer adds its
+  second frame. Key commands stay at 3, because egui itself asks for a zero-delay repaint after any
+  frame with input (`input_state/mod.rs:655`).
+- **IMP-2.15:** `serve_control` no longer wakes after answering. The answering frame already draws
+  the change, and debugger requests ask for their own frames. The new test
+  `an_engine_command_is_drawn_by_the_frame_that_answers_it` covers this.
+- **IMP-0.4:** the edge test now checks init against under 250 ms of thread CPU and under 5 s of wall
+  time. Measured: at most 7.6 ms CPU and 125 ms wall in debug.
+- wt-rows started IMP-2.8.
+
 ## 2026-11-10: wt/uiperf, wt/controls, wt/menu merged (CI green)
 
 - **IMP-1.3, 2.3, 2.4, 2.6**, before → after (release; old and new binaries alternated on a loaded
