@@ -65,7 +65,9 @@ The server creates or updates the session record only for envelopes that carry a
 
 `session_end.errors` counts handled errors and panics the process survived. The panic that ends a `crashed` session is not included.
 
-`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms; slow includes frozen), `frozen` (over 700 ms) and `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket. Histograms merge by adding buckets.
+`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms, the 60 Hz frame budget; slow includes frozen), `frozen` (over 700 ms), `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket, and the optional `over_budget` (over 8.333 ms, `DISPLAY_BUDGET_US`, the 120 Hz frame budget; it includes slow). Histograms merge by adding buckets.
+
+`over_budget` was added within schema 1. Clients that predate it leave it out, and older servers ignore it. Because 8.333 ms is one of the bucket bounds, a reader counts it from the buckets when it is missing (`FrameStats::over_budget_frames`), and the server always counts it from the buckets it stores, so old and new clients report the same figure.
 
 ## Names
 

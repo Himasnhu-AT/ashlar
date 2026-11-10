@@ -61,6 +61,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   ring, the close target is a full control high, toasts past `max_visible` show as "+N more", and
   the words come from `ToastLabels` (English by default). `Toast` gained public fields, so code
   that builds one with a struct literal must add them (`Toast::new` is unchanged).
+- `ashlar-trace-proto`, `ashlar-trace`, `ashlar-trace-server`: telemetry counts frames over the
+  120 Hz budget. `DISPLAY_BUDGET_US` (8.333 ms, already a bucket bound) and the optional
+  `FrameStats::over_budget` are new within schema 1: older clients leave the field out, older
+  servers ignore it, and `FrameStats::over_budget_frames` counts it from the buckets when it is
+  missing. The SDK sends it and shows it in its local report; the server counts it from the
+  stored buckets (no new column) and shows "Over 120 Hz budget" on the performance page and
+  "Frames over 8.3 ms" on issue pages.
 - `ashlar-mcp`: `app_stats {reset?}` and `app_logs {limit?, level?}` tools over the runtime's
   `app.stats` and `app.logs`, listed only when the app reports those methods.
 - `ashlar-assistant`: `HistoryStore::offload_images` keeps only a chat's newest pictures in

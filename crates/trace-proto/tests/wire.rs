@@ -49,6 +49,7 @@ fn frame_stats_record_merge_and_quantiles() {
         stats.record(us);
     }
     assert_eq!((stats.count, stats.slow, stats.frozen, stats.max_us), (3, 1, 1, 710_000));
+    assert_eq!((stats.over_budget, stats.over_budget_frames()), (Some(2), 2));
     assert_eq!(stats.buckets.len(), FRAME_BUCKETS);
     assert_eq!(stats.quantile_us(0.5), Some(11_111));
     assert_eq!(stats.quantile_us(1.0), Some(710_000));
@@ -59,6 +60,48 @@ fn frame_stats_record_merge_and_quantiles() {
     merged.merge(&stats);
     assert_eq!(merged.count, 6);
     assert_eq!(merged.buckets.iter().sum::<u64>(), 6);
+    assert_eq!(merged.over_budget, Some(4));
+}
+
+#[test]
+fn display_budget_count_is_additive() {
+    // the 120 Hz budget is a bucket bound, so histograms without the count still give it exactly
+    assert!(FRAME_BUCKET_BOUNDS_US.contains(&DISPLAY_BUDGET_US));
+    const { assert!(DISPLAY_BUDGET_US < SLOW_FRAME_US) };
+    let mut stats = FrameStats::empty();
+    for us in [DISPLAY_BUDGET_US, DISPLAY_BUDGET_US + 1, 16_000, 20_000] {
+        stats.record(us);
+    }
+    assert_eq!((stats.over_budget, stats.frames_over(DISPLAY_BUDGET_US), stats.slow), (Some(3), 3, 1));
+
+    // an older sender leaves the field out: it reads as None and is counted from the buckets
+    let old = r#"{"count":3,"sum_us":724000,"max_us":710000,"slow":1,"frozen":1,"buckets":[0,0,1,0,0,1,0,0,0,0,0,0,0,1,0,0]}"#;
+    let mut from_old: FrameStats = serde_json::from_str(old).unwrap();
+    assert_eq!((from_old.over_budget, from_old.over_budget_frames()), (None, 2));
+    // ... and writing it back adds nothing an older reader has not seen
+    assert_eq!(serde_json::to_value(&from_old).unwrap(), serde_json::from_str::<serde_json::Value>(old).unwrap());
+    from_old.record(9_000);
+    assert_eq!(from_old.over_budget, Some(3));
+    let mut merged = FrameStats::default();
+    merged.merge(&serde_json::from_str(old).unwrap());
+    merged.merge(&stats);
+    assert_eq!(merged.over_budget, Some(5));
+
+    // an older reader (the fields before this one) still parses what a new sender writes
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldFrameStats {
+        count: u64,
+        sum_us: u64,
+        max_us: u32,
+        slow: u64,
+        frozen: u64,
+        buckets: Vec<u64>,
+    }
+    let new = serde_json::to_string(&stats).unwrap();
+    assert!(new.contains("\"over_budget\":3"), "{new}");
+    let parsed: OldFrameStats = serde_json::from_str(&new).unwrap();
+    assert_eq!(parsed.count, 4);
 }
 
 #[test]
@@ -84,10 +127,14 @@ fn frame_stats_arithmetic_saturates_instead_of_overflowing() {
     huge.sum_us = u64::MAX;
     huge.slow = u64::MAX;
     huge.frozen = u64::MAX;
+    huge.over_budget = Some(u64::MAX);
     huge.buckets = vec![u64::MAX; ashlar_trace_proto::FRAME_BUCKETS];
     let mut total = huge.clone();
     total.merge(&huge);
     assert_eq!((total.count, total.sum_us, total.slow, total.frozen), (u64::MAX, u64::MAX, u64::MAX, u64::MAX));
+    assert_eq!(total.over_budget, Some(u64::MAX));
+    huge.over_budget = None;
+    assert_eq!(huge.over_budget_frames(), u64::MAX, "counting the buckets saturates too");
     assert!(total.buckets.iter().all(|bucket| *bucket == u64::MAX));
     total.record(800_000);
     assert_eq!(total.count, u64::MAX);

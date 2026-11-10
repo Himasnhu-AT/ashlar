@@ -63,6 +63,7 @@ fn perf_rows(perf: &Perf) -> Vec<(&'static str, String)> {
         for (label, q) in [("Frame time p50", 0.50), ("Frame time p90", 0.90), ("Frame time p99", 0.99)] {
             rows.push((label, fmt::us_as_ms(frames.quantile_us(q).map(f64::from))));
         }
+        rows.push(("Frames over 8.3 ms", fmt::int(i64::try_from(frames.over_budget_frames()).unwrap_or(i64::MAX))));
         rows.push(("Slow frames", fmt::int(i64::try_from(frames.slow).unwrap_or(i64::MAX))));
         rows.push(("Frozen frames", fmt::int(i64::try_from(frames.frozen).unwrap_or(i64::MAX))));
     }

@@ -368,6 +368,8 @@ fn performance_percentiles_come_from_merged_histograms() {
     assert!(page.body.contains(&format!("<dt>Frame time p50</dt><dd class=\"num\">{}</dd>", ms(0.5))), "{}", page.body);
     assert!(page.body.contains(&format!("<dt>Frame time p90</dt><dd class=\"num\">{}</dd>", ms(0.9))));
     assert!(page.body.contains("<dt>Slow frames</dt><dd class=\"num\">15.00%</dd>"));
+    // not stored as a column: counted from the stored buckets
+    assert!(page.body.contains("<dt>Over 120 Hz budget</dt><dd class=\"num\">15.00%</dd>"));
     assert!(page.body.contains("<dt>Frozen frames</dt><dd class=\"num\">0.00%</dd>"));
     assert!(page.body.contains("250 ms"));
     assert!(page.body.contains("12.5%"));
