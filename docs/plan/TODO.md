@@ -103,7 +103,7 @@ a task's state.
 | IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo (tab indicator done in IMP-5.10) |
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |
 | IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | done (329a6bc) |
-| IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
+| IMP-5.16 | Image viewer, tuning panel, diagrams | dropped (deferred: low value for the cost) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | done (a3aff34) |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
 | IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
@@ -134,5 +134,5 @@ a task's state.
 ## Phase 7: later
 | Id | Task | Status |
 |---|---|---|
-| IMP-7.1 | Hot reload of views | todo (after phase 4) |
-| IMP-7.2 | Present latency options | todo (measure first) |
+| IMP-7.1 | Hot reload of views | dropped (deferred: large; revisit with the headless edit-to-pixel loop measured) |
+| IMP-7.2 | Present latency options | dropped (deferred: needs measurement on a 120 Hz display) |
