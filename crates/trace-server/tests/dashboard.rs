@@ -6,8 +6,8 @@ mod common;
 use std::collections::{BTreeMap, HashMap};
 
 use ashlar_trace_proto::{
-    AppInfo, Breadcrumb, Catalog, CatalogEvent, Crash, CrashKind, Device, Drops, Envelope, Event, FrameStats, Item, ItemBody, Perf, ProcessKind,
-    SessionEnd, SessionStart, SessionStatus, SessionTotals,
+    AppInfo, Breadcrumb, Catalog, CatalogEvent, Crash, CrashKind, Device, Drops, Envelope, Event, FrameStats, Incident, IncidentRule, Item, ItemBody,
+    Perf, ProcessKind, SessionEnd, SessionStart, SessionStatus, SessionTotals,
 };
 use ashlar_trace_server::dashboard::auth::sha256_hex;
 use ashlar_trace_server::dashboard::view::enc;
@@ -894,7 +894,18 @@ fn the_issue_page_shows_every_detail_a_crash_carries() {
         exit_code: Some(3),
         signal: Some(11),
         context: Some("save".into()),
-        perf: Some(Perf { window_s: 5, frames: Some(frames), cpu_pct: Some(37.5), rss_mb: Some(512), rss_peak_mb: Some(640), ..Perf::default() }),
+        perf: Some(Perf {
+            window_s: 5,
+            frames: Some(frames),
+            cpu_pct: Some(37.5),
+            rss_mb: Some(512),
+            rss_peak_mb: Some(640),
+            incidents: vec![
+                Incident { rule: IncidentRule::Stall, at_ms: 4_000, count: 2, value: 400_000 },
+                Incident { rule: IncidentRule::MemoryGrowth, at_ms: 300_000, count: 1, value: 80 },
+            ],
+            ..Perf::default()
+        }),
         ..Crash::default()
     };
     let mut envelope = common::envelope("i1", "s1", vec![Item { id: "c1".into(), ts: t - 1000, body: ItemBody::Crash(crash) }]);
@@ -930,6 +941,10 @@ fn the_issue_page_shows_every_detail_a_crash_carries() {
         "37.5%",
         "Peak memory",
         "640 MB",
+        "Stalls",
+        "2 × (longest",
+        "Memory growth",
+        "+80 MiB",
     ] {
         assert!(page.body.contains(expected), "the issue page lacks {expected:?}");
     }

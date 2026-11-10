@@ -27,6 +27,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   `Job`) recorded per change (`Session::origin`, `Session::with_origin`, `Cx::origin`), with control
   requests marked `Agent` and job applies `Job`; `ashlar_ui::layout::{row, column, inset}` taking a
   `tokens::Space`, `SpaceScale::get`; `Radii::{sm, md, lg}()` as `f32`.
+- Telemetry incident rules (IMP-2.13): `ashlar-trace` flags 3 frames over the 120 Hz budget within
+  1 s (`long_frames`), a frame of 250 ms or more (`stall`) and 5 rising per-minute memory floors
+  that grow by at least 64 MiB and 20% (`memory_growth`), once per rule and window, in the new
+  optional `perf.incidents` list (`Incident`, `IncidentRule` in `ashlar-trace-proto`; older
+  readers ignore it). The trace server counts them as `incidents.<rule>` metrics and lists them on
+  a crash's performance panel.
 - `ashlar_ui::markdown` v2 (IMP-5.4): links take keyboard focus (Tab, then Enter or Space opens
   them) with a focus ring, have the AccessKit `Link` role and automation role `Link` (new), and answer
   the pointer on every row they wrap onto; tables size columns to their content and wrap them down

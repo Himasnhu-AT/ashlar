@@ -14,6 +14,7 @@ use crate::sink::Sink;
 
 mod crash;
 mod hang;
+mod incident;
 mod logs;
 mod perf;
 mod report;
@@ -52,6 +53,8 @@ pub(crate) struct Shared {
     pub epoch: Instant,
     pub perf: Mutex<perf::Window>,
     pub frames: perf::Frames,
+    /// Locked only for frames over the display budget and for memory samples.
+    pub incidents: Mutex<incident::Rules>,
     pub first_frame_seen: AtomicBool,
     pub sampler: sys::Sampler,
     pub registry: rt::Registry,
@@ -80,6 +83,7 @@ impl Shared {
             epoch,
             perf: Mutex::new(perf::Window::new(epoch)),
             frames: perf::Frames::default(),
+            incidents: Mutex::new(incident::Rules::new(epoch)),
             first_frame_seen: AtomicBool::new(false),
             sampler: sys::Sampler::new(),
             registry: rt::Registry::default(),
