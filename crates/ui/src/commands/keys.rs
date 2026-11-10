@@ -167,9 +167,24 @@ pub fn chord_to_egui(chord: &Chord) -> Option<KeyboardShortcut> {
 }
 
 /// Whether the chord is safe to run while a text field has the keyboard (it has ⌘/Ctrl, or is a
-/// function key): a plain `V` or `Space` belongs to the text field.
+/// function key): a plain `V` or `Space` belongs to the text field, and so do the text-editing
+/// chords ([`text_editing_chord`]: ⌘Z is the field's undo, not the document's).
 pub fn works_while_typing(chord: &Chord) -> bool {
-    chord.mods.command || chord.mods.ctrl || matches!(chord.key, Key::F(_))
+    (chord.mods.command || chord.mods.ctrl || matches!(chord.key, Key::F(_))) && !text_editing_chord(chord)
+}
+
+/// The chords a text field handles itself: undo (`Mod+Z`), redo (`Mod+Shift+Z`, `Mod+Y`), select
+/// all, copy, cut and paste (`Mod+A/C/X/V`).
+pub fn text_editing_chord(chord: &Chord) -> bool {
+    let m = chord.mods;
+    if !m.command || m.ctrl || m.alt {
+        return false;
+    }
+    match chord.key {
+        Key::Char('Z') => true,
+        Key::Char('Y' | 'A' | 'C' | 'X' | 'V') => !m.shift,
+        _ => false,
+    }
 }
 
 /// Find this frame's key press bound in `keymap`, consume it and return the command id.
@@ -270,7 +285,13 @@ mod tests {
         assert_eq!(chord_from_egui(EKey::S, Modifiers::CTRL, Platform::Mac).unwrap(), Chord::parse("Ctrl+S").unwrap());
         let ks = chord_to_egui(&Chord::parse("Mod+Shift+Z").unwrap()).unwrap();
         assert_eq!(ks, KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, EKey::Z));
-        assert!(works_while_typing(&Chord::parse("Mod+Z").unwrap()));
+        assert!(works_while_typing(&Chord::parse("Mod+S").unwrap()));
+        for text in ["Mod+Z", "Mod+Shift+Z", "Mod+Y", "Mod+A", "Mod+C", "Mod+X", "Mod+V"] {
+            let c = Chord::parse(text).unwrap();
+            assert!(text_editing_chord(&c) && !works_while_typing(&c), "{text}");
+        }
+        assert!(works_while_typing(&Chord::parse("Mod+Shift+A").unwrap()));
+        assert!(works_while_typing(&Chord::parse("Mod+Alt+Z").unwrap()));
         assert!(works_while_typing(&Chord::parse("F5").unwrap()));
         assert!(!works_while_typing(&Chord::parse("Space").unwrap()));
     }

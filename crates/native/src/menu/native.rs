@@ -153,6 +153,11 @@ impl NativeMenuBar {
     }
 
     /// Show the bar in a window (Windows). A no-op on macOS, whose menu bar is app-wide.
+    ///
+    /// On Windows, muda's key equivalents fire only when the event loop passes messages through
+    /// `TranslateAcceleratorW`, which this crate does not hook. Without it the keys reach the
+    /// window as ordinary key presses, so the app's keymap runs them (once, under its typing
+    /// rule) and the menu shows the shortcut text.
     pub fn attach_window(&self, window: &impl raw_window_handle::HasWindowHandle) -> Result<()> {
         #[cfg(target_os = "windows")]
         {

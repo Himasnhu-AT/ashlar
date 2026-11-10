@@ -143,6 +143,14 @@ impl<D: Document> Driver<D> {
         self.close_requested = true;
     }
 
+    /// Pick `id` in the OS menu bar, as the native menu (feature `native-menu`) reports a click or
+    /// a key equivalent. It runs in the next frame's [`Runtime::logic`] under the same rules:
+    /// ignored while a dialog is open, or while a text field has the keyboard and the command's
+    /// shortcut belongs to the field.
+    pub fn native_menu_pick(&mut self, id: &str) {
+        self.runtime.push_native_pick(id);
+    }
+
     /// Run one frame now, whether or not one was asked for.
     pub fn frame(&mut self) -> egui::FullOutput {
         if self.hidden {
@@ -330,6 +338,50 @@ mod tests {
 
     fn driver() -> Driver<i64> {
         Driver::new(App::<i64>::new("drivertest", "0.0.0").view(|ui, _cx| drop(ui.label("hello"))).runtime())
+    }
+
+    /// A driver whose view is a focused text field when `typing`, with one undoable edit made.
+    fn edited(typing: bool) -> Driver<i64> {
+        let app = App::<i64>::new("drivertest", "0.0.0").view(move |ui, _cx| {
+            if typing {
+                let mut text = String::new();
+                ui.text_edit_singleline(&mut text).request_focus();
+            }
+        });
+        let mut d = Driver::new(app.runtime());
+        d.frame();
+        d.runtime.session_mut().edit("bump", |n| *n += 1);
+        d.frame();
+        assert!(d.runtime.session().can_undo());
+        d
+    }
+
+    #[test]
+    fn native_undo_while_typing_stays_with_the_text_field() {
+        let mut d = edited(true);
+        assert!(d.ctx().egui_wants_keyboard_input(), "the text field has the keyboard");
+        d.native_menu_pick("app.undo");
+        d.frame();
+        assert_eq!(*d.runtime.session().doc(), 1, "⌘Z while typing never reaches app.undo");
+
+        let mut d = edited(false);
+        d.native_menu_pick("app.undo");
+        d.frame();
+        assert_eq!(*d.runtime.session().doc(), 0, "without a text field the pick undoes");
+    }
+
+    #[test]
+    fn native_picks_wait_for_no_dialog() {
+        let mut d = edited(false);
+        // the document is dirty, so New asks first
+        d.native_menu_pick("file.new");
+        d.frame();
+        assert!(d.runtime.modal_open(), "the confirm dialog is up");
+        d.native_menu_pick("app.undo");
+        d.frame();
+        d.frame();
+        assert_eq!(*d.runtime.session().doc(), 1, "a pick under the confirm dialog does not run");
+        assert!(d.runtime.modal_open());
     }
 
     #[test]
