@@ -23,7 +23,31 @@ Apple M5 Pro, macOS, release builds through memgate. Raw logs were kept in the s
 | `edit_with_subscriber` | 550 ns |
 | `undo_redo` / `undo_redo_10k_steps` | 14 / 19 ns |
 
-### Head to head
+### Head to head, measured (2026-11-10, after the improvement work)
+
+Both frameworks were measured on this Mac in the same session, through the same tools: a launcher
+that times spawn → window, `ps`/`vmmap` for idle cost, and each framework's own scroll benchmark for
+the same 1,000-row list workload (760×800 pt at 2×, 120 warm-up frames, 480 wheel steps at 120 Hz).
+The Mac was loaded by other builds, so build and launch times are upper bounds; sizes, memory and
+dependency counts are not affected. ashlar was measured at `imp` 30e3264.
+
+| Metric | ashlar | reference framework | Better |
+|---|---|---|---|
+| Clean release build, hello (loaded Mac) | 133 s | 133 s | tie |
+| Incremental rebuild (touch main.rs) | 5.3 s | 14.7–17.7 s | ashlar (~3×) |
+| Stripped hello binary | 14.0 MB; **9.2 MB** with `--profile release-small` | **21.3 MB** (its published goal is ≤ 5 MiB) | ashlar |
+| Launch → window, warm median of 8 | 106.5 ms | 98 ms | reference (~8 %) |
+| Launch → window, cold first run | 111 ms | 1,360 ms | ashlar |
+| Idle CPU over 10 s | 0 % | 0 % | tie |
+| Idle footprint / peak | 40 MB / 94 MB in most runs; some runs 66 MB / 192 MB (IMP-2.19) | 29 MB / 176 MB, steady | reference at idle; ashlar on peak in its usual case |
+| Scroll 1k plain rows, frame CPU p50 / p95 | **0.096–0.110 / 0.12 ms** with `list::Row`; 0.65–0.76 / 0.70–0.81 ms with selectable labels | **0.298 / 0.32 ms** | ashlar with `list::Row` (~2.8×); reference against label rows (~2.3×) |
+| Scroll 10k plain rows, frame CPU p50 | 0.96–1.15 ms (`list::Row`); 8.6–8.9 ms (labels) | not run | — |
+| Dependencies (hello, unique packages) | 179 | 202 | ashlar |
+
+Boundaries: ashlar's scroll number is thread CPU of the egui pass plus tessellation. The reference
+framework's is thread CPU from wheel dispatch to its draw list. Neither includes GPU submission.
+
+### Head to head (audit day, before the work)
 
 The reference framework could not be built in the audit session (building downloaded code needs the
 owner's go-ahead), so its column is its own published numbers from other machines (an M2 Max and an

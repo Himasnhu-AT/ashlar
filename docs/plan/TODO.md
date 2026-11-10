@@ -29,7 +29,7 @@ a task's state.
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | done for size (4e91720); idle memory probe moved to IMP-2.10 |
 | IMP-1.8 | Launch to first present | done (wt/launch, 4356a62) |
 | IMP-1.10 | Allocation counter is per process: `perf_allocs_idle_wake_frame` fails when perf tests run in parallel (1,823 vs 272 alone). `cargo xtask bench` uses one thread, so the gate holds; make the count per thread or serialise | done (db8205c, aa502ca) |
-| IMP-1.9 | Complete the head-to-head table | doing (audit-bench; owner approved building the reference framework) |
+| IMP-1.9 | Complete the head-to-head table | done (measured; AUDIT §1) |
 
 ## Phase 2: performance
 | Id | Task | Status |
@@ -50,6 +50,7 @@ a task's state.
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | done (b9070cb) |
+| IMP-2.19 | Idle memory is bimodal between runs (40 MB/94 MB peak vs 66 MB/192 MB) while the reference framework is steady at 29 MB: find the cause | todo |
 | IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | done (0f32c3d) |
 | IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | done (861b535) |
 

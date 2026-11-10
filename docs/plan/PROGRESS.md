@@ -3,6 +3,21 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: head-to-head measured (IMP-1.9)
+
+- The owner approved building and running the reference framework. A relayed approval didn't satisfy
+  the permission system for a subagent, so the integrator ran it in the main session.
+- Its build scripts were read first. hello's tree pulls none of the repo's own build scripts; the
+  scroll benchmark pulls one, which translates a vendored wasm file to Rust in `OUT_DIR` (no network,
+  no processes).
+- Results are in AUDIT §1 "Head to head, measured".
+  - **ashlar ahead:** binary size (14.0 / 9.2 MB against 21.3 MB), incremental rebuild (~3×), cold
+    launch, dependency count, and plain-list scroll with `list::Row` (0.10 against 0.298 ms, ~2.8×).
+  - **Reference ahead:** idle footprint (29 MB against 40–66 MB), warm launch by about 8 %, and
+    plain-list scroll against ashlar's selectable labels (~2.3×).
+- The higher idle memory reported earlier this round (66 MB / 223 MB) is ashlar's bimodal case, not
+  a regression: three back-to-back runs gave 40, 40 and 66 MB. Investigation is IMP-2.19.
+
 ## 2026-11-10: wt/flakes merged
 
 - **IMP-0.8:** the syntax linear-time test measures thread CPU, takes the best of 5 runs, and allows 3
