@@ -9,6 +9,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar-native` notifications: stable ids (`Notification::id`; the same id replaces a shown
+  notification), `notify::show` (returns the id), `notify::remove`, `notify::on_click` (a
+  `Receiver<Click>` with the notification's `info` map), `silent`, and `notify::set_app_identity`.
+  Windows now shows toasts (AppUserModelID registered under HKCU for unpackaged apps, escaped XML,
+  tags over 64 characters hashed); macOS installs a notification-center delegate so banners show
+  while the app is frontmost and clicks are reported; Linux sends the `desktop-entry` hint and
+  reports clicks from `ActionInvoked`.
 - `ashlar-diff` (new crate, rank 0, no dependencies, builds for wasm32): line diffs with Myers'
   algorithm under a cost cap (past the cap, a split at lines unique to both sides, then a coarse
   delete/insert, flagged `coarse`), word-level emphasis for paired changed lines, hunks with
@@ -164,6 +171,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- `ashlar-native` macOS notifications play the default sound unless `silent` is set, and ask for
+  sound permission only then.
 - A document named on the command line opens on the frame after the first, so the window shows
   before the load runs (it used to load before the first paint).
 - Windows queue at most one frame ahead of the screen by default (`App::frame_latency(1)`): lower
