@@ -393,8 +393,8 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
     let mut mark_visuals: Option<Visuals> = None;
     let mut scratch = Vec::new();
     let mut known = Lines { starts: &doc.starts, states: &mut states, text, lang, hl: view.highlighter };
-    let kind = virtual_list::Kind { role: Role::Group, rows: false };
-    let out = virtual_list::show_rows(ui, base, &list, kind, None, |ui, row| {
+    let kind = virtual_list::Kind { role: Role::Group, rows: false, node: egui::accesskit::Role::Document, item: egui::accesskit::Role::Paragraph };
+    let out = virtual_list::show_rows(ui, base, &mut list, kind, None, |ui, row| {
         let i = row.index;
         let range = line_range(known.starts, text, i);
         let line = text.get(range.clone()).unwrap_or("");
@@ -497,7 +497,7 @@ fn show(view: CodeView<'_>, ui: &mut Ui) -> CodeViewResponse {
     });
     ui.ctx().accesskit_node_builder(out.response.id, |node| {
         node.set_role(egui::accesskit::Role::Document);
-        node.set_label(view.id);
+        // the automation id is not a name a screen reader should read out
         node.set_read_only();
     });
     CodeViewResponse { response: out.response, selection, copied, clicked_line, visible: out.visible }
