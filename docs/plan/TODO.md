@@ -63,7 +63,7 @@ a task's state.
 | IMP-3.5 | Animated theme switch | doing (wt-animate (if time)) |
 | IMP-3.9 | `motion::f32` tween with `Easing::LINEAR` reached about 12 % at 26 % of its duration (reported by wt-clock): check against a unit test | done (c657940) |
 | IMP-3.6 | Presence and component adoption | done (378458b..ea70000) |
-| IMP-3.7 | Gesture handoff | doing (wt-motion2) |
+| IMP-3.7 | Gesture handoff | done (2f0c85a) |
 | IMP-3.8 | `Cx` API polish | todo |
 
 ## Phase 4: agent tooling
@@ -95,11 +95,13 @@ a task's state.
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | done (5885b46) |
 | IMP-5.10 | Standalone tab strip | done (2a523df) |
 | IMP-5.11 | Dialog focus | done (9fcbdd7) |
-| IMP-5.12 | Rolling numbers | doing (wt-motion2) |
+| IMP-5.12 | Rolling numbers | done (14fdc63) |
 | IMP-5.13 | Small content components | done (05f44af) |
 | IMP-5.14 | Sidebar / source list | todo |
-| IMP-5.15 | Accessibility goldens | doing (wt-a11ygold) |
+| IMP-5.15 | Accessibility goldens | done (bcdeb0e) |
 | IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo |
+| IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | doing (wt-a11yfix) |
+| IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | doing (wt-a11yfix) |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | doing (wt-md2) |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
