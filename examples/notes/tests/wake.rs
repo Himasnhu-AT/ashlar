@@ -229,3 +229,26 @@ fn a_focused_text_field_blinks_for_a_while_then_goes_idle() {
     let title = d.call("ui.get", json!({"target": {"id": "notes.title"}, "what": "value"})).unwrap();
     assert_eq!(title["value"], "focus mex", "the typing reached the field");
 }
+
+#[test]
+fn a_document_frame_only_for_changes_made_while_drawing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = focused_title(dir.path());
+    // a key command runs before anything is drawn: its frame already shows the change
+    let before = d.runtime.wakes().requests_for(Reason::DOCUMENT);
+    let notes = d.runtime.session().doc().notes.len();
+    d.push_event(new_note_chord(true));
+    d.push_event(new_note_chord(false));
+    d.settle(20);
+    assert_eq!(d.runtime.session().doc().notes.len(), notes + 1);
+    assert_eq!(d.runtime.wakes().requests_for(Reason::DOCUMENT), before, "{:?}", d.runtime.wakes());
+    assert!(d.runtime.title().contains('•'), "the title shows unsaved changes: {}", d.runtime.title());
+
+    // typing changes the document while the view draws: one more frame shows it everywhere
+    drop(d);
+    let mut d = focused_title(dir.path());
+    let before = d.runtime.wakes().requests_for(Reason::DOCUMENT);
+    d.push_event(egui::Event::Text("y".into()));
+    d.settle(20);
+    assert!(d.runtime.wakes().requests_for(Reason::DOCUMENT) > before, "{:?}", d.runtime.wakes());
+}

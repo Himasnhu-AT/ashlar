@@ -17,6 +17,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar-app`: a command run from the keyboard (or anything else before the view draws) no longer
+  asks for a `document` frame: the frame that ran it already shows the change. The runtime also
+  stops copying and comparing the view state and formatting the window title on frames that did
+  not change them.
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
