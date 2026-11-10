@@ -16,8 +16,8 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | done (0a78f56) |
-| IMP-1.2 | Allocation gate in perf tests | todo |
-| IMP-1.3 | `ashlar-ui` perf suite | doing (wt-uiperf) |
+| IMP-1.2 | Allocation gate in perf tests | doing (wt-alloc) |
+| IMP-1.3 | `ashlar-ui` perf suite | done (c259234) |
 | IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
 | IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | done (726b637, d5bd509) |
 | IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
@@ -30,10 +30,10 @@ a task's state.
 |---|---|---|
 | IMP-2.1 | No caret-blink frames when idle | done (29decb2) |
 | IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | done (56afafc) |
-| IMP-2.3 | Markdown cache and off-screen culling | doing (wt-uiperf) |
-| IMP-2.4 | Galley cache hot path | doing (wt-uiperf) |
+| IMP-2.3 | Markdown cache and off-screen culling | done (cc70f84) |
+| IMP-2.4 | Galley cache hot path | done (342ab80) |
 | IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
-| IMP-2.6 | Incremental offsets for variable-height lists | doing (wt-uiperf) |
+| IMP-2.6 | Incremental offsets for variable-height lists | done (a913bcd) |
 | IMP-2.7 | Debug-only perf warnings | todo |
 | IMP-2.8 | Non-virtualized content cost | todo |
 | IMP-2.9 | Binary size | todo |
@@ -49,8 +49,8 @@ a task's state.
 |---|---|---|
 | IMP-3.1 | `ashlar-motion` crate | done (ee02511) |
 | IMP-3.2 | `ashlar_ui::motion` | done (ce86186) |
-| IMP-3.3 | OS preferences: reduced motion, accent, contrast | todo |
-| IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | todo |
+| IMP-3.3 | OS preferences: reduced motion, accent, contrast | doing (wt-theme) |
+| IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | doing (wt-theme) |
 | IMP-3.5 | Animated theme switch | todo |
 | IMP-3.6 | Presence and component adoption | todo |
 | IMP-3.7 | Gesture handoff | todo |
@@ -62,7 +62,7 @@ a task's state.
 | IMP-4.1 | Fix `trace` with `--port`/`--app` | done (5ef4d81) |
 | IMP-4.2 | MCP `app_stats`/`app_logs`, process numbers | doing (MCP tools done 550ce99; process numbers in `app.stats` still todo) |
 | IMP-4.3 | Control-protocol doc drift | done (1084a69) |
-| IMP-4.4 | Headless wgpu renderer for `Driver` | todo |
+| IMP-4.4 | Headless wgpu renderer for `Driver` | doing (wt-headless) |
 | IMP-4.5 | In-process `.ui` scripts on virtual time | todo |
 | IMP-4.6 | `--headless --snap --tree` flags | todo |
 | IMP-4.7 | `app.clock` | todo |
@@ -74,7 +74,7 @@ a task's state.
 ## Phase 5: components
 | Id | Task | Status |
 |---|---|---|
-| IMP-5.1 | Basic controls kit | doing (wt-controls) |
+| IMP-5.1 | Basic controls kit | done (10ee980) |
 | IMP-5.2 | Toast v2 | done (aaf674c) |
 | IMP-5.3 | List and tree accessibility and selection | todo |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
@@ -84,18 +84,21 @@ a task's state.
 | IMP-5.8 | Settings form pattern | todo |
 | IMP-5.9 | Overlays (select, combobox, popover, tooltip, context menu) | todo |
 | IMP-5.10 | Standalone tab strip | todo |
-| IMP-5.11 | Dialog focus | doing (wt-controls) |
+| IMP-5.11 | Dialog focus | done (9fcbdd7) |
 | IMP-5.12 | Rolling numbers | todo (after IMP-3.2) |
-| IMP-5.13 | Small content components | doing (wt-controls) |
+| IMP-5.13 | Small content components | done (05f44af) |
 | IMP-5.14 | Sidebar / source list | todo |
 | IMP-5.15 | Accessibility goldens | todo |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
+| IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | todo |
+| IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
 | IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
 
 ## Phase 6: platform
 | Id | Task | Status |
 |---|---|---|
-| IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | doing (wt-menu) |
+| IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | done (95924f5) |
+| IMP-6.17 | Native menu follow-ups: Windows accelerators through a message hook (needs an ADR 0001 module), run the Windows attach path on a real Windows machine | todo |
 | IMP-6.2 | Open files, single instance, dropped files | todo |
 | IMP-6.3 | OS preference watch | todo |
 | IMP-6.4 | Window placement and viewport hook | todo |

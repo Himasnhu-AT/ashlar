@@ -3,6 +3,47 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/uiperf, wt/controls, wt/menu merged (CI green)
+
+- **IMP-1.3, 2.3, 2.4, 2.6**, before → after (release; old and new binaries alternated on a loaded
+  machine):
+
+  | Metric | Before | After |
+  |---|---|---|
+  | `md_static_frame_p50` (52 KB, 319 blocks) | 0.944 ms | 0.015–0.031 ms |
+  | `md_static_first_frame` | 16.2–17.2 ms | 11.4–13.3 ms |
+  | `md_static_layout_jobs` | 115 | 6 |
+  | `md_stream_frame_p95` (7 KB) | 0.183 ms | 0.11–0.36 ms |
+  | `galley_hit` | 26 ns | 20 ns |
+  | `galley_overflow_relayouts` (worst frame) | 4,160 | 0 |
+  | `one_row_height_change_1m` | 1,388 µs | 0–1.3 µs |
+  | `offsets_rebuild_1m` | 1.70–2.21 ms | 2.66–2.95 ms (the Fenwick tree's cost; a rare path) |
+
+  Also measured: `tree_flatten_1m` 4.02 ms, `tree_scroll_1m_p95` 0.041 ms,
+  `palette_keystroke_5k_p50` 1.55 ms.
+
+  Behaviour changes:
+  - Markdown automation ids exist only for blocks that are drawn.
+  - `ahash` is a direct dependency, at the version egui already uses.
+  - No markdown visual snapshot exists yet (IMP-5.18).
+- **IMP-5.1, 5.11, 5.13:** the `controls` kit, `content` components and dialog focus.
+  - Tests: 23 kittest tests, 282 visual pairs (12 broken references are caught), and gallery
+    Controls and Content pages.
+  - Changed: dialog buttons are now `Button`; a disabled one is drawn faded, and the default button
+    no longer reports `selected`.
+  - Reduced motion is a per-control flag until IMP-3.3.
+- **IMP-6.1:**
+  - Menu picks are queued and run only when no modal or palette is open.
+  - `works_while_typing` leaves the undo, redo, clipboard and select-all chords to a focused text
+    field.
+  - Undo and Redo keep app commands but have no OS shortcut, because the standard roles would block
+    document undo from the menu.
+  - Quit is in the macOS app menu (`app.quit`, which asks about unsaved changes); there is a Window
+    menu.
+  - The Windows menu attaches after the first frame. This is compile-checked only.
+  - Windows accelerators are not done: they need new FFI (IMP-6.17).
+- **Wave 3 additions:** wt-alloc (IMP-1.2), wt-theme (IMP-3.4, 3.3), wt-headless (IMP-4.4).
+
 ## 2026-11-10: wt/uimotion and wt/deps merged; wave 3 started
 
 - **IMP-3.2:** `ashlar_ui::motion` (value, f32, opacity, colour in OKLab, rect by edges, set, release,
