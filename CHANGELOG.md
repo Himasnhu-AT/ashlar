@@ -9,6 +9,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `cargo xtask launch --memory` launches 5 times (`--runs N`) and prints the min and max idle and
+  peak footprint and how many runs fell in the high group; one launch landed in either of the two
+  macOS groups at random (IMP-2.19).
 - `ashlar_native::memory` reports the OS's lifetime peak footprint (`ProcessMemory::peak`: macOS
   lifetime max phys footprint, Windows peak private commit) and `thread_count()` (macOS, Windows,
   Linux); `app.stats` → `process.peak_bytes` uses the OS peak, so spikes between samples count, and

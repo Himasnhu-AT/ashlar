@@ -5,8 +5,14 @@
 //!   `bench: launch_to_present_p50/p95 <ms> ms` (the app's own figure, from the first line of
 //!   `run()` to the first presented frame) and `bench: spawn_to_ready_p50/p95` (from spawning the
 //!   process, so dyld and `main` count too).
-//! - `cargo xtask launch --memory [--settle SECS]` launches once, lets it idle (default 10 s) and
-//!   prints the physical footprint, its peak (`vmmap --summary`, macOS) and the RSS (`ps`).
+//! - `cargo xtask launch --memory [--runs N] [--settle SECS]` launches N times (default 5), lets
+//!   each idle (default 10 s) and prints the lowest and highest physical footprint, its peak
+//!   (`vmmap --summary`, macOS) and the RSS (`ps`). On macOS the numbers fall in two groups
+//!   (IMP-2.19): a window that was never covered stays at about 40 MB / 94 MB peak, while one whose
+//!   occlusion state changed once (covered by another window, minimized, a Space switch, even right
+//!   after launch) keeps two swapchain drawables mapped for the window server (~19 MB) after a
+//!   ~95 MB startup spike: about 66 MB / 193 MB. The `_max` figures are what users see; the run
+//!   count per group is printed too.
 //!
 //! The app writes `{pid, ready_ms}` to `HELLO_READY_FILE` after its first present. Every child is
 //! killed before the next starts.
@@ -18,18 +24,18 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 struct Options {
-    runs: usize,
+    runs: Option<usize>,
     memory: bool,
     settle: u64,
 }
 
 fn options(args: &[String]) -> Result<Options, String> {
-    let mut o = Options { runs: 9, memory: false, settle: 10 };
+    let mut o = Options { runs: None, memory: false, settle: 10 };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().cloned().ok_or_else(|| format!("launch: {a} needs a value"));
         match a.as_str() {
-            "--runs" => o.runs = value()?.parse::<usize>().map_err(|e| format!("launch: --runs: {e}"))?.clamp(1, 100),
+            "--runs" => o.runs = Some(value()?.parse::<usize>().map_err(|e| format!("launch: --runs: {e}"))?.clamp(1, 100)),
             "--memory" => o.memory = true,
             "--settle" => o.settle = value()?.parse::<u64>().map_err(|e| format!("launch: --settle: {e}"))?.min(600),
             other => return Err(format!("launch: unknown argument {other}")),
@@ -129,25 +135,58 @@ fn vmmap_mb(summary: &str, label: &str) -> Option<f64> {
     })
 }
 
-fn memory(exe: &Path, ready: &Path, settle: u64) -> Result<(), String> {
+/// One idle reading, in MB.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Idle {
+    rss: Option<f64>,
+    footprint: f64,
+    peak: f64,
+}
+
+fn memory_once(exe: &Path, ready: &Path, settle: u64) -> Result<Idle, String> {
     let (child, _, _) = launch_once(exe, ready)?;
-    eprintln!("launch: idling {settle} s");
     std::thread::sleep(Duration::from_secs(settle));
     let pid = child.0.id().to_string();
     let rss = Command::new("ps").args(["-o", "rss=", "-p", &pid]).output().map_err(|e| format!("launch: ps: {e}"))?;
-    if let Ok(kb) = String::from_utf8_lossy(&rss.stdout).trim().parse::<f64>() {
-        println!("bench: hello_idle_rss {:.1} MB", kb / 1024.0);
-    }
+    let rss = String::from_utf8_lossy(&rss.stdout).trim().parse::<f64>().ok().map(|kb| kb / 1024.0);
     let out = Command::new("vmmap").args(["--summary", &pid]).output().map_err(|e| format!("launch: vmmap: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout);
-    match (vmmap_mb(&text, "Physical footprint:"), vmmap_mb(&text, "Physical footprint (peak):")) {
-        (Some(now), Some(peak)) => {
-            println!("bench: hello_idle_footprint {now:.1} MB");
-            println!("bench: hello_peak_footprint {peak:.1} MB");
-        }
-        _ => eprintln!("launch: vmmap printed no footprint (macOS only)"),
-    }
     drop(child);
+    match (vmmap_mb(&text, "Physical footprint:"), vmmap_mb(&text, "Physical footprint (peak):")) {
+        (Some(footprint), Some(peak)) => Ok(Idle { rss, footprint, peak }),
+        _ => Err("launch: vmmap printed no footprint (macOS only)".into()),
+    }
+}
+
+/// How many runs fall in the high group: a peak over 1.5x the lowest peak (IMP-2.19).
+fn high_group(runs: &[Idle]) -> usize {
+    let low = runs.iter().map(|r| r.peak).fold(f64::INFINITY, f64::min);
+    runs.iter().filter(|r| r.peak > low * 1.5).count()
+}
+
+fn memory(exe: &Path, ready: &Path, runs: usize, settle: u64) -> Result<(), String> {
+    let mut all = Vec::new();
+    for i in 0..runs {
+        eprintln!("launch: run {}/{runs}, idling {settle} s", i + 1);
+        let r = memory_once(exe, ready, settle)?;
+        eprintln!("launch: footprint {:.1} MB, peak {:.1} MB", r.footprint, r.peak);
+        all.push(r);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let span = |f: fn(&Idle) -> f64| {
+        let v: Vec<f64> = all.iter().map(f).collect();
+        (v.iter().copied().fold(f64::INFINITY, f64::min), v.iter().copied().fold(0.0, f64::max))
+    };
+    let (f_min, f_max) = span(|r| r.footprint);
+    let (p_min, p_max) = span(|r| r.peak);
+    println!("bench: hello_idle_footprint_min {f_min:.1} MB");
+    println!("bench: hello_idle_footprint_max {f_max:.1} MB");
+    println!("bench: hello_peak_footprint_min {p_min:.1} MB");
+    println!("bench: hello_peak_footprint_max {p_max:.1} MB");
+    if let Some(rss) = all.iter().filter_map(|r| r.rss).reduce(f64::max) {
+        println!("bench: hello_idle_rss_max {rss:.1} MB");
+    }
+    println!("launch: {} of {} runs in the high group (window covered at least once)", high_group(&all), all.len());
     Ok(())
 }
 
@@ -158,12 +197,12 @@ pub fn launch(root: &Path, args: &[String]) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("launch: {}: {e}", dir.display()))?;
     let ready = dir.join("hello-ready.json");
     if o.memory {
-        return memory(&exe, &ready, o.settle);
+        return memory(&exe, &ready, o.runs.unwrap_or(5), o.settle);
     }
     // one unmeasured launch warms the disk cache and the shader caches
     drop(launch_once(&exe, &ready)?);
     let (mut app, mut spawn) = (Vec::new(), Vec::new());
-    for _ in 0..o.runs {
+    for _ in 0..o.runs.unwrap_or(9) {
         let (child, ready_ms, spawn_ms) = launch_once(&exe, &ready)?;
         drop(child);
         app.push(ready_ms);
@@ -185,6 +224,14 @@ mod tests {
         assert_eq!(quantile(&s, 0.5), 5.0);
         assert_eq!(quantile(&s, 0.95), 9.0);
         assert_eq!(quantile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn the_high_group_is_counted_from_the_lowest_peak() {
+        let r = |footprint, peak| Idle { rss: None, footprint, peak };
+        assert_eq!(high_group(&[r(40.4, 93.5), r(66.0, 192.9), r(65.8, 192.7), r(40.1, 93.4)]), 2);
+        assert_eq!(high_group(&[r(40.0, 93.0), r(41.0, 95.0)]), 0);
+        assert_eq!(high_group(&[]), 0);
     }
 
     #[test]
