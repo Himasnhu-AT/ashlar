@@ -34,6 +34,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   asks for a `document` frame: the frame that ran it already shows the change. The runtime also
   stops copying and comparing the view state and formatting the window title on frames that did
   not change them.
+- `ashlar-ui`: `wake::wake`, `Waker::wake` and a zero-delay `wake_after`/`reschedule` ask egui for
+  one frame instead of two (egui adds a second frame to every zero-delay repaint request). A command
+  sent through the control port now costs 2.2 frames instead of 3.2.
 - `ashlar-update`: the check asks for this platform's build (`?platform=macos|windows-x64|linux-x86_64|linux-aarch64`,
   `PLATFORM`, `latest_url_for`), so a Windows or Linux app is never offered a Mac download.
 
