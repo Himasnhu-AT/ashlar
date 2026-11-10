@@ -22,15 +22,48 @@ fn layout_math() {
     assert_eq!(u.visible(30.0, 70.0, 2), 0..6);
     let mut o = Offsets::default();
     let heights = |i: usize| if i == 2 { f32::NAN } else { 10.0 + i as f32 };
-    assert!(o.update(5, 1, &heights));
-    assert!(!o.update(5, 1, &heights), "same revision and count: kept");
-    assert_eq!(o.offsets, [0.0, 10.0, 21.0, 21.0, 34.0, 48.0]);
-    let v = Layout::Variable(&o.offsets);
+    assert!(o.update(5, 1, &heights, &[]));
+    assert!(!o.update(5, 1, &heights, &[]), "same revision and count: kept");
+    let tops: Vec<f64> = (0..=5).map(|i| o.prefix(i)).collect();
+    assert_eq!(tops, [0.0, 10.0, 21.0, 21.0, 34.0, 48.0]);
+    let v = Layout::Variable(&o);
+    assert_eq!(v.total(), 48.0);
     assert_eq!(v.row_at(20.9), 1);
     assert_eq!(v.row_at(21.0), 3, "zero-height row 2 is skipped");
+    assert_eq!(v.row_at(-3.0), 0);
+    assert_eq!(v.row_at(1e9), 4);
     assert_eq!(v.span(4), (34.0, 14.0));
     assert_eq!(v.visible(0.0, 0.0, 0), 0..0);
-    assert_eq!(Layout::Variable(&[0.0]).visible(0.0, 100.0, 3), 0..0);
+    assert_eq!(Layout::Variable(&Offsets::default()).visible(0.0, 100.0, 3), 0..0);
+}
+
+#[test]
+fn changed_rows_update_only_those_rows() {
+    let n = 1000;
+    let tall = Cell::new(usize::MAX);
+    let calls = Cell::new(0usize);
+    let height = |i: usize| {
+        calls.set(calls.get() + 1);
+        if i == tall.get() { 50.0 } else { 10.0 + (i % 7) as f32 }
+    };
+    let mut o = Offsets::default();
+    o.update(n, 1, &height, &[]);
+    let mut prev = 0;
+    for row in [0, 1, 511, 512, 999, 5000] {
+        tall.set(row);
+        calls.set(0);
+        // the row that was tall and the one that is now (5000 is past the end: ignored)
+        o.update(n, 1, &height, &[prev, row]);
+        assert!(calls.get() <= 2, "two rows read, not {}", calls.get());
+        prev = row;
+        let mut fresh = Offsets::default();
+        fresh.update(n, 2, &height, &[]);
+        for i in (0..=n).step_by(37).chain([n]) {
+            assert!((o.prefix(i) - fresh.prefix(i)).abs() < 1e-6, "row {row}: top of {i}");
+        }
+        assert_eq!(Layout::Variable(&o).row_at(5555.0), Layout::Variable(&fresh).row_at(5555.0));
+        assert!((o.total - fresh.total).abs() < 1e-6);
+    }
 }
 
 /// Frames a 100k-row list and counts row-painter calls per frame.

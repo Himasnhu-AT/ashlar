@@ -249,36 +249,41 @@ fn perf_galley_cache_hits() {
 fn perf_virtual_list_variable_1m() {
     const ROWS: usize = 1_000_000;
     let ctx = egui::Context::default();
-    let mut tall_row = 0usize;
-    let mut revision = 1u64;
-    let draw = |ctx: &egui::Context, t: f64, revision: u64, tall_row: usize| {
+    let draw = |ctx: &egui::Context, t: f64, revision: u64, tall_row: usize, changed: &[usize]| {
         let height = move |i: usize| if i == tall_row { 60.0 } else { 18.0 + (i % 3) as f32 * 4.0 };
         frame(ctx, t, Vec::new(), |ui| {
-            VirtualList::new("perf.vlist", ROWS, RowHeights::Variable { revision, height: &height }).show(ui, |ui, row| {
+            VirtualList::new("perf.vlist", ROWS, RowHeights::Variable { revision, height: &height }).changed_rows(changed).show(ui, |ui, row| {
                 ui.label(format!("row {}", row.index));
             });
         })
     };
+    let mut revision = 1u64;
     for i in 0..10 {
-        draw(&ctx, f64::from(i) / 120.0, revision, tall_row);
+        draw(&ctx, f64::from(i) / 120.0, revision, 0, &[]);
     }
-    let steady = draw(&ctx, 0.1, revision, tall_row);
+    let mut steady = Vec::new();
+    for i in 0..20 {
+        steady.push(draw(&ctx, 0.1 + f64::from(i) / 120.0, revision, 0, &[]));
+    }
+    let steady = pct(&mut steady, 50);
     let mut rebuild = Vec::new();
     for i in 0..20 {
         revision += 1;
-        rebuild.push(draw(&ctx, 0.2 + f64::from(i) / 120.0, revision, tall_row));
+        rebuild.push(draw(&ctx, 0.3 + f64::from(i) / 120.0, revision, 0, &[]));
     }
-    // one row's height changes: today the only way to say so is a new revision
+    // one row's height changes, said with `changed_rows` (the revision stays)
     let mut one = Vec::new();
+    let mut prev = 0;
     for i in 0..20 {
-        tall_row = 500_000 + i;
-        revision += 1;
-        let t = draw(&ctx, 0.5 + f64::from(i as u32) / 120.0, revision, tall_row);
-        one.push(t.saturating_sub(steady));
+        let tall_row = 500_000 + i;
+        let t = draw(&ctx, 0.5 + f64::from(i as u32) / 120.0, revision, tall_row, &[prev, tall_row]);
+        prev = tall_row;
+        one.push(t);
     }
-    println!("bench: vlist_variable_steady_frame_1m {:.3} ms", ms(steady));
+    let one = (pct(&mut one, 50) - steady).max(0.0);
+    println!("bench: vlist_variable_steady_frame_1m {steady:.3} ms");
     println!("bench: offsets_rebuild_1m {:.3} ms", pct(&mut rebuild, 50));
-    println!("bench: one_row_height_change_1m {:.1} us", pct(&mut one, 50) * 1000.0);
+    println!("bench: one_row_height_change_1m {:.1} us", one * 1000.0);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -10,6 +10,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ### Changed
 
+- `ashlar-ui`: variable-height `VirtualList` and `VirtualTable` keep row heights in a Fenwick tree,
+  and `changed_rows(&[row])` says which rows changed height: those are measured again in
+  O(log rows) each instead of re-summing every row (1M rows: about 2 ms → 1 µs). A full rebuild
+  (new revision or row count) costs about a third more than before.
 - `ashlar-ui`: `markdown::show` keeps its parse while the text is the same and parses streamed
   text again only from its last open block; each block's layout is kept per width and style, and
   blocks outside the clip rect only reserve their space (a 50 KB document: about 1.9 ms → 0.02 ms
