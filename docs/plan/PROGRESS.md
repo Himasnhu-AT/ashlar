@@ -3,6 +3,40 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/toasts and wt/frame merged
+
+- **IMP-5.2 toast v2 (additive API):**
+  - each toast is an AccessKit live region (polite; assertive for errors)
+  - title, up to three actions (read with `take_actions()`), a key that updates a toast in place,
+    and progress toasts
+  - Escape, focus pause, a focus ring, and a "+N more" pill
+  - the labels live in a struct
+  - a settled stack requests no repaint
+- **IMP-1.6:** the 8.333 ms bucket bound already existed. New: `DISPLAY_BUDGET_US` and an optional
+  `over_budget` field (schema 1, left out when unset), which the server recounts from the buckets.
+  The dashboard shows "Over 120 Hz budget".
+- **CI flake:** the first CI run on the toasts merge failed in `ashlar-trace` `edge.rs:102` (init took
+  588 ms against a 500 ms limit, under load). Rerun alone it passed, and the full rerun was green.
+  Logged as IMP-0.4.
+- **IMP-1.1:** `Driver` tessellates, takes `pixels_per_point`, and splits stats into
+  `ui`/`pass`/`tessellate`/`frame_cpu`. New metrics (noisy, 7 builds sharing the machine):
+
+  | Metric | Value |
+  |---|---|
+  | `tessellate_p95_scroll_100k` | 0.014–0.055 ms |
+  | `frame_cpu_p95_scroll_100k_x2` | 0.09–0.37 ms (gate 8.3 ms) |
+  | `pass_p95_scroll_100k` | 0.08–0.28 ms |
+
+  The scroll test now runs at 2× and includes tessellation, so it doesn't compare directly with the
+  audit numbers.
+- **IMP-2.1:** egui's blink was worse than the audit estimated: about 6.5 frames per second, since it
+  asks one predicted frame early on every phase change. The runtime now blinks the caret itself
+  (`crates/app/src/caret.rs`, wake reason `caret`), one frame per phase, solid after 10 s without
+  input. `idle_frames_focused_field_30s` went from 194 (all credited to `input`) to 21, then 0.
+- **IMP-2.2:** the view state and title are rebuilt only when they change, and key commands no
+  longer ask for a `document` frame. Frames per command stay at 3.2 (engine) and 3.0 (key) because
+  egui doubles zero-delay repaints. Follow-ups are IMP-2.14 and IMP-2.15.
+
 ## 2026-11-10: IMP-3.1 merged (wt/motion → imp, CI green)
 
 - `crates/motion` (`ashlar-motion`) sits at rank 0, builds for wasm32 and has no dependencies. Tests:

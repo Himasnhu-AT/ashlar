@@ -8,17 +8,19 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
-| IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (this commit) |
+| IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
+| IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | doing (wt-deps) |
+| IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | todo |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
 |---|---|---|
-| IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | doing (wt-frame) |
+| IMP-1.1 | Full-frame measurement in `Driver` (tessellate, scale 2, phase split) | done (0a78f56) |
 | IMP-1.2 | Allocation gate in perf tests | todo |
 | IMP-1.3 | `ashlar-ui` perf suite | doing (wt-uiperf) |
 | IMP-1.4 | Plain-list scroll benchmark (the apples-to-apples workload) | done (dfc6740) |
-| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | doing (wt-frame: idle field, frames per command; typing/resize/select done 726b637) |
-| IMP-1.6 | 120 Hz frame budget in telemetry | doing (wt-toasts) |
+| IMP-1.5 | Notes interaction benches (typing, resize, select-last, frames per command, idle focused field) | done (726b637, d5bd509) |
+| IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | todo |
 | IMP-1.8 | Launch to first present | todo |
 | IMP-1.9 | Complete the head-to-head table | blocked (needs the owner's OK to build the reference framework) |
@@ -26,8 +28,8 @@ a task's state.
 ## Phase 2: performance
 | Id | Task | Status |
 |---|---|---|
-| IMP-2.1 | No caret-blink frames when idle | doing (wt-frame) |
-| IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | doing (wt-frame) |
+| IMP-2.1 | No caret-blink frames when idle | done (29decb2) |
+| IMP-2.2 | Runtime per-frame waste (title, view persist, double wake) | done (56afafc) |
 | IMP-2.3 | Markdown cache and off-screen culling | doing (wt-uiperf) |
 | IMP-2.4 | Galley cache hot path | doing (wt-uiperf) |
 | IMP-2.5 | Notes example O(n) paths | done (0a5775a) |
@@ -39,6 +41,8 @@ a task's state.
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
+| IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | todo |
+| IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | todo |
 
 ## Phase 3: motion and theming
 | Id | Task | Status |
@@ -71,7 +75,7 @@ a task's state.
 | Id | Task | Status |
 |---|---|---|
 | IMP-5.1 | Basic controls kit | doing (wt-controls) |
-| IMP-5.2 | Toast v2 | doing (wt-toasts) |
+| IMP-5.2 | Toast v2 | done (aaf674c) |
 | IMP-5.3 | List and tree accessibility and selection | todo |
 | IMP-5.4 | Markdown v2 | todo (after IMP-2.3) |
 | IMP-5.5 | `ashlar-syntax` and `CodeView` | todo |
@@ -86,6 +90,7 @@ a task's state.
 | IMP-5.14 | Sidebar / source list | todo |
 | IMP-5.15 | Accessibility goldens | todo |
 | IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
+| IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
 
 ## Phase 6: platform
 | Id | Task | Status |
@@ -97,7 +102,7 @@ a task's state.
 | IMP-6.5 | Parented, non-blocking file dialogs | todo |
 | IMP-6.6 | Notifications | todo |
 | IMP-6.7 | Dock Quit, logout and shutdown | todo |
-| IMP-6.8 | Web target gate | todo |
+| IMP-6.8 | Web target gate | doing (wt-deps: ashlar-app in the wasm gate, dead-code warnings) |
 | IMP-6.9 | Honest launch timing and ready signal | todo |
 | IMP-6.10 | Open command-line document after first frame | todo |
 | IMP-6.11 | Tray / status item | todo |

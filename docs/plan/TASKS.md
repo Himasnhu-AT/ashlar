@@ -10,6 +10,14 @@ moves.
 Write docs/plan/{README,AUDIT,ROADMAP,TASKS,TODO,PROGRESS}.md from the audit.
 **Done:** committed on `imp`, with no other framework named.
 
+### IMP-0.3 Dependency advisories (S)
+`cargo deny check advisories` fails on a libsqlite3-sys CVE and a yanked async-executor. Fix them with
+the smallest bump that works; add a dated, justified ignore only when no fix exists.
+
+### IMP-0.4 Timing-sensitive edge test (S)
+`crates/trace/tests/edge.rs:102` asserts that init takes under 500 ms of wall-clock time. It took 588
+ms while seven builds shared the machine. Measure thread CPU instead, or allow for load.
+
 ## Phase 1: measure the whole frame
 
 ### IMP-1.1 Full-frame measurement in `Driver` (S–M)
@@ -174,6 +182,18 @@ Why: AUDIT 2, techniques. Add rules for 3 long frames within 1 s, a stall ≥ 25
 growth over minutes, deduplicated.
 Where: `crates/trace/src/signals`.
 **Done:** unit tests run on synthetic streams.
+
+### IMP-2.14 One frame per ashlar wake (S)
+Why: wt-frame measured 3.2 frames per engine command and 3.0 per key command. egui runs a second
+frame after any zero-delay repaint request (egui 0.36 `context.rs:136-141`).
+Where: `crates/ui/src/wake.rs`. `wake()` and the zero-delay branch of `request_after()` call
+`ctx.request_repaint_after(Duration::from_nanos(1))` instead.
+**Done:** `frames_per_command` drops from about 3.2 to about 2.2. The debug, end-to-end and wake tests
+pass, because the extra frame exists for responses that arrive a frame late.
+
+### IMP-2.15 Control-port wake after answering (S)
+Why: `serve_control` calls `wake(CONTROL)` after each answer. Check what depends on that frame, and
+drop it or make it conditional.
 
 ## Phase 3: motion and theming
 
