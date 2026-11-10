@@ -152,10 +152,10 @@ impl NativeMenuBar {
 
     /// Show the bar in a window (Windows). A no-op on macOS, whose menu bar is app-wide.
     ///
-    /// On Windows, muda's key equivalents fire only when the event loop passes messages through
-    /// `TranslateAcceleratorW`, which this crate does not hook. Without it the keys reach the
-    /// window as ordinary key presses, so the app's keymap runs them (once, under its typing
-    /// rule) and the menu shows the shortcut text.
+    /// On Windows, menu key equivalents need `TranslateAcceleratorW`, which winit's message loop
+    /// doesn't call. This also subclasses the window: a key-down that matches an item's
+    /// shortcut becomes that item's activation (reported like a click) and doesn't reach the
+    /// window as a key press, so it runs once.
     pub fn attach_window(&self, window: &impl raw_window_handle::HasWindowHandle) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
@@ -168,7 +168,12 @@ impl NativeMenuBar {
             // valid window owned by this thread's event loop. muda subclasses that window to show the
             // menu and drops the subclass when the window is destroyed.
             let r = unsafe { self.menu.init_for_hwnd(hwnd) };
-            r.map_err(os)
+            r.map_err(os)?;
+            accelerators::set(self.menu.haccel());
+            if !accelerators::attach(hwnd) {
+                log::warn!("menu shortcuts: could not hook the window's key presses");
+            }
+            Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -232,6 +237,8 @@ impl NativeMenuBar {
         }
         self.structure = spec.structure_hash();
         self.state.set(spec.state_hash());
+        #[cfg(target_os = "windows")]
+        accelerators::set(self.menu.haccel());
         Ok(())
     }
 
@@ -266,5 +273,50 @@ impl NativeMenuBar {
                 }
             }
         }
+    }
+}
+
+/// Windows menu key equivalents: a subclass of each attached window runs `TranslateAcceleratorW`
+/// with the bar's accelerator table on key-downs, before winit sees them.
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod accelerators {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{HACCEL, MSG, TranslateAcceleratorW, WM_KEYDOWN, WM_SYSKEYDOWN};
+
+    /// The live bar's accelerator table (0: none).
+    static TABLE: AtomicIsize = AtomicIsize::new(0);
+    /// Our subclass's id on a window ("ashl").
+    const ID: usize = 0x6173_686c;
+
+    pub fn set(haccel: isize) {
+        TABLE.store(haccel, Ordering::SeqCst);
+    }
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            let table = TABLE.load(Ordering::SeqCst);
+            if table != 0 {
+                let m = MSG { hwnd, message: msg, wParam: wparam, lParam: lparam, time: 0, pt: POINT::default() };
+                // SAFETY: `m` is a complete key message for `hwnd`, live for the call; the
+                // table is muda's, owned by the live bar (a stale one fails the call cleanly).
+                if unsafe { TranslateAcceleratorW(hwnd, HACCEL(table as *mut core::ffi::c_void), &m) } != 0 {
+                    // the item's WM_COMMAND went to muda: the key press is used up
+                    return LRESULT(0);
+                }
+            }
+        }
+        // SAFETY: passing the message on, unchanged, to the next procedure of the chain.
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// Subclass `hwnd` (once; again is a no-op). `false` when Windows refused.
+    pub fn attach(hwnd: isize) -> bool {
+        // SAFETY: `hwnd` is a live window of this thread (from the caller's borrowed handle);
+        // the subclass needs no data and Windows removes it with the window.
+        unsafe { SetWindowSubclass(HWND(hwnd as *mut core::ffi::c_void), Some(proc), ID, 0) }.as_bool()
     }
 }

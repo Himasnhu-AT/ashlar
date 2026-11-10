@@ -9,6 +9,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Windows menu shortcuts (IMP-6.17): `NativeMenuBar::attach_window` subclasses the window and runs
+  `TranslateAcceleratorW` with the bar's table on key-downs, so a native menu's key equivalents
+  fire as item activations (once; the key press doesn't also reach the window). Compile-checked
+  for `x86_64-pc-windows-msvc`; not run on Windows yet.
 - Context menus and drag-out (IMP-6.15): `ashlar_native::menu::popup::show(window, &spec, at,
   waker)` opens a `MenuSpec` as a native context menu (macOS: posted to the run loop so it never
   opens inside the UI pass; Windows: opens at once, call it between frames) and reports

@@ -36,7 +36,9 @@ the video editor's platform crate these were adapted from):
      `NSDraggingItem` frame); added 2026-11-10 for context menus and dragging files out
    - `single_instance` (Windows `AllowSetForegroundWindow`, one block; added 2026-11-10 so the
      second launch lets the first come to the front)
-   - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)
+   - `menu::native::attach_window` (muda's `init_for_hwnd`) and `menu::native::accelerators`
+     (Windows: `SetWindowSubclass`, `TranslateAcceleratorW`, `DefSubclassProc`; added 2026-11-10
+     so menu shortcuts work without a hook in winit's message loop)
    - `terminate` (Unix, through `libc`: `pipe`, `fcntl`, `sigaction`, and in the handler only
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server
      can end its telemetry session when it is asked to stop)

@@ -77,7 +77,16 @@ drag-out = [
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd", "dep:raw-window-handle"]
 # A native menu bar and context menus built from a `MenuSpec` (muda; macOS and Windows).
-menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle", "dep:block2", "objc2-foundation/NSRunLoop", "objc2-foundation/block2"]
+menu = [
+    "dep:muda",
+    "dep:objc2",
+    "dep:raw-window-handle",
+    "dep:block2",
+    "objc2-foundation/NSRunLoop",
+    "objc2-foundation/block2",
+    "windows/Win32_UI_Shell",
+    "windows/Win32_UI_WindowsAndMessaging",
+]
 # A tray / status-bar icon with a menu built from a `MenuSpec` (tray-icon; on Linux a
 # StatusNotifierItem over D-Bus, no GTK).
 tray = ["dep:tray-icon", "dep:muda", "dep:objc2"]
