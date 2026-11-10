@@ -897,7 +897,8 @@ impl Ctx<'_, '_, '_> {
 }
 
 /// Decode a `ui.screenshot` reply's PNG and write it.
-fn save_png(v: &Value, path: &Path) -> Result<(), String> {
+/// Write the PNG in a `ui.screenshot` reply (`{"png": base64}`) to `path`, making its folder.
+pub fn save_png(v: &Value, path: &Path) -> Result<(), String> {
     let b64 = v.get("png").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or("the reply carried no picture")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("the picture is not base64: {e}"))?;
     if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

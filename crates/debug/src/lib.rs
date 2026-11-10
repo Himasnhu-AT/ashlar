@@ -38,6 +38,7 @@ use serde_json::{Value, json};
 
 pub use session::Env;
 pub use transport::{Report, ScriptError, Transport, run_script};
+pub use verbs::save_png;
 use words::Args;
 
 /// How a command ended.

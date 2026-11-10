@@ -108,6 +108,22 @@ sessions, processes and traces (`open`, `connect`, `close`, `sessions`, `trace`,
 process. To run scripts against something else, implement `ashlar_debug::Transport` (`call`, and
 `pause` for time) and call `ashlar_debug::run_script`; the TCP `Client` is one such transport.
 
+### One command: `--headless`
+
+Every binary whose `main` calls `App::run` takes `--headless`: no window, the app on a virtual
+clock in a fresh temporary folder (never your settings or documents), real pixels when there is
+a GPU (grey otherwise, with a note on stderr):
+
+```sh
+notes --headless --size 1024x700 --scale 2 --theme dark --script add.ui --at 1.5 \
+      --snap out.png --tree tree.json
+```
+
+`--size` is in points (default 1280x800) and the PNG is that times `--scale`. `--script` runs a
+`.ui` script first, `--at` lets that many seconds pass before the picture, and `--tree` writes the
+`ui.snapshot` JSON. Exit codes match `ashlar-debug`: 0 done, 1 a step failed, 2 bad arguments.
+`examples/notes/tests/headless.rs` checks the PNG size and the tree.
+
 ### Real pixels with no window
 
 A `Driver` gives flat grey screenshots by default, which keeps tests that need no GPU fast. For

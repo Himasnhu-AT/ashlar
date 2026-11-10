@@ -268,7 +268,20 @@ impl<D: Document> App<D> {
     }
 
     /// Open the window and run until it closes.
+    ///
+    /// With `--headless` on the command line, run with no window instead: a virtual-clock
+    /// [`crate::Driver`] in a temporary folder that writes `--snap out.png` and `--tree tree.json`
+    /// (after `--script file.ui` and `--at SECONDS`, at `--size WxH`, `--scale S`, `--theme
+    /// light|dark`), then exits with 0 (done), 1 (a step failed) or 2 (bad arguments).
     pub fn run(self) -> Result<(), Error> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if crate::headless_run::requested(&args) {
+                let code = crate::headless_run::run(self, &args);
+                std::process::exit(i32::from(code));
+            }
+        }
         crate::runtime::run_native(self)
     }
 }
