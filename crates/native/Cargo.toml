@@ -33,7 +33,7 @@ undocumented_unsafe_blocks = "deny"
 default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display"]
 full = ["default", "notify", "progress", "secrets"]
 # Open / save / folder pickers (rfd).
-dialogs = ["dep:rfd"]
+dialogs = ["dep:rfd", "dep:raw-window-handle"]
 # A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
 menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
 # Whether this process can show a window (Windows: not in a service's window station).

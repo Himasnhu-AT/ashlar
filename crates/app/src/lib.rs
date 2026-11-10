@@ -43,6 +43,7 @@ pub mod runtime;
 pub mod session;
 pub mod stats;
 pub mod telemetry;
+pub mod window_state;
 
 /// Logging and crash safety live in the headless `ashlar-log` crate (a CLI can use them without
 /// the window); re-exported here unchanged.
@@ -51,7 +52,7 @@ pub use ashlar_log::{crash, logging};
 /// it too); re-exported here unchanged.
 pub use ashlar_ui::wake;
 
-pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
+pub use app::{App, Error, Headless, SetupFn, ViewFn, ViewportFn, cli_main};
 pub use ashlar_native::single_instance::Forwarded;
 pub use driver::Driver;
 pub use renderer::Renderer;

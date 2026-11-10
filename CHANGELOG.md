@@ -9,6 +9,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Windows reopen where they were: `App::remember_window(bool)` (default on) saves position, size,
+  maximized and full screen state in the settings under `"window"` when they change, and the next
+  launch opens the window there, sizes bounded and a window left on no monitor moved back
+  (`ashlar_app::window_state::clamp`). `App::viewport(|builder| …)` changes the window builder
+  (minimum size, decorations…) and `App::icon(png_bytes)` sets the window icon.
 - Perf warnings in debug builds (`ashlar_app::perf_warn`): one stderr line per site when a frame
   waits (≥ 8 ms wall at ≥ 4× its CPU time; names the command or wake reason) or when 60 identical
   frames in a row are drawn for non-input wakes. `ASHLAR_FRAME_BUDGET_MS=N` (any build) prints at
@@ -188,6 +193,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   the OS so test runs match on every machine. `tokens::of` and `tokens::apply_colors` are new.
 
 ### Changed
+- File dialogs open over the app window (a sheet on macOS) and no longer block a frame: the
+  frame that asks for one finishes, the next shows the dialog and acts on the pick. Saving an
+  untitled document from the "Save changes?" dialog now goes on to the held-back open or quit
+  after Save As. `ashlar_native::dialogs::FileDialog::parent(&window)` parents any picker.
 - `ashlar-native` macOS notifications play the default sound unless `silent` is set, and ask for
   sound permission only then.
 - A document named on the command line opens on the frame after the first, so the window shows

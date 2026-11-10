@@ -39,6 +39,7 @@ use crate::open::Inbox;
 use crate::session::{Document, Effect, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
+use crate::window_state::{self, WindowState};
 
 mod prefs;
 
@@ -219,6 +220,13 @@ pub struct Runtime<D: Document> {
     view_error: Option<String>,
     allow_close: bool,
     quit_after_save: bool,
+    /// A command the confirm dialog's Save holds back until the save (maybe through Save As)
+    /// is done.
+    after_save: Option<(String, Value)>,
+    /// A file dialog a command asked for, shown at the start of the next frame (IMP-6.5).
+    pending_pick: Option<Pick>,
+    /// The window placement written to the settings (IMP-6.4).
+    window: window_state::Tracker,
     shown_title: String,
     /// (dirty, file generation) the title was made for.
     title_key: Option<(bool, u64)>,
@@ -315,6 +323,9 @@ impl<D: Document> Runtime<D> {
             view_error: None,
             allow_close: false,
             quit_after_save: false,
+            after_save: None,
+            pending_pick: None,
+            window: window_state::Tracker::default(),
             shown_title: String::new(),
             title_key: None,
             persisted_view: None,
@@ -550,6 +561,7 @@ impl<D: Document> Runtime<D> {
         self.ensure_started(ctx);
         self.os_prefs.poll(ctx);
         self.serve_control(ctx);
+        self.show_pending_pick(ctx, None);
         for rec in self.jobs.drain_ready(&mut self.session) {
             if rec.status == ashlar_jobs::Status::Failed {
                 self.toasts.error(format!("{}: {}", rec.label, rec.message));
@@ -763,6 +775,7 @@ impl<D: Document> Runtime<D> {
         self.handle_close(&ctx);
         self.apply_effects(&ctx);
         self.persist_view();
+        self.track_window(&ctx);
         self.tick_storage(&ctx);
         self.feed_devtools(&ctx);
 
@@ -957,20 +970,8 @@ impl<D: Document> Runtime<D> {
                 tokens::set_mode(ctx, mode);
                 let _ = self.settings.set("theme", &mode);
             }
-            Effect::PickOpen => {
-                if let Some(path) = self.pick(Pick::Open) {
-                    let r = self.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
-                    self.report(r);
-                }
-            }
-            Effect::PickSaveAs => match self.pick(Pick::SaveAs) {
-                Some(path) => {
-                    let r = self.execute("file.save_as", json!({"path": path.to_string_lossy()}));
-                    self.report(r);
-                    self.continue_quit(ctx);
-                }
-                None => self.quit_after_save = false,
-            },
+            Effect::PickOpen => self.request_pick(ctx, Pick::Open),
+            Effect::PickSaveAs => self.request_pick(ctx, Pick::SaveAs),
             Effect::ConfirmDiscard { command, params } => self.modals.push(Modal::Confirm { quit: false, command: Some((command, params)) }),
             Effect::Quit { discard } => {
                 if self.session.is_dirty() && !discard {
@@ -988,14 +989,64 @@ impl<D: Document> Runtime<D> {
         }
     }
 
-    fn pick(&mut self, kind: Pick) -> Option<PathBuf> {
-        if let Some(p) = &mut self.picker {
-            return p(kind);
+    /// Ask for a file dialog. It is not shown inside this frame (a blocking dialog would freeze
+    /// it half drawn, menus open): the next frame shows it first and acts on the pick.
+    fn request_pick(&mut self, ctx: &egui::Context, kind: Pick) {
+        if let Some(open) = self.pending_pick {
+            log::debug!("a {kind:?} dialog was asked for while a {open:?} dialog waits: ignored");
+            return;
         }
-        self.launch.telemetry.pause_hangs();
-        let r = native_pick(&self.shared, &self.session, kind);
-        self.launch.telemetry.resume_hangs();
-        r
+        self.pending_pick = Some(kind);
+        wake::wake(ctx, Reason("dialog"));
+    }
+
+    /// Show the dialog asked for last frame, over `parent` when there is a window, and act on the
+    /// pick: called before the frame's work, by [`Runtime::logic`] and (with the window) by eframe.
+    pub(crate) fn show_pending_pick(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
+        let Some(kind) = self.pending_pick.take() else { return };
+        let picked = match &mut self.picker {
+            Some(p) => p(kind),
+            None => {
+                // the dialog blocks the event loop: not a hang
+                self.launch.telemetry.pause_hangs();
+                let r = native_pick(&self.shared, &self.session, kind, parent);
+                self.launch.telemetry.resume_hangs();
+                r
+            }
+        };
+        self.deliver_pick(ctx, kind, picked);
+        self.apply_effects(ctx);
+        wake::wake(ctx, Reason("dialog"));
+    }
+
+    fn deliver_pick(&mut self, ctx: &egui::Context, kind: Pick, picked: Option<PathBuf>) {
+        match (kind, picked) {
+            (Pick::Open, Some(path)) => {
+                let r = self.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+                self.report(r);
+            }
+            (Pick::Open, None) => {}
+            (Pick::SaveAs, Some(path)) => {
+                let r = self.execute("file.save_as", json!({"path": path.to_string_lossy()}));
+                self.report(r);
+                self.continue_after_save(ctx);
+            }
+            (Pick::SaveAs, None) => {
+                self.quit_after_save = false;
+                self.after_save = None;
+            }
+        }
+    }
+
+    /// The save the confirm dialog started is over: quit, or run the command it held back.
+    fn continue_after_save(&mut self, ctx: &egui::Context) {
+        self.continue_quit(ctx);
+        let next = self.after_save.take();
+        if let Some((id, params)) = next
+            && !self.session.is_dirty()
+        {
+            self.run_ui_command(ctx, &id, params);
+        }
     }
 
     // ------------------------------------------------------------------ closing
@@ -1073,6 +1124,26 @@ impl<D: Document> Runtime<D> {
     }
 
     // ------------------------------------------------------------------ storage
+
+    /// Keep the settings' `"window"` placement current: written only when the viewport info
+    /// changes it (the settings debounce the file; closing flushes it). Once the window shows,
+    /// a restored placement that no monitor shows moves back onto the screen.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if !self.native || !self.shared.remember_window || self.shared.dirs.is_none() {
+            return;
+        }
+        let settings = &self.settings;
+        let tracker = &mut self.window;
+        let update = ctx.input(|i| tracker.update(i.viewport(), || settings.get::<WindowState>(window_state::KEY).unwrap_or_default()));
+        if let Some(pos) = update.move_to {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.into()));
+        }
+        if let Some(state) = update.save
+            && let Err(e) = self.settings.set(window_state::KEY, &state)
+        {
+            log::warn!("window placement not saved: {e}");
+        }
+    }
 
     /// Write the view state to the settings when it changed (keyed by its generation: no copy
     /// or comparison on frames that did not change it).
@@ -1226,14 +1297,17 @@ impl<D: Document> Runtime<D> {
             }
             Some(DialogOutcome::Button(2)) => {
                 self.quit_after_save = quit;
+                self.after_save = if quit { None } else { command };
                 let r = self.execute("file.save", json!({}));
                 self.report(r);
                 self.apply_effects(ctx);
-                if !self.session.is_dirty() {
-                    if quit {
-                        self.continue_quit(ctx);
-                    } else if let Some((id, params)) = command {
-                        self.run_ui_command(ctx, &id, params);
+                if self.pending_pick.is_none() {
+                    // saved in place (or failed): no Save As to wait for
+                    if self.session.is_dirty() {
+                        self.quit_after_save = false;
+                        self.after_save = None;
+                    } else {
+                        self.continue_after_save(ctx);
                     }
                 }
                 true
@@ -1489,7 +1563,7 @@ fn human_age(secs: i64) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick) -> Option<PathBuf> {
+fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick, parent: Option<&eframe::Frame>) -> Option<PathBuf> {
     use ashlar_native::dialogs::FileDialog;
     let exts: Vec<&str> = shared.extensions.iter().map(String::as_str).collect();
     let mut d = FileDialog::new();
@@ -1499,15 +1573,21 @@ fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick
     if let Some(dir) = session.path().and_then(std::path::Path::parent) {
         d = d.directory(dir);
     }
-    let r = match kind {
-        Pick::Open => d.title("Open").open_file(),
+    let d = match kind {
+        Pick::Open => d.title("Open"),
         Pick::SaveAs => {
             let name = match exts.first() {
                 Some(e) if session.path().is_none() => format!("Untitled.{e}"),
                 _ => session.display_name(),
             };
-            d.title("Save As").file_name(name).save_file()
+            d.title("Save As").file_name(name)
         }
+    };
+    let r = match (kind, parent) {
+        (Pick::Open, Some(w)) => d.parent(w).open_file(),
+        (Pick::Open, None) => d.open_file(),
+        (Pick::SaveAs, Some(w)) => d.parent(w).save_file(),
+        (Pick::SaveAs, None) => d.save_file(),
     };
     match r {
         Ok(p) => Some(p),
@@ -1520,7 +1600,7 @@ fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick
 }
 
 #[cfg(target_arch = "wasm32")]
-fn native_pick<D: Document>(_shared: &Shared<D>, _session: &Session<D>, _kind: Pick) -> Option<PathBuf> {
+fn native_pick<D: Document>(_shared: &Shared<D>, _session: &Session<D>, _kind: Pick, _parent: Option<&eframe::Frame>) -> Option<PathBuf> {
     None
 }
 
@@ -1552,6 +1632,8 @@ impl<D: Document> EframeApp<D> {
 impl<D: Document> eframe::App for EframeApp<D> {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.rt.note_presented();
+        // before the frame's work: the last frame is on screen, the dialog opens over the window
+        self.rt.show_pending_pick(ctx, Some(frame));
         self.rt.logic(ctx);
         self.install_offscreen(ctx, frame);
         let Some(mut out) = self.rt.hidden_pass(ctx, None, Vec::new()) else { return };
@@ -1655,6 +1737,38 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     Ok(())
 }
 
+/// The window as the app describes it, at the placement it had last time (kept on screen), with
+/// the app's icon and its own changes last.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_builder<D: Document>(shared: &Shared<D>, window: crate::app::WindowSpec, safe_mode: bool) -> egui::ViewportBuilder {
+    let mut b =
+        egui::ViewportBuilder::default().with_title(shared.title.clone()).with_inner_size(shared.window_size).with_app_id(shared.name.clone());
+    if shared.remember_window
+        && !safe_mode
+        && let Some(d) = &shared.dirs
+    {
+        let settings = Settings::load(Arc::new(DirConfig::new(d.config.clone())), "settings.json", &[]);
+        if let Some(saved) = settings.get::<WindowState>(window_state::KEY) {
+            // the monitors are not known before the window exists: sizes and coordinates are
+            // bounded here, and the first frame moves a window no monitor shows
+            b = window_state::apply(b, &window_state::clamp(saved, &[]));
+        }
+    }
+    if let Some(png) = window.icon {
+        match catch_unwind(AssertUnwindSafe(|| eframe::icon_data::from_png_bytes(&png))) {
+            Ok(Ok(icon)) => b = b.with_icon(icon),
+            Ok(Err(e)) => log::warn!("the app icon is not a PNG ashlar can read: {e}"),
+            Err(_) => log::warn!("the app icon could not be decoded"),
+        }
+    }
+    let Some(f) = window.viewport else { return b };
+    let fallback = b.clone();
+    catch_unwind(AssertUnwindSafe(move || f(b))).unwrap_or_else(|p| {
+        log::error!("App::viewport panicked: {}", panic_text(p.as_ref()));
+        fallback
+    })
+}
+
 /// eframe's wgpu setup with `latency` frames queued at most (IMP-2.10: one swapchain image fewer).
 #[cfg(not(target_arch = "wasm32"))]
 fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
@@ -1669,6 +1783,8 @@ fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     // launch timings count from here (IMP-6.9)
     let process_start = now();
+    let mut app = app;
+    let window = app.take_window();
     let (shared, view, setup) = app.split();
     let args = parse_args(&shared.env_prefix);
     let logs = shared.dirs.as_ref().map(|d| d.logs.clone());
@@ -1738,10 +1854,7 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         scene: args.scene,
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(shared.title.clone())
-            .with_inner_size(shared.window_size)
-            .with_app_id(shared.name.clone()),
+        viewport: window_builder(&shared, window, safe_mode),
         wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
@@ -1852,5 +1965,96 @@ mod tests {
         rt.session_mut().undo();
         rt.refresh_infos();
         assert_eq!(undo(&rt), Some(false), "undoing everything disables Undo again");
+    }
+
+    fn enter() -> egui::Event {
+        egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// A driver whose dialogs answer from `answers` and log what they were asked.
+    fn picking(answers: Vec<(Pick, PathBuf)>) -> (crate::Driver<i64>, std::rc::Rc<std::cell::RefCell<Vec<Pick>>>) {
+        let app = crate::App::<i64>::new("picktest", "0.0.0").file_extension("num");
+        let mut rt = launched(app, Launch::default());
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = asked.clone();
+        rt.set_file_picker(move |kind| {
+            log.borrow_mut().push(kind);
+            answers.iter().find(|(k, _)| *k == kind).map(|(_, p)| p.clone())
+        });
+        let mut d = crate::Driver::new(rt);
+        d.frame();
+        (d, asked)
+    }
+
+    #[test]
+    fn the_pick_arrives_on_the_next_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 3);
+        let r = d.runtime.execute("file.save_as", json!({})).unwrap();
+        assert_eq!(r["pending"], "dialog");
+        d.frame();
+        assert!(asked.borrow().is_empty(), "no dialog inside the frame that asked for it");
+        assert_eq!(d.runtime.pending_pick, Some(Pick::SaveAs));
+        d.frame();
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs], "the next frame shows it");
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()), "and saves there");
+        assert!(!d.runtime.session().is_dirty());
+    }
+
+    #[test]
+    fn quitting_a_dirty_untitled_document_saves_through_the_dialog_then_closes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("q.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        d.request_close();
+        d.frame();
+        assert!(d.runtime.modal_open(), "the confirm dialog asks first");
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()));
+        assert!(d.runtime.is_closing(), "the quit goes on once saved");
+    }
+
+    #[test]
+    fn a_cancelled_save_as_keeps_the_window_open() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        d.request_close();
+        d.frame();
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert!(!d.runtime.is_closing(), "cancelled: nothing closes");
+        assert!(!d.runtime.quit_after_save, "and a later save does not quit");
+    }
+
+    #[test]
+    fn opening_over_a_dirty_untitled_document_saves_then_shows_the_open_dialog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (saved, other) = (dir.path().join("s.num"), dir.path().join("o.num"));
+        let mut h = crate::App::<i64>::new("picktest", "0.0.0").headless();
+        h.session_mut().edit("set", |n| *n = 42);
+        h.session_mut().save_as(&other).unwrap();
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, saved.clone()), (Pick::Open, other.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 5);
+        let r = d.runtime.execute("file.open", json!({})).unwrap();
+        assert_eq!(r["pending"], "confirm");
+        d.frame();
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs, Pick::Open], "save first, then pick the file to open");
+        assert!(saved.exists(), "the changes were saved");
+        assert_eq!(d.runtime.session().path(), Some(other.as_path()));
+        assert_eq!(*d.runtime.session().doc(), 42);
     }
 }
