@@ -47,6 +47,7 @@ pub mod motion;
 pub mod motion_gate;
 pub mod overlay;
 pub mod printing;
+pub mod rolling;
 pub mod search;
 pub mod selection;
 pub mod slider;

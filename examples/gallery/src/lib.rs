@@ -18,6 +18,7 @@ use ashlar::ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar::ui::edit::{Edit, EditPhase};
 use ashlar::ui::form::{self, Field};
 use ashlar::ui::overlay::{Combobox, ComboboxState, Popover, Select};
+use ashlar::ui::rolling::RollingText;
 use ashlar::ui::search::SearchField;
 use ashlar::ui::slider::{Knob, Slider};
 use ashlar::ui::status_bar::{self, StatusBar};
@@ -178,6 +179,8 @@ pub struct Gallery {
     pub reduce_motion: bool,
     pub exporting: bool,
     pub button_clicks: u64,
+    /// The rolling-number demo's value (cents).
+    pub rolling_cents: i64,
     // content
     pub banner_dismissed: bool,
     pub advanced_open: bool,
@@ -284,6 +287,7 @@ impl Gallery {
             reduce_motion: false,
             exporting: false,
             button_clicks: 0,
+            rolling_cents: 995,
             banner_dismissed: false,
             advanced_open: true,
             retries: 0,
@@ -703,6 +707,31 @@ impl Gallery {
                     Progress::circle("controls.progress.circle", "Upload", Some(0.3)).show(ui);
                     Progress::circle("controls.progress.circle.busy", "Connecting", None).reduced_motion(reduced).show(ui);
                     Spinner::new("controls.spinner", "Loading").reduced_motion(reduced).show(ui);
+                });
+            });
+            section(ui, &t, "Rolling numbers", |ui| {
+                ui.horizontal(|ui| {
+                    if Button::new("controls.rolling.down", "−").size(Size::Sm).show(ui).clicked() {
+                        self.rolling_cents = self.rolling_cents.saturating_sub(5);
+                    }
+                    if Button::new("controls.rolling.up", "+").size(Size::Sm).show(ui).clicked() {
+                        self.rolling_cents = self.rolling_cents.saturating_add(5);
+                    }
+                    let cents = self.rolling_cents;
+                    let text = format!("{}${}.{:02}", if cents < 0 { "−" } else { "" }, cents.unsigned_abs() / 100, cents.unsigned_abs() % 100);
+                    RollingText::new("controls.rolling.cost", &text).value(cents as f64).tabular(true).show(ui);
+                });
+            });
+            section(ui, &t, "Fling", |ui| {
+                // drag the list and let go while moving; pull past an end to feel the rubber band
+                let h = t.control_height;
+                ui.allocate_ui(egui::vec2(260.0, h * 6.0), |ui| {
+                    VirtualList::new("controls.fling.list", 200, RowHeights::Uniform(h)).max_height(h * 6.0).stripes(true).fling(true).show(
+                        ui,
+                        |ui, row| {
+                            ui.label(format!("Row {}", row.index + 1));
+                        },
+                    );
                 });
             });
         });
