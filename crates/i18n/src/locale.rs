@@ -155,13 +155,39 @@ pub fn negotiate<'a>(preferred: &[Locale], available: &'a [Locale]) -> Option<&'
     None
 }
 
-/// The user's preferred languages, most preferred first, from the environment (`LANGUAGE`,
-/// `LC_ALL`, `LC_MESSAGES`, `LANG`). Empty when none is set (e.g. in a browser).
-///
-/// A macOS or Windows app started from the desktop often has no `LANG`; there the app should
-/// pass the platform's list to [`negotiate`] itself until `ashlar-native` reports it.
+/// The OS's own language list, installed by [`set_native_languages`].
+static NATIVE: std::sync::OnceLock<fn() -> Vec<String>> = std::sync::OnceLock::new();
+
+/// Install where [`system_locales`] reads the OS's preferred UI languages (`ashlar-app` installs
+/// `ashlar_native::system::preferred_languages`, which reads macOS `NSLocale.preferredLanguages`
+/// and Windows `GetUserPreferredUILanguages`). The first call wins; returns whether it did.
+pub fn set_native_languages(source: fn() -> Vec<String>) -> bool {
+    NATIVE.set(source).is_ok()
+}
+
+/// The user's preferred languages, most preferred first: the environment's (`LANGUAGE`,
+/// `LC_ALL`, `LC_MESSAGES`, `LANG`), then the OS's list when one is installed
+/// ([`set_native_languages`]; desktop launches on macOS and Windows often have no `LANG`). Empty
+/// when neither says anything (e.g. in a browser).
 pub fn system_locales() -> Vec<Locale> {
-    from_env(|name| std::env::var(name).ok())
+    let native = NATIVE.get().map(|f| f()).unwrap_or_default();
+    with_native(from_env(|name| std::env::var(name).ok()), &native)
+}
+
+/// `env` followed by the parsable, new tags of `native`, at most [`MAX_PREFERRED`] in all.
+pub fn with_native<S: AsRef<str>>(env: Vec<Locale>, native: &[S]) -> Vec<Locale> {
+    let mut out = env;
+    for tag in native.iter().take(MAX_PREFERRED) {
+        if out.len() >= MAX_PREFERRED {
+            break;
+        }
+        if let Some(l) = Locale::parse(tag.as_ref())
+            && !out.contains(&l)
+        {
+            out.push(l);
+        }
+    }
+    out
 }
 
 /// [`system_locales`] over any variable source (tests pass a map).
@@ -191,6 +217,18 @@ pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Vec<Locale> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_languages_follow_the_environment() {
+        let env = from_env(|n| (n == "LANG").then(|| "de_DE.UTF-8".to_string()));
+        let all = with_native(env, &["fr-CA", "de-DE", "not a tag!", "zh-Hans-CN"]);
+        let tags: Vec<String> = all.iter().map(|l| l.as_str().to_string()).collect();
+        assert_eq!(tags.first().map(String::as_str), Some("de-DE"));
+        assert!(tags.iter().any(|t| t == "fr-CA") && tags.iter().any(|t| t.starts_with("zh")), "{tags:?}");
+        assert_eq!(tags.iter().filter(|t| *t == "de-DE").count(), 1, "no duplicates: {tags:?}");
+        let many: Vec<String> = (0..100).map(|i| format!("x{}", (b'a' + (i % 26) as u8) as char)).collect();
+        assert!(with_native(Vec::new(), &many).len() <= MAX_PREFERRED);
+    }
 
     fn tag(s: &str) -> Locale {
         Locale::parse(s).unwrap_or_else(|| Locale("invalid".into()))

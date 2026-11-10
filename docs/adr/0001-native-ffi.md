@@ -22,7 +22,9 @@ the video editor's platform crate these were adapted from):
    - `power` (macOS `endActivity:`, Windows `SetThreadExecutionState`)
    - `open_files` (macOS: the Apple event handler class and its registration)
    - `progress` (Windows `ITaskbarList3`)
-   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`)
+   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`, `GetUserPreferredUILanguages`;
+     the last added 2026-11-10 so apps started from the desktop, which have no `LANG`, find the
+     user's languages)
    - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)
    - `terminate` (Unix, through `libc`: `pipe`, `fcntl`, `sigaction`, and in the handler only
      `write`, `signal` and `raise`, which are async-signal-safe; added 2026-09-10 so a stdio server

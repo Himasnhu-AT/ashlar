@@ -26,8 +26,10 @@ use crate::perf_warn::FrameSample;
 /// The largest file the log writes.
 pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// Lines waiting for the writer; more are dropped (and counted).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const QUEUE: usize = 4096;
 /// Room kept for the last line.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 const END_RESERVE: u64 = 256;
 
 /// The sending end, kept by the frame probe.
@@ -99,6 +101,7 @@ pub(crate) fn line(s: &FrameSample, dropped: u64) -> String {
 
 /// Write lines as they come, flushing whenever the queue runs dry, until the senders are gone or
 /// the file would pass `max_bytes`.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn write_lines(mut w: impl Write, rx: &Receiver<String>, max_bytes: u64) -> io::Result<()> {
     let mut bytes = 0u64;
     let room = max_bytes.saturating_sub(END_RESERVE);

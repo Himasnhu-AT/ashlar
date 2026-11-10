@@ -38,6 +38,7 @@
   "ui.keymap.reset": "Zurücksetzen",
   "ui.keymap.clear": "Entfernen",
   "ui.keymap.conflicts_with": "Auch belegt von",
+  "ui.keymap.shared": "{n} Befehle teilen sich ein Tastenkürzel",
   "ui.keymap.table": "Tastenkürzel",
   "ui.keymap.actions": "Aktionen",
   "ui.search.field": "Suchen",

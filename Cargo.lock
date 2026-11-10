@@ -286,6 +286,7 @@ dependencies = [
  "ashlar-control",
  "ashlar-debug",
  "ashlar-fs",
+ "ashlar-i18n",
  "ashlar-jobs",
  "ashlar-log",
  "ashlar-motion",
@@ -447,6 +448,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "ureq",
+]
+
+[[package]]
+name = "ashlar-example-web-hello"
+version = "0.1.0"
+dependencies = [
+ "ashlar-rs",
+ "serde",
 ]
 
 [[package]]

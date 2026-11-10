@@ -32,6 +32,32 @@ pub fn preferences() -> Preferences {
     crate::guarded("reading system preferences", || Ok(imp::preferences())).unwrap_or_default()
 }
 
+/// The most languages [`preferred_languages`] returns.
+pub const MAX_LANGUAGES: usize = 16;
+
+/// The user's preferred UI languages, most preferred first, as BCP 47 tags (`en-GB`, `de`,
+/// `zh-Hans-CN`): macOS `NSLocale.preferredLanguages`, Windows `GetUserPreferredUILanguages`;
+/// empty elsewhere (Linux has `LANG`/`LANGUAGE`) and when unknown. Desktop launches often have no
+/// `LANG`, so apps read this as well. At most [`MAX_LANGUAGES`] tags of at most 64 bytes.
+pub fn preferred_languages() -> Vec<String> {
+    let tags = crate::guarded("reading the preferred languages", || Ok(imp::preferred_languages())).unwrap_or_default();
+    clean_languages(tags)
+}
+
+fn clean_languages(tags: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        let t = t.trim();
+        if !t.is_empty() && t.len() <= 64 && !out.iter().any(|o| o == t) {
+            out.push(t.to_string());
+        }
+        if out.len() >= MAX_LANGUAGES {
+            break;
+        }
+    }
+    out
+}
+
 /// URL schemes [`open_url`] hands to the OS. Anything else (`file:`, `javascript:`, custom app
 /// schemes) could start arbitrary programs, so it is refused.
 pub const OPEN_URL_SCHEMES: &[&str] = &["http", "https", "mailto"];
@@ -90,9 +116,13 @@ fn spawn(cmd: &mut std::process::Command) -> Result<()> {
 #[cfg(target_os = "macos")]
 mod imp {
     use objc2_app_kit::{NSColor, NSColorSpace, NSWorkspace};
-    use objc2_foundation::{NSArray, NSString, NSURL, NSUserDefaults};
+    use objc2_foundation::{NSArray, NSLocale, NSString, NSURL, NSUserDefaults};
 
     use super::*;
+
+    pub fn preferred_languages() -> Vec<String> {
+        NSLocale::preferredLanguages().iter().take(MAX_LANGUAGES).map(|s| s.to_string()).collect()
+    }
 
     fn channel(v: f64) -> u8 {
         (v.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -134,14 +164,36 @@ mod imp {
 #[allow(unsafe_code)]
 mod imp {
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::{
         SPI_GETCLIENTAREAANIMATION, SW_SHOWNORMAL, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     };
-    use windows::core::{BOOL, HSTRING, PCWSTR, w};
+    use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR, w};
     use windows_registry::CURRENT_USER;
 
     use super::*;
+
+    /// The longest language list read, in UTF-16 units (a longer one reads as empty).
+    const MAX_UNITS: u32 = 4096;
+
+    pub fn preferred_languages() -> Vec<String> {
+        let (mut count, mut units) = (0u32, 0u32);
+        // SAFETY: with no buffer the call only writes the language count and the needed buffer
+        // size to the two live local u32s it is given.
+        if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, None, &mut units) }.is_err() || units == 0 || units > MAX_UNITS {
+            return Vec::new();
+        }
+        let mut buf = vec![0u16; units as usize];
+        let mut len = units;
+        // SAFETY: `buf` holds `len` u16s and outlives the call, which writes at most `len` units
+        // (a NUL-separated list ending in two NULs) and updates `count` and `len`.
+        if unsafe { GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, Some(PWSTR(buf.as_mut_ptr())), &mut len) }.is_err() {
+            return Vec::new();
+        }
+        let used = buf.get(..len as usize).unwrap_or(&buf);
+        used.split(|u| *u == 0).filter(|s| !s.is_empty()).take(MAX_LANGUAGES).map(String::from_utf16_lossy).collect()
+    }
 
     pub fn preferences() -> Preferences {
         let light =
@@ -202,6 +254,10 @@ mod imp {
     use zbus::zvariant::Value;
 
     use super::*;
+
+    pub fn preferred_languages() -> Vec<String> {
+        Vec::new()
+    }
 
     fn read(conn: &zbus::blocking::Connection, namespace: &str, key: &str) -> Option<zbus::zvariant::OwnedValue> {
         let call = |method: &str| {
@@ -312,6 +368,10 @@ mod imp {
 mod imp {
     use super::*;
 
+    pub fn preferred_languages() -> Vec<String> {
+        Vec::new()
+    }
+
     fn matches(query: &str) -> Option<bool> {
         web_sys::window()?.match_media(query).ok()??.matches().into()
     }
@@ -346,6 +406,10 @@ mod imp {
 mod imp {
     use super::*;
 
+    pub fn preferred_languages() -> Vec<String> {
+        Vec::new()
+    }
+
     pub fn preferences() -> Preferences {
         Preferences::default()
     }
@@ -362,6 +426,16 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preferred_languages_are_bounded_and_clean() {
+        let tags = super::preferred_languages();
+        assert!(tags.len() <= super::MAX_LANGUAGES);
+        assert!(tags.iter().all(|t| !t.is_empty() && t.len() <= 64), "{tags:?}");
+        let long = "x".repeat(65);
+        let cleaned = super::clean_languages(vec![" en-GB ".into(), "en-GB".into(), String::new(), long]);
+        assert_eq!(cleaned, vec!["en-GB".to_string()]);
+    }
+
     use super::*;
 
     #[test]

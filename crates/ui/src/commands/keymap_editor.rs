@@ -190,8 +190,8 @@ impl KeymapEditor {
         let total_conflicts = self.conflicts.len();
         if total_conflicts > 0 {
             ui.add_space(t.space.xs);
-            let r =
-                ui.label(egui::RichText::new(format!("{total_conflicts} commands share a shortcut")).color(t.status.danger).size(t.type_scale.small));
+            let text = crate::labels::count_text(ui.ctx(), "ui.keymap.shared", total_conflicts, "{n} commands share a shortcut");
+            let r = ui.label(egui::RichText::new(text).color(t.status.danger).size(t.type_scale.small));
             automation::register(ui, &r, "keymap.conflicts", "conflicts", Role::Status);
         }
         ui.add_space(t.space.xs);
