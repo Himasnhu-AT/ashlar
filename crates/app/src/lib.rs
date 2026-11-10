@@ -16,6 +16,7 @@
 //! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
+//! | [`perf_warn`] | debug-build stall and same-frame warnings, `ASHLAR_FRAME_BUDGET_MS` |
 //! | [`caret`] | the text caret's blink, run on the wake scheduler; solid after a while without input |
 //! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
 //! | [`telemetry`] | ashlar-telemetry hook points (feature `telemetry`) |
@@ -34,6 +35,7 @@ mod native_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
 mod open;
+pub mod perf_warn;
 mod renderer;
 pub mod runtime;
 pub mod session;

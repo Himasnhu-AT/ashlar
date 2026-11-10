@@ -224,6 +224,22 @@ crate's own tests drive it, and you can use it to try the CLI or to check an MCP
   and the physical footprint and its peak (`vmmap`, macOS). Both open real windows, so they are
   manual and never run in CI; results swing with machine load, so compare runs made back to back.
 
+## Frame performance
+
+Debug builds watch their own frames and print one line to stderr, once per site, when:
+
+- a frame **waits**: it took ≥ 8 ms of wall time and at least 4× the UI thread's CPU time, so the
+  thread was blocked (file or network I/O, a lock, a sleep). The line names the command the frame
+  ran, or else the wake reasons it was drawn for. Move that work to a job.
+- the **same frame is drawn over and over**: 60 frames in a row with identical shapes, drawn only
+  for non-input wake reasons (a timer or an animation that never settles). The line names the
+  reasons; `app.stats` → `wakes` counts them.
+
+`ASHLAR_FRAME_BUDGET_MS=N` (debug or release) prints at most one line per second for frames over
+`N` ms: the pass time, the runtime's own UI time, the UI thread's CPU time, the command or wake
+reasons, and how many more frames went over since the previous line. `ASHLAR_PERF_WARN=0`
+silences all of these. A release build with neither variable set installs nothing.
+
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,

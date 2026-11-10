@@ -226,6 +226,11 @@ pub struct Runtime<D: Document> {
     persisted_view: Option<u64>,
     picker: Option<FilePicker>,
     passes: u64,
+    /// Times each pass for the perf warnings (`None`: nothing uses it).
+    probe: Option<crate::perf_warn::Probe>,
+    probe_installed: bool,
+    /// The wake counts at the probe's previous frame (their growth is the frame's reasons).
+    probe_wakes: ashlar_ui::wake::WakeStats,
     caret: Caret,
     /// `app.clock`: the time frames see (pause, step, resume).
     clock: crate::clock::Clock,
@@ -313,6 +318,9 @@ impl<D: Document> Runtime<D> {
             persisted_view: None,
             picker: None,
             passes: 0,
+            probe: crate::perf_warn::Probe::from_env(),
+            probe_installed: false,
+            probe_wakes: ashlar_ui::wake::WakeStats::default(),
             caret: Caret::default(),
             clock: crate::clock::Clock::default(),
             native: false,
@@ -401,6 +409,14 @@ impl<D: Document> Runtime<D> {
 
     pub fn toasts(&self) -> &Toasts {
         &self.toasts
+    }
+
+    /// Watch frames with these warning meters instead of the environment's (tests).
+    #[cfg(test)]
+    pub(crate) fn watch_frames(&mut self, warn: crate::perf_warn::PerfWarn) -> crate::perf_warn::Probe {
+        let p = crate::perf_warn::Probe::with_warn(warn);
+        self.probe = Some(p.clone());
+        p
     }
 
     /// Frame-time statistics (`app.stats`).
@@ -588,6 +604,11 @@ impl<D: Document> Runtime<D> {
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
+        if let Some(p) = &self.probe {
+            let now = self.wakes.stats();
+            p.begin_frame(crate::perf_warn::credited(&self.probe_wakes, &now));
+            self.probe_wakes = now;
+        }
         // on the web a dropped file has no path to open: the view reads it from egui's input
         #[cfg(not(target_arch = "wasm32"))]
         if self.shared.accept_drops {
@@ -687,6 +708,12 @@ impl<D: Document> Runtime<D> {
         let started = now();
         self.launch.telemetry.begin_turn();
         self.ensure_started(&ctx);
+        if let Some(p) = &self.probe
+            && !self.probe_installed
+        {
+            ctx.add_plugin(p.plugin());
+            self.probe_installed = true;
+        }
         self.passes = self.passes.saturating_add(1);
         // timed wakes not yet due when this frame ran (input came first) stay scheduled
         self.wakes.rearm(&ctx);
@@ -734,10 +761,14 @@ impl<D: Document> Runtime<D> {
             wake::wake(&ctx, Reason::DOCUMENT);
         }
         self.caret.end(&ctx);
-        if let Some(s) = started {
-            let took = s.elapsed();
+        let took = started.map(|s| s.elapsed());
+        if let Some(took) = took {
             self.stats.record(took);
             self.launch.telemetry.frame(took);
+        }
+        let ran = self.session.take_ran();
+        if let Some(p) = &self.probe {
+            p.end_ui(took, ran);
         }
         if !self.first_frame_done {
             self.first_frame_done = true;
