@@ -264,6 +264,10 @@ pub fn ashlar_role(r: Role) -> Option<&'static str> {
         Role::Group => "group",
         Role::Disclosure => "button",
         Role::Alert => "alert",
+        Role::ComboBox => "combobox",
+        Role::ListBox => "listbox",
+        Role::ListOption => "option",
+        Role::Tooltip => "tooltip",
         Role::Other => return None,
     })
 }

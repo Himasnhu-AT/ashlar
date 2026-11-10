@@ -180,6 +180,8 @@ pub struct MotionTokens {
     pub surface: Pair,
     /// Things appearing and disappearing: popups, toasts, dialogs.
     pub enter_exit: Pair,
+    /// Seconds the pointer rests on a control before its tooltip shows.
+    pub tooltip_delay: f32,
 }
 
 /// The shadows of floating surfaces.
@@ -207,6 +209,7 @@ const MOTION: MotionTokens = MotionTokens {
     reflow: motion_tokens::REFLOW,
     surface: motion_tokens::GLIDE,
     enter_exit: motion_tokens::DEFAULT,
+    tooltip_delay: 0.5,
 };
 
 const STROKES: Strokes = Strokes { hairline: 1.0, focus: 2.0 };
@@ -549,6 +552,8 @@ impl Tokens {
         style.spacing.menu_margin = Margin::same(sp.xs as i8);
         style.spacing.window_margin = Margin::same(sp.lg as i8);
         style.spacing.indent = sp.xl;
+        let delay = self.motion.tooltip_delay;
+        style.interaction.tooltip_delay = if delay.is_finite() { delay.clamp(0.0, 10.0) } else { 0.5 };
         let t = &self.type_scale;
         style.text_styles.insert(TextStyle::Small, Self::font(t.small));
         style.text_styles.insert(TextStyle::Body, Self::font(t.body));

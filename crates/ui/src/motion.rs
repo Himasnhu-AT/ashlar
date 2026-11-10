@@ -167,6 +167,8 @@ where
         let t = m.clock.now(egui_now);
         let pass = m.begin_pass(time);
         let prefs = m.prefs;
+        // test recording (`motion_gate`): one `Option` check when off
+        let rec = m.recorder.clone();
         let Some(slots) = m.store::<T>() else {
             return match op {
                 Op::To { target, .. } | Op::Set(target) | Op::Release { target, .. } => ((target, true), false),
@@ -174,6 +176,7 @@ where
         };
         let (out, moving) = match slots.get_mut(&id) {
             None => {
+                let held = matches!(op, Op::Set(_));
                 let (value, class) = match op {
                     Op::To { target, class, .. } => (target, class),
                     Op::Set(v) => (v, Class::Gesture),
@@ -189,12 +192,16 @@ where
                     false
                 };
                 let out = (slot.anim.sample(t), !moving);
+                if let Some(r) = &rec {
+                    r.push(sample_of(id, t, time, &slot.anim, held));
+                }
                 slots.insert(id, slot);
                 (out, moving)
             }
             Some(slot) => {
                 slot.used = pass;
                 let anim = &mut slot.anim;
+                let held = matches!(op, Op::Set(_));
                 match op {
                     Op::To { target, class, curve } => {
                         if anim.class() != class {
@@ -212,6 +219,9 @@ where
                     }
                 }
                 let settled = anim.is_settled(t);
+                if let Some(r) = &rec {
+                    r.push(sample_of(id, t, time, anim, held));
+                }
                 ((anim.sample(t), settled), !settled)
             }
         };
@@ -226,6 +236,30 @@ where
         wake(ctx, Reason::ANIMATION);
     }
     out
+}
+
+/// What the motion gate records for one value this frame.
+fn sample_of<T: Animatable>(id: Id, t: f64, time: f64, anim: &Animated<T>, held: bool) -> crate::motion_gate::Sample {
+    crate::motion_gate::Sample {
+        id,
+        t,
+        time,
+        lanes: T::LANES,
+        value: anim.sample_lanes(t),
+        velocity: anim.velocity_lanes(t),
+        target: anim.target().to_lanes(),
+        class: anim.class(),
+        bounce: match anim.curve() {
+            Curve::Spring(s) => s.bounce(),
+            _ => 0.0,
+        },
+        held,
+    }
+}
+
+/// Install (or with `None` remove) the motion gate's recorder.
+pub(crate) fn set_recorder(ctx: &egui::Context, rec: Option<crate::motion_gate::Sink>) {
+    Motion::with(ctx, |m| m.recorder = rec);
 }
 
 fn now_of(i: &egui::InputState) -> f64 {
@@ -320,6 +354,8 @@ struct Inner {
     woke: bool,
     /// egui's `animation_time` from before reduced motion turned it off.
     saved_animation_time: Option<f32>,
+    /// The motion gate's recorder, when a test installed one.
+    recorder: Option<crate::motion_gate::Sink>,
 }
 
 impl Default for Inner {
@@ -333,6 +369,7 @@ impl Default for Inner {
             next_prune: PRUNE_EVERY,
             woke: false,
             saved_animation_time: None,
+            recorder: None,
         }
     }
 }

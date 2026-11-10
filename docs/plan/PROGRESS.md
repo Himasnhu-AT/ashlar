@@ -3,6 +3,59 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/motiongate and wt/overlays merged (CI green)
+
+- **IMP-4.10:** `ashlar_ui::motion_gate::MotionRecorder` and `Driver::record`.
+  - Checks for: overshoot on opacity and colour, reversal with bounce 0, pops, flicker, and frames
+    requested after everything settled. There is an allow list per id, prefix or wake reason.
+  - Seeded faults give exactly one finding each.
+  - The gallery passes at 120 Hz: dialog, toast, animated theme switch, tab and page switches. The
+    only finding was the gate's own false alarm on values set with `motion::set`, now ignored.
+  - The idle check allows 3 frames after settle, because egui adds a repaint after a request.
+- **IMP-5.9:** `overlay::{Select, Combobox, Popover}`, `ashlar_ui::help` tooltips, and
+  `commands::menu::context`.
+  - The combobox filters with fuzzy matching; composition never commits a choice.
+  - The popover flips at window edges and returns focus when it closes.
+  - Option lists are virtualized.
+  - New: `MotionTokens.tooltip_delay` and new automation roles.
+- **Merge incident:** the overlays merge left conflict markers in `crates/ui/src/lib.rs` (two new
+  `mod` lines), and the format gate caught them. The merge script stopped silently, so merges now go
+  through one script that stops on any non-CHANGELOG conflict and checks for leftover markers.
+- Started: wt-rowuse (IMP-2.17, IMP-0.5), wt-chat (IMP-5.7).
+
+## 2026-11-10: wt/allocreg, wt/tabs, wt/form, wt/snap merged (CI and allocation gate green)
+
+- **IMP-2.18:** the allocation regression was real, and caused by devtools.
+  - Devtools turned AccessKit on to answer a request and never turned it off, so every later frame
+    built the full screen-reader tree. IMP-5.3's richer row nodes made that tree about 100
+    allocations bigger.
+  - Fix: devtools turns AccessKit back off only where no screen reader can exist (`Driver`,
+    `--headless`, or a build without `accesskit`), through `devtools::set_platform_accesskit`. In a
+    real window it stays on once on: eframe enables it once per activation and egui offers no
+    getter, so a screen reader can't be told apart.
+  - Test: "a screen reader activates during a request → stays on".
+  - On merged `imp`: `allocs_per_idle_wake_frame` 272 (gate 578; was 652), `keystroke_allocs` 990
+    (was 2,246), scroll 345.
+  - Frames with AccessKit on are no longer gated.
+- **IMP-5.10:** `TabStrip`, a single implementation that docking also uses.
+  - One Tab stop with arrow keys, close by button, middle-click or ⌘W, an overflow menu, and reorder
+    by drag or ⌘⇧+arrow.
+  - Accessibility: a TabList node and automation ids.
+  - The `tabs::indicator` is animated relative to the strip.
+  - Docking tabs don't have close or automation ids yet.
+- **IMP-5.8:** `form::section`/`row` (`.bind(&mut v, default)` handles modified and reset), `form::filter`
+  with highlights and an empty state, and `Field` with announced errors. Ids are `<section>.<row>`.
+  Gallery Settings page. Merge note: Tabs and Settings both added gallery pages, so `Page::ALL` now
+  has 8 entries.
+- **IMP-4.8:** `crates/debug/src/snapshot.rs` (exact by default, tolerance optional, `-new` and
+  `-diff` PNGs, `ASHLAR_UPDATE_SNAPSHOTS=1`, a skip on another adapter). The egui_kittest snapshot
+  feature was not reused: it would pull the UI toolkit into rank 4, and its compare is perceptual.
+  Notes baselines were recorded on Apple M5 Pro / Metal.
+- **IMP-4.9:** `App::scene`, `--scene`, `--list-scenes`, `ui.scene`, the `ui_scene` MCP tool; the notes
+  app has `empty` and `two-notes`.
+- Started: wt-diff (IMP-5.6), wt-overlays (IMP-5.9), wt-motiongate (IMP-4.10), wt-md2 (IMP-5.4,
+  5.18). wt-launch is running.
+
 ## 2026-11-10: wt/tween, wt/openfiles, wt/size merged
 
 - **IMP-3.9:** a real bug. `tween()` (`crates/motion/src/curve.rs`) applied its velocity-continuity
