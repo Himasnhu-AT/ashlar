@@ -31,7 +31,7 @@ undocumented_unsafe_blocks = "deny"
 
 [features]
 default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end", "mac-shell"]
-full = ["default", "notify", "progress", "secrets"]
+full = ["default", "notify", "progress", "secrets", "drag-out"]
 # Dock Quit, logout and shutdown ask the app first (macOS delegate method, Windows session-end
 # messages).
 session-end = [
@@ -55,10 +55,29 @@ mac-shell = [
     "objc2-app-kit/NSResponder",
     "objc2-foundation/NSKeyValueObserving",
 ]
+# Drag files, an image or text out of the window (macOS NSDraggingSession).
+drag-out = [
+    "dep:objc2",
+    "dep:raw-window-handle",
+    "objc2-app-kit/NSDragging",
+    "objc2-app-kit/NSDraggingItem",
+    "objc2-app-kit/NSDraggingSession",
+    "objc2-app-kit/NSPasteboard",
+    "objc2-app-kit/NSPasteboardItem",
+    "objc2-app-kit/NSEvent",
+    "objc2-app-kit/NSGraphicsContext",
+    "objc2-app-kit/NSView",
+    "objc2-app-kit/NSWindow",
+    "objc2-app-kit/NSResponder",
+    "objc2-foundation/NSURL",
+    "objc2-foundation/NSData",
+    "objc2-foundation/NSArray",
+    "objc2-foundation/NSGeometry",
+]
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd", "dep:raw-window-handle"]
-# A native menu bar built from a `MenuSpec` (muda; macOS and Windows).
-menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle"]
+# A native menu bar and context menus built from a `MenuSpec` (muda; macOS and Windows).
+menu = ["dep:muda", "dep:objc2", "dep:raw-window-handle", "dep:block2", "objc2-foundation/NSRunLoop", "objc2-foundation/block2"]
 # A tray / status-bar icon with a menu built from a `MenuSpec` (tray-icon; on Linux a
 # StatusNotifierItem over D-Bus, no GTK).
 tray = ["dep:tray-icon", "dep:muda", "dep:objc2"]

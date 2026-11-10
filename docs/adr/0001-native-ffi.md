@@ -30,6 +30,10 @@ the video editor's platform crate these were adapted from):
      original, `class_addMethod` of `applicationShouldHandleReopen:hasVisibleWindows:` on winit's
      application delegate, and the `msg_send!`s that inspect the KVO change); added 2026-11-10 so a
      nil appearance during screen capture doesn't end the app and the Dock icon shows the window
+   - `menu::popup` (muda's `show_context_menu_for_nsview` / `show_context_menu_for_hwnd` on the
+     window's own view or HWND, retaining the macOS view, and posting the macOS menu to the main
+     run loop) and `drag_out` (macOS: an `NSDraggingSource` class, retaining the window's view, an
+     `NSDraggingItem` frame); added 2026-11-10 for context menus and dragging files out
    - `single_instance` (Windows `AllowSetForegroundWindow`, one block; added 2026-11-10 so the
      second launch lets the first come to the front)
    - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)

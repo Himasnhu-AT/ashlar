@@ -9,6 +9,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- Context menus and drag-out (IMP-6.15): `ashlar_native::menu::popup::show(window, &spec, at,
+  waker)` opens a `MenuSpec` as a native context menu (macOS: posted to the run loop so it never
+  opens inside the UI pass; Windows: opens at once, call it between frames) and reports
+  `Some(id)` or `None` on a receiver. `ashlar_native::drag_out::start(window, DragItem { files,
+  png, text }, on_end)` (feature `drag-out`, in `full`) drags files, a PNG or text into other
+  apps on macOS; `Unsupported` elsewhere.
 - `ashlar_native::mac_shell` (default feature `mac-shell`, IMP-6.14): `guard_appearance()` checks
   the window delegate's `effectiveAppearance` changes before winit casts them, so a nil appearance
   while the screen is captured no longer ends the app; `listen_reopen(waker)` reports Dock reopen

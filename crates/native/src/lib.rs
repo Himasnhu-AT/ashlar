@@ -11,7 +11,7 @@
 //! | Module | macOS | Windows | Linux | Web |
 //! |---|---|---|---|---|
 //! | [`dialogs`] | rfd | rfd | rfd (portal) | rfd (bytes only) |
-//! | [`menu`] | muda | muda (per window) | spec only | spec only |
+//! | [`menu`] (bar, context menus) | muda | muda (per window) | spec only | spec only |
 //! | [`clipboard`] | arboard + NSPasteboard types | arboard | arboard | – |
 //! | [`power`] | NSProcessInfo activity | SetThreadExecutionState | logind inhibit | – |
 //! | [`open_files`] | Apple events + argv | argv | argv | – |
@@ -25,6 +25,7 @@
 //! | [`tray`] | NSStatusItem | notification area | StatusNotifierItem (D-Bus, no GTK) | – |
 //! | [`hotkey`] | Carbon hot keys | RegisterHotKey | X11 (not Wayland) | – |
 //! | [`mac_shell`] | appearance guard, Dock reopen | – | – | – |
+//! | [`drag_out`] | NSDraggingSession | – | – | – |
 //! | [`memory`] | phys_footprint, malloc pressure relief | private commit | /proc status, malloc_trim | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
@@ -47,6 +48,8 @@ pub mod clipboard;
 pub mod dialogs;
 #[cfg(feature = "display")]
 pub mod display;
+#[cfg(feature = "drag-out")]
+pub mod drag_out;
 #[cfg(feature = "hotkey")]
 pub mod hotkey;
 #[cfg(any(feature = "menu", feature = "hotkey"))]
