@@ -21,6 +21,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   `p50_ms`/`p95_ms`/`max_ms` and adds `pass`, `tessellate` and `frame_cpu` (the whole frame on the
   CPU: eframe's own figure in a window). `Driver` tessellates every frame like a window and
   takes the display scale (`Driver::pixels_per_point`).
+- `ashlar_ui::motion`: animated values for egui in one call per frame (`value`, `f32`, `opacity`,
+  `color` in OKLab, `rect` by edges, `set`, `release`), kept in the context and forgotten when
+  unused. Nothing animates on first show, frames are requested (`Reason::ANIMATION`) only while a
+  value moves, and settled values are exactly their target. `prefs`/`set_prefs` set reduced
+  motion (also turning off egui's widget animations) and a time scale; `active` counts moving
+  values.
 
 ### Changed
 
