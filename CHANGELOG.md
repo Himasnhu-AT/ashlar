@@ -18,6 +18,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   thread and capped at 64 MiB with a final `"end"` line (`ashlar_app::frame_log`).
 - `app.stats` (and the MCP `app_stats` tool) reports `process`: `footprint_bytes`, `peak_bytes`,
   `cpu_s` and `threads` (`ProcessStats`; `null` where the platform cannot say).
+- `ashlar_ui::chat`: a chat kit over plain data. `Transcript` is a virtualized, variable-height
+  message list (heights kept per message key, revision and width; a frame costs O(visible)) that
+  follows the newest message while it streams, stays put once the user scrolls up and then offers
+  "Jump to latest"; it is a polite AccessKit log. `Message` draws a role and a markdown body with a
+  streaming state, `ToolCard` a tool call with folded details and keyboard-reachable Approve/Deny
+  (`<id>.approve`, `<id>.deny`), and `Composer` a text field where Enter sends, Shift+Enter adds a
+  line, input-method composition never sends, and `@` / `/` open a `PopupList` of suggestions.
+  Strings come from `ChatLabels`. The gallery has a Chat page.
 - `ashlar-diff` (new crate, rank 0, no dependencies, builds for wasm32): line diffs with Myers'
   algorithm under a cost cap (past the cap, a split at lines unique to both sides, then a coarse
   delete/insert, flagged `coarse`), word-level emphasis for paired changed lines, hunks with
