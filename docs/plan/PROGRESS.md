@@ -3,6 +3,26 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/motiongate and wt/overlays merged (CI green)
+
+- **IMP-4.10:** `ashlar_ui::motion_gate::MotionRecorder` and `Driver::record`.
+  - Checks for: overshoot on opacity and colour, reversal with bounce 0, pops, flicker, and frames
+    requested after everything settled. There is an allow list per id, prefix or wake reason.
+  - Seeded faults give exactly one finding each.
+  - The gallery passes at 120 Hz: dialog, toast, animated theme switch, tab and page switches. The
+    only finding was the gate's own false alarm on values set with `motion::set`, now ignored.
+  - The idle check allows 3 frames after settle, because egui adds a repaint after a request.
+- **IMP-5.9:** `overlay::{Select, Combobox, Popover}`, `ashlar_ui::help` tooltips, and
+  `commands::menu::context`.
+  - The combobox filters with fuzzy matching; composition never commits a choice.
+  - The popover flips at window edges and returns focus when it closes.
+  - Option lists are virtualized.
+  - New: `MotionTokens.tooltip_delay` and new automation roles.
+- **Merge incident:** the overlays merge left conflict markers in `crates/ui/src/lib.rs` (two new
+  `mod` lines), and the format gate caught them. The merge script stopped silently, so merges now go
+  through one script that stops on any non-CHANGELOG conflict and checks for leftover markers.
+- Started: wt-rowuse (IMP-2.17, IMP-0.5), wt-chat (IMP-5.7).
+
 ## 2026-11-10: wt/allocreg, wt/tabs, wt/form, wt/snap merged (CI and allocation gate green)
 
 - **IMP-2.18:** the allocation regression was real, and caused by devtools.
