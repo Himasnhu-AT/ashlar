@@ -29,7 +29,7 @@ pub enum KeymapChange {
 }
 
 /// Labels the editor shows (localized by the app).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeymapLabels {
     pub search: String,
     pub command: String,
@@ -66,6 +66,7 @@ pub struct KeymapEditor {
     conflicts: HashMap<String, Vec<String>>,
     conflicts_key: Option<(u64, u64)>,
     edits: u64,
+    /// Left at its default, the editor shows the installed [`crate::labels`].
     pub labels: KeymapLabels,
 }
 
@@ -175,7 +176,10 @@ impl KeymapEditor {
     pub fn show(&mut self, ui: &mut Ui, keymap: &mut Keymap, commands: &[CommandInfo], revision: u64) -> Option<KeymapChange> {
         let t = tokens::current(ui.ctx());
         let mut change = self.capture(ui, keymap);
-        SearchField::new("keymap.search", &mut self.filter).hint(&self.labels.search).show(ui);
+        // `labels` left at the English default means "use the installed labels"
+        let installed = crate::labels::current(ui.ctx());
+        let custom = self.labels != crate::labels::english().keymap;
+        SearchField::new("keymap.search", &mut self.filter).hint(if custom { &self.labels.search } else { &installed.keymap.search }).show(ui);
         self.refresh(keymap, commands, revision);
         let total_conflicts = self.conflicts.len();
         if total_conflicts > 0 {
@@ -186,16 +190,16 @@ impl KeymapEditor {
         }
         ui.add_space(t.space.xs);
         let width = ui.available_width();
+        let labels = if custom { &self.labels } else { &installed.keymap };
         let cols = [
-            Column::new(&self.labels.command, (width * 0.45).max(120.0)),
-            Column::new(&self.labels.shortcut, (width * 0.35).max(100.0)),
+            Column::new(&labels.command, (width * 0.45).max(120.0)),
+            Column::new(&labels.shortcut, (width * 0.35).max(100.0)),
             Column::new("", (width * 0.2).max(90.0)),
         ];
         let platform = keymap.platform();
         let rows = &self.rows;
         let recording = self.recording.as_deref();
         let conflicts = &self.conflicts;
-        let labels = &self.labels;
         let keymap_ro: &Keymap = keymap;
         let mut action: Option<(usize, Action)> = None;
         let row_h = t.control_height + 2.0;
