@@ -172,7 +172,8 @@ pub struct Toasts {
     width: f32,
     inset: Vec2,
     last_time: Option<f64>,
-    labels: ToastLabels,
+    /// Set by the app; `None` uses the installed [`crate::labels`].
+    labels: Option<ToastLabels>,
     activated: Vec<ToastActivation>,
     /// At the end of the last frame, nothing else wanted Escape (no popup, no focus outside toasts).
     escape_ready: bool,
@@ -238,7 +239,7 @@ impl Toasts {
             width: 320.0,
             inset: Vec2::ZERO,
             last_time: None,
-            labels: ToastLabels::default(),
+            labels: None,
             activated: Vec::new(),
             escape_ready: true,
             focused: None,
@@ -275,7 +276,7 @@ impl Toasts {
     }
     /// Words the stack shows (English by default).
     pub fn labels(mut self, labels: ToastLabels) -> Self {
-        self.labels = labels;
+        self.labels = Some(labels);
         self
     }
 
@@ -398,6 +399,8 @@ impl Toasts {
             self.escape_ready = true;
             return;
         }
+        let installed = crate::labels::current(ctx);
+        let labels: &ToastLabels = self.labels.as_ref().unwrap_or(&installed.toast);
         let t = tokens::current(ctx);
         let screen = ctx.content_rect();
         let margin = t.space.lg;
@@ -432,7 +435,7 @@ impl Toasts {
             let area = egui::Area::new(area_id).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(false).fade_in(false);
             area.show(ctx, |ui| {
                 ui.set_width(width);
-                paint_toast(ui, &t, &self.labels, entry, Look { live: false, shift: vec2(0.0, slide(p)), alpha: p });
+                paint_toast(ui, &t, labels, entry, Look { live: false, shift: vec2(0.0, slide(p)), alpha: p });
             });
             true
         });
@@ -461,7 +464,7 @@ impl Toasts {
             let mut hovered = false;
             let inner = area.show(ctx, |ui| {
                 ui.set_width(width);
-                let painted = paint_toast(ui, &t, &self.labels, entry, look);
+                let painted = paint_toast(ui, &t, labels, entry, look);
                 hovered = ui.rect_contains_pointer(ui.min_rect());
                 painted
             });
@@ -500,7 +503,7 @@ impl Toasts {
                 egui::Area::new(Id::new("ashlar_ui::toast_more")).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(true);
             area.show(ctx, |ui| {
                 ui.set_width(width);
-                paint_more(ui, &t, &self.labels, hidden, matches!(anchor, Align2::LEFT_TOP | Align2::LEFT_BOTTOM));
+                paint_more(ui, &t, labels, hidden, matches!(anchor, Align2::LEFT_TOP | Align2::LEFT_BOTTOM));
             });
         }
 
@@ -945,6 +948,26 @@ mod tests {
         h.key_press(Key::Escape);
         h.step();
         assert!(h.state().is_empty());
+    }
+
+    #[test]
+    fn labels_follow_the_installed_locale_unless_the_app_sets_them() {
+        let mut i18n = ashlar_i18n::I18n::new("en");
+        crate::labels::add_catalogs(&mut i18n);
+        let mut h = harness(Toasts::new());
+        h.state_mut().push(Toast::info("saved").sticky());
+        h.step();
+        assert_eq!(automation::find(&h.ctx, "toast.1.close").unwrap().label, "Dismiss");
+        i18n.set_locale(&i18n.negotiate(&["de_DE.UTF-8"]));
+        crate::labels::install(&h.ctx, crate::labels::UiLabels::from_i18n(&i18n));
+        h.step();
+        assert_eq!(automation::find(&h.ctx, "toast.1.close").unwrap().label, "Schließen");
+        // labels the app passes win over the installed ones
+        let mut h2 = harness(Toasts::new().labels(ToastLabels { dismiss: "Close".into(), more: "+{n}".into() }));
+        crate::labels::install(&h2.ctx, crate::labels::UiLabels::from_i18n(&i18n));
+        h2.state_mut().push(Toast::info("saved").sticky());
+        h2.step();
+        assert_eq!(automation::find(&h2.ctx, "toast.1.close").unwrap().label, "Close");
     }
 
     #[test]

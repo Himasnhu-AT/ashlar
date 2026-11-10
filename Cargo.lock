@@ -461,6 +461,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashlar-i18n"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "ashlar-integrations"
 version = "0.1.0"
 dependencies = [
@@ -674,6 +683,7 @@ dependencies = [
  "ashlar-command",
  "ashlar-control",
  "ashlar-diff",
+ "ashlar-i18n",
  "ashlar-motion",
  "ashlar-syntax",
  "ashlar-telemetry",

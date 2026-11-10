@@ -4,8 +4,8 @@ use egui::text::{CCursor, CCursorRange};
 use egui::text_edit::TextEditState;
 use egui::{Event, Id, Key, KeyboardShortcut, Modifiers, Ui};
 
+use super::ChatLabels;
 use super::popup_list::PopupList;
-use super::{ChatLabels, default_labels};
 use crate::automation::{self, Details, Role};
 
 /// The `@` or `/` word the caret is in, which opens the popup.
@@ -89,10 +89,8 @@ impl<'a> Composer<'a> {
     }
 
     pub fn show(mut self, ui: &mut Ui) -> ComposerResponse {
-        let labels: &ChatLabels = match self.labels {
-            Some(l) => l,
-            None => default_labels(),
-        };
+        let installed = crate::labels::current(ui.ctx());
+        let labels: &ChatLabels = self.labels.unwrap_or(&installed.chat);
         let edit_id = ui.make_persistent_id(("ashlar_ui::chat::composer", self.id));
         let state_id = edit_id.with("state");
         let mut st: State = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();

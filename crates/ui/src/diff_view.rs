@@ -535,14 +535,8 @@ fn show(view: DiffView<'_>, ui: &mut Ui) -> DiffResponse {
     let DiffView { id, state, files, revision, mode, theme, labels, highlighter, max_height } = view;
     let t = tokens::current(ui.ctx());
     let base = ui.make_persistent_id(id);
-    let own_labels;
-    let labels = match labels {
-        Some(l) => l,
-        None => {
-            own_labels = DiffLabels::default();
-            &own_labels
-        }
-    };
+    let installed = crate::labels::current(ui.ctx());
+    let labels = labels.unwrap_or(&installed.diff);
     let own_theme;
     let theme = match theme {
         Some(th) => th,

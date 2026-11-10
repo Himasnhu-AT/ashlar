@@ -25,7 +25,7 @@
 //! uses [`Row::bind`]; with [`Row::modified`] the caller resets when [`RowOutput::reset`] is set.
 
 use std::ops::Range;
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use egui::accesskit::{Invalid, Live};
 use egui::text::{LayoutJob, TextFormat};
@@ -34,6 +34,7 @@ use egui::{Align, Color32, CornerRadius, Layout, Rect, Response, RichText, Sense
 use crate::automation::{self, Details, Role};
 use crate::content::EmptyState;
 use crate::controls::{Button, Size, Variant};
+use crate::labels::UiLabels;
 use crate::tokens::{self, Tokens};
 
 /// Longest query (in characters) the filter compares; the rest is ignored.
@@ -63,9 +64,20 @@ impl Default for FormLabels {
     }
 }
 
-fn default_labels() -> &'static FormLabels {
-    static LABELS: OnceLock<FormLabels> = OnceLock::new();
-    LABELS.get_or_init(FormLabels::default)
+/// The labels a form uses: the app's, or the installed [`crate::labels`].
+#[derive(Clone)]
+enum LabelsRef<'l> {
+    App(&'l FormLabels),
+    Installed(Arc<UiLabels>),
+}
+
+impl LabelsRef<'_> {
+    fn get(&self) -> &FormLabels {
+        match self {
+            LabelsRef::App(l) => l,
+            LabelsRef::Installed(u) => &u.form,
+        }
+    }
 }
 
 /// What a form showed.
@@ -88,13 +100,13 @@ impl FormOutput {
 pub struct Form<'a> {
     id: &'a str,
     query: &'a str,
-    labels: &'a FormLabels,
+    labels: Option<&'a FormLabels>,
 }
 
 impl<'a> Form<'a> {
     /// `id` names the form for automation (its empty state is `<id>.empty`).
     pub fn new(id: &'a str) -> Self {
-        Form { id, query: "", labels: default_labels() }
+        Form { id, query: "", labels: None }
     }
 
     /// Show only rows whose label, description or keywords contain `query` (case-insensitive),
@@ -105,16 +117,19 @@ impl<'a> Form<'a> {
     }
 
     pub fn labels(mut self, labels: &'a FormLabels) -> Self {
-        self.labels = labels;
+        self.labels = Some(labels);
         self
     }
 
     pub fn show(self, ui: &mut Ui, add: impl FnOnce(&mut FormUi<'_, 'a>)) -> FormOutput {
         let needle: Vec<char> = self.query.trim().chars().take(MAX_QUERY_CHARS).map(lower).collect();
-        let labels = self.labels;
+        let labels = match self.labels {
+            Some(l) => LabelsRef::App(l),
+            None => LabelsRef::Installed(crate::labels::current(ui.ctx())),
+        };
         let form_id = self.id;
         ui.vertical(|ui| {
-            let mut f = FormUi { ui, st: State { needle, labels, rows: 0, visible: 0, id_buf: String::new() } };
+            let mut f = FormUi { ui, st: State { needle, labels: labels.clone(), rows: 0, visible: 0, id_buf: String::new() } };
             add(&mut f);
             let FormUi { ui, st } = f;
             let out = FormOutput { rows: st.rows, visible: st.visible };
@@ -123,7 +138,7 @@ impl<'a> Form<'a> {
                 id.clear();
                 id.push_str(form_id);
                 id.push_str(".empty");
-                EmptyState::new(&id, &labels.no_match).body(&labels.no_match_body).show(ui);
+                EmptyState::new(&id, &labels.get().no_match).body(&labels.get().no_match_body).show(ui);
             }
             out
         })
@@ -145,7 +160,7 @@ pub fn filter<'a>(ui: &mut Ui, id: &'a str, query: &'a str, add: impl FnOnce(&mu
 struct State<'l> {
     /// Lower-cased query; empty means no filter.
     needle: Vec<char>,
-    labels: &'l FormLabels,
+    labels: LabelsRef<'l>,
     rows: usize,
     visible: usize,
     /// Reused buffer for `<section>.<row>` ids.
@@ -319,7 +334,8 @@ impl<'r, 's, 'l> Row<'r, 's, 'l> {
         st.id_buf.push('.');
         st.id_buf.push_str(id);
         let full_id = st.id_buf.as_str();
-        let labels = st.labels;
+        let labels = st.labels.clone();
+        let labels = labels.get();
         let ui = &mut *section.ui;
 
         let t = tokens::current(ui.ctx());
@@ -431,13 +447,13 @@ pub struct Field<'a> {
     description: Option<&'a str>,
     required: bool,
     error: Option<&'a str>,
-    labels: &'a FormLabels,
+    labels: Option<&'a FormLabels>,
 }
 
 impl<'a> Field<'a> {
     /// `id` is passed to the control; the error text is `<id>.error`.
     pub fn new(id: &'a str, label: &'a str) -> Self {
-        Field { id, label, description: None, required: false, error: None, labels: default_labels() }
+        Field { id, label, description: None, required: false, error: None, labels: None }
     }
 
     pub fn description(mut self, text: &'a str) -> Self {
@@ -457,7 +473,7 @@ impl<'a> Field<'a> {
     }
 
     pub fn labels(mut self, labels: &'a FormLabels) -> Self {
-        self.labels = labels;
+        self.labels = Some(labels);
         self
     }
 
@@ -465,6 +481,8 @@ impl<'a> Field<'a> {
     pub fn show(self, ui: &mut Ui, add: impl FnOnce(&mut Ui, &str) -> Response) -> Response {
         let t = tokens::current(ui.ctx());
         let Field { id, label, description, required, error, labels } = self;
+        let installed = crate::labels::current(ui.ctx());
+        let labels = labels.unwrap_or(&installed.form);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = t.space.xxs;
             ui.horizontal(|ui| {
