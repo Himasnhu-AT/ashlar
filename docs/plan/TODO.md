@@ -9,8 +9,8 @@ a task's state.
 |---|---|---|
 | IMP-0.1 | Audit and plan files | done (0f3d6dd) |
 | IMP-0.2 | `cargo xtask names` skips `.claude` (agent worktrees are whole checkouts) | done (845a519) |
-| IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | doing (wt-deps) |
-| IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | todo |
+| IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
+| IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | doing (wt-wake) |
 
 ## Phase 1: measure the whole frame
 | Id | Task | Status |
@@ -41,14 +41,14 @@ a task's state.
 | IMP-2.11 | Launch time | todo |
 | IMP-2.12 | Per-frame JSON log | todo |
 | IMP-2.13 | Telemetry incident rules | todo |
-| IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | todo |
-| IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | todo |
+| IMP-2.14 | One frame per ashlar wake (egui adds a second frame to zero-delay repaints) | doing (wt-wake) |
+| IMP-2.15 | `serve_control` wake after answering: needed? (doubles frames per engine command) | doing (wt-wake) |
 
 ## Phase 3: motion and theming
 | Id | Task | Status |
 |---|---|---|
 | IMP-3.1 | `ashlar-motion` crate | done (ee02511) |
-| IMP-3.2 | `ashlar_ui::motion` | doing (wt-uimotion) |
+| IMP-3.2 | `ashlar_ui::motion` | done (ce86186) |
 | IMP-3.3 | OS preferences: reduced motion, accent, contrast | todo |
 | IMP-3.4 | Token upgrades (OKLCH, motion, elevation, contrast gate) | todo |
 | IMP-3.5 | Animated theme switch | todo |
@@ -95,14 +95,14 @@ a task's state.
 ## Phase 6: platform
 | Id | Task | Status |
 |---|---|---|
-| IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | todo |
+| IMP-6.1 | Native menu fixes (Windows attach, typing and modal guards, standard macOS menus) | doing (wt-menu) |
 | IMP-6.2 | Open files, single instance, dropped files | todo |
 | IMP-6.3 | OS preference watch | todo |
 | IMP-6.4 | Window placement and viewport hook | todo |
 | IMP-6.5 | Parented, non-blocking file dialogs | todo |
 | IMP-6.6 | Notifications | todo |
 | IMP-6.7 | Dock Quit, logout and shutdown | todo |
-| IMP-6.8 | Web target gate | doing (wt-deps: ashlar-app in the wasm gate, dead-code warnings) |
+| IMP-6.8 | Web target gate | doing (gate and warnings done 766bdf8; web example and DOM error todo) |
 | IMP-6.9 | Honest launch timing and ready signal | todo |
 | IMP-6.10 | Open command-line document after first frame | todo |
 | IMP-6.11 | Tray / status item | todo |

@@ -3,6 +3,30 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/uimotion and wt/deps merged; wave 3 started
+
+- **IMP-3.2:** `ashlar_ui::motion` (value, f32, opacity, colour in OKLab, rect by edges, set, release,
+  prefs, active).
+  - Behaviour:
+    - Slots are pruned after 120 unused frames.
+    - The first call returns the target.
+    - There is at most one ANIMATION wake per frame, and none once settled.
+    - Under reduced motion, egui's `animation_time` is 0.
+    - A new frame is detected from `i.time`; the pass counter cost an extra context lock per call.
+  - Perf: `motion_value_1k_ids` 36 µs, `motion_settled_1k_ids` 17 µs (3.5× a plain ctx-data lookup),
+    `idle_wakes_after_settle` 0.
+- **IMP-0.3:**
+  - rusqlite 0.40 → 0.41 (libsqlite3-sys 0.39, RUSTSEC-2026-0459)
+  - async-executor 1.14.0 → 1.14.1 (the old one was yanked)
+  - `cargo deny check advisories` now passes, with no ignores
+- **IMP-6.8 (gate part):** `cargo xtask wasm` also checks `ashlar-ui` and `ashlar-app` (12 crates), and
+  the wasm dead-code warnings are fixed.
+- **CI:** the `names` gate caught "crafted" in the new CHANGELOG line (a substring match for an app
+  name). The line was reworded in a34be3c.
+- **Wave 3:**
+  - wt-wake: IMP-2.14, IMP-2.15, IMP-0.4
+  - wt-menu: IMP-6.1
+
 ## 2026-11-10: wt/toasts and wt/frame merged
 
 - **IMP-5.2 toast v2 (additive API):**
