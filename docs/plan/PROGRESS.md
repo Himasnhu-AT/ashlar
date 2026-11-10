@@ -3,6 +3,20 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/chat merged
+
+- **IMP-5.7:** `chat::{Transcript, Message, ToolCard, Composer, PopupList}`. It is UI over plain data
+  (the `TranscriptItem` trait or `ChatMessage`); its strings come from `ChatLabels`.
+  - The transcript has its own height index (only visible rows are measured), stays at the bottom
+    unless the user scrolled up (then `<id>.jump` appears), and is a polite AccessKit log.
+  - Typing: Enter is ignored while composing and for one frame after an input-method event.
+  - Performance: `transcript_10k_messages_frame` 0.129 ms (1k: 0.092 ms).
+- **CI after the merge failed** on three direct `request_repaint` calls (the wake scan). The agent
+  hadn't run the full gate. Fixed on `imp`: a new `chat::CHAT_LAYOUT` wake reason and `INPUT` for
+  clicks. Rule from here on: no merge until the agent reports `ci: ok` from a full
+  `cargo xtask ci`.
+- Started: wt-i18n (IMP-6.13).
+
 ## 2026-11-10: wt/rowuse and wt/diff merged (CI green)
 
 - **IMP-0.5:** `deny.toml` has a `[licenses]` allow list: MIT, Apache-2.0 (and the LLVM exception),
