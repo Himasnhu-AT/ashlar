@@ -261,6 +261,22 @@ dialogs), `reasons` the wake reasons and `commands` the commands the frame ran. 
 thread writes the file; it stops at 64 MiB with a last `{"end": "size limit reached", …}` line, and
 `dropped` counts lines lost if the writer falls behind. Not available on the web.
 
+`ASHLAR_RECORD=FILE` (any build; `Runtime::record_to(path)` in tests) records a session for
+replay: one JSON line per frame with its time, screen size and input events (pointer, keys, text,
+wheel, clipboard, focus), and one line per control request served. A background thread writes it;
+when the file passes 32 MiB it becomes `FILE.old` and a new one starts, so the pair holds at most
+64 MiB. `Driver::replay(FILE)` plays it into a fresh driver of the same app, frame by frame at the
+recorded times, which turns a bug report into a test:
+
+```rust
+let mut d = Driver::new(my_app().runtime());
+d.replay("session.jsonl")?;
+assert_eq!(d.call("ui.snapshot", json!({}))?, expected);
+```
+
+Revision numbers come from one process-wide counter, so compare how far a session moved them,
+not their values. Not available on the web.
+
 ## Agents (MCP)
 
 `ashlar-mcp` lists `ui_snapshot`, `ui_click`, `ui_fill`, `ui_hover`, `ui_focus`, `ui_press`,

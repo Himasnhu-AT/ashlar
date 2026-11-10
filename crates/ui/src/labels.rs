@@ -310,6 +310,71 @@ pub fn current(ctx: &egui::Context) -> Arc<UiLabels> {
     ctx.data(|d| d.get_temp::<Arc<UiLabels>>(id())).unwrap_or_else(|| english().clone())
 }
 
+/// Count-dependent texts every component may show; each must be in the English catalog (tested).
+/// They hold `{n}` and may have CLDR plural forms (`ui.toast.more.one`, `….few`, `….other`).
+pub const PLURAL_KEYS: &[&str] = &["ui.toast.more", "ui.keymap.shared"];
+
+/// Count-dependent texts with a locale's plural rules ([`PLURAL_KEYS`]). Installed next to the
+/// [`UiLabels`] (they are kept apart so the label structs gain no fields); the default holds
+/// nothing, and components then fill `{n}` into their [`UiLabels`] template.
+#[derive(Clone, Default)]
+pub struct Plurals {
+    i18n: Option<Arc<I18n>>,
+}
+
+impl std::fmt::Debug for Plurals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Plurals").field("locale", &self.i18n.as_ref().map(|i| i.locale().to_string())).finish()
+    }
+}
+
+impl Plurals {
+    /// The plural texts of `i18n`'s current locale.
+    pub fn from_i18n(i18n: &I18n) -> Self {
+        Plurals { i18n: Some(Arc::new(i18n.clone())) }
+    }
+
+    /// `key`'s text for `n` (by the locale's plural category, `{n}` filled with the locale's
+    /// digits), or `None` when there is no catalog text for `key`.
+    pub fn text(&self, key: &str, n: usize) -> Option<String> {
+        let i18n = self.i18n.as_ref()?;
+        let other = format!("{key}.other");
+        if i18n.get(key).is_none() && i18n.get(&other).is_none() {
+            return None;
+        }
+        let n = i64::try_from(n).unwrap_or(i64::MAX);
+        let shown = i18n.integer(n);
+        Some(i18n.plural(key, n, &[("n", &shown)]))
+    }
+}
+
+fn plurals_id() -> egui::Id {
+    egui::Id::new("ashlar_ui::labels::plurals")
+}
+
+/// Installs `plurals` for every component on `ctx` (until replaced).
+pub fn install_plurals(ctx: &egui::Context, plurals: Plurals) {
+    ctx.data_mut(|d| d.insert_temp(plurals_id(), plurals));
+    crate::wake::wake(ctx, crate::wake::Reason::SETTINGS);
+}
+
+/// Installs the labels and the plural texts of `i18n`'s current locale (call again after
+/// switching locale).
+pub fn install_i18n(ctx: &egui::Context, i18n: &I18n) {
+    install(ctx, UiLabels::from_i18n(i18n));
+    install_plurals(ctx, Plurals::from_i18n(i18n));
+}
+
+/// The installed plural texts (empty unless installed).
+pub fn plurals(ctx: &egui::Context) -> Plurals {
+    ctx.data(|d| d.get_temp::<Plurals>(plurals_id())).unwrap_or_default()
+}
+
+/// The text for `n` of `key`: the installed plural form, else `template` with `{n}` filled.
+pub fn count_text(ctx: &egui::Context, key: &str, n: usize, template: &str) -> String {
+    plurals(ctx).text(key, n).unwrap_or_else(|| template.replace("{n}", &n.to_string()))
+}
+
 /// The English defaults, shared.
 pub fn english() -> &'static Arc<UiLabels> {
     static ENGLISH: OnceLock<Arc<UiLabels>> = OnceLock::new();
@@ -333,6 +398,22 @@ mod tests {
         assert_eq!(i18n.missing_source_keys(KEYS), Vec::<&str>::new());
         // the English catalog and the Default impls say the same thing
         assert_eq!(UiLabels::from_i18n(&i18n), UiLabels::default());
+    }
+
+    #[test]
+    fn plural_keys_are_in_every_catalog_and_follow_the_locale() {
+        let mut i18n = i18n();
+        assert_eq!(i18n.missing_source_keys(PLURAL_KEYS), Vec::<&str>::new());
+        i18n.add("en", r#"{"ui.toast.more.one": "+{n} more toast", "ui.toast.more.other": "+{n} more toasts"}"#);
+        let ctx = egui::Context::default();
+        assert_eq!(count_text(&ctx, "ui.toast.more", 1, "+{n} more"), "+1 more", "nothing installed: the template");
+        install_i18n(&ctx, &i18n);
+        assert_eq!(count_text(&ctx, "ui.toast.more", 1, "x"), "+1 more toast");
+        assert_eq!(count_text(&ctx, "ui.toast.more", 1200, "x"), "+1,200 more toasts");
+        i18n.set_locale("de");
+        install_i18n(&ctx, &i18n);
+        assert_eq!(count_text(&ctx, "ui.keymap.shared", 3, "x"), "3 Befehle teilen sich ein Tastenkürzel");
+        assert_eq!(plurals(&ctx).text("no.such.key", 2), None);
     }
 
     #[test]

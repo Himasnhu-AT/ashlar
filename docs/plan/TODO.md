@@ -12,9 +12,9 @@ a task's state.
 | IMP-0.3 | Dependency advisories (libsqlite3-sys CVE, yanked async-executor) | done (f0f8e63) |
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | done (9744596) |
 | IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
-| IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
+| IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | done (wt/tel) |
 | IMP-0.8 | `ashlar-syntax` `time_is_linear_in_input_size` failed once under machine load (passes alone): make it robust like IMP-0.4 | done (3956c2c) |
-| IMP-0.9 | `perf_warn` Driver scroll test passes on one clean run out of three (load): make it robust without retries | todo |
+| IMP-0.9 | `perf_warn` Driver scroll test passes on one clean run out of three (load): make it robust without retries | done (wt/tel) |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
 ## Phase 1: measure the whole frame
@@ -46,7 +46,7 @@ a task's state.
 | IMP-2.10 | Idle memory | done (wt/launch, 4356a62) |
 | IMP-2.11 | Launch time | dropped (eframe 0.36 already creates the window hidden until the first paint) |
 | IMP-2.12 | Per-frame JSON log | done (61094b0) |
-| IMP-2.13 | Telemetry incident rules | todo |
+| IMP-2.13 | Telemetry incident rules | done (wt/tel) |
 | IMP-2.16 | Cut per-frame allocations (idle wake frame: 954 vs 29 for bare egui) | done (1b0c572, 48fe599) |
 | IMP-2.18 | Allocation regression when IMP-5.3 and IMP-2.16 combine: idle 550 → 652 (gate 578), keystroke 1,935 → 2,246 | done (3ad0ac1, ef6c1a4) |
 | IMP-2.17 | Use `list::Row` in ashlar's own lists and the notes example; call `list::checked` from ashlar scroll containers | done (b9070cb) |
@@ -103,7 +103,7 @@ a task's state.
 | IMP-5.20 | Follow-ups to IMP-3.6 and 5.5: use `tabs::indicator` in docking and the tab strip; check the cost of the dialog's per-frame shape copy (up to 4,096 shapes) with the allocation bench; CodeView gallery page, horizontal scrolling, a Document automation role | todo (tab indicator done in IMP-5.10) |
 | IMP-5.21 | Accessibility findings from the goldens: unnamed list/table/tree containers, `Unknown` cell and separator nodes, a nameless keymap header, inputs named only by placeholder, banners repeating name as value | done (329a6bc) |
 | IMP-5.22 | `VirtualList::scroll_to` may read the scroll offset under the wrong id (seen by wt-motion2) | done (329a6bc) |
-| IMP-5.16 | Image viewer, tuning panel, diagrams | todo (later) |
+| IMP-5.16 | Image viewer, tuning panel, diagrams | dropped (deferred: low value for the cost) |
 | IMP-5.18 | Markdown follow-ups: visual snapshot, `show` with a revision (no full-text hash per frame), O(n²) `inline()`, relayout on width change | done (a3aff34) |
 | IMP-5.19 | Controls follow-ups: pixel pairs for progress circle and spinner, skeleton rows, exclusive accordion, disabled options, the ⇧ keycap glyph | todo |
 | IMP-5.17 | Toast leftovers: motion, F6 to the toast region, runtime runs action commands, gallery page | todo (motion after IMP-3.2) |
@@ -134,5 +134,5 @@ a task's state.
 ## Phase 7: later
 | Id | Task | Status |
 |---|---|---|
-| IMP-7.1 | Hot reload of views | todo (after phase 4) |
-| IMP-7.2 | Present latency options | todo (measure first) |
+| IMP-7.1 | Hot reload of views | dropped (deferred: large; revisit with the headless edit-to-pixel loop measured) |
+| IMP-7.2 | Present latency options | dropped (deferred: needs measurement on a 120 Hz display) |

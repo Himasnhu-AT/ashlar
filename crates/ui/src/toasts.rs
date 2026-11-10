@@ -503,7 +503,7 @@ impl Toasts {
                 egui::Area::new(Id::new("ashlar_ui::toast_more")).order(Order::Foreground).anchor(anchor, vec2(x, y + y_margin)).interactable(true);
             area.show(ctx, |ui| {
                 ui.set_width(width);
-                paint_more(ui, &t, labels, hidden, matches!(anchor, Align2::LEFT_TOP | Align2::LEFT_BOTTOM));
+                paint_more(ui, &t, labels, self.labels.is_some(), hidden, matches!(anchor, Align2::LEFT_TOP | Align2::LEFT_BOTTOM));
             });
         }
 
@@ -712,9 +712,14 @@ fn paint_toast(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, entry: &Entry, loo
     Painted { height, closed: close.clicked(), action, focused }
 }
 
-/// The "+N more" line under the visible toasts.
-fn paint_more(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, hidden: usize, left: bool) {
-    let text = labels.more.replace("{n}", &hidden.to_string());
+/// The "+N more" line under the visible toasts: the installed plural form
+/// ([`crate::labels::count_text`]) unless the app set its own labels (`custom`).
+fn paint_more(ui: &mut Ui, t: &Tokens, labels: &ToastLabels, custom: bool, hidden: usize, left: bool) {
+    let text = if custom {
+        labels.more.replace("{n}", &hidden.to_string())
+    } else {
+        crate::labels::count_text(ui.ctx(), "ui.toast.more", hidden, &labels.more)
+    };
     let font = Tokens::font(t.type_scale.small);
     let revision = crate::cache::hash_of(&(text.as_str(), font.size.to_bits(), t.text.secondary));
     let galley =

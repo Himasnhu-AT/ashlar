@@ -22,9 +22,10 @@ the video editor's platform crate these were adapted from):
    - `power` (macOS `endActivity:`, Windows `SetThreadExecutionState`)
    - `open_files` (macOS: the Apple event handler class and its registration)
    - `progress` (Windows `ITaskbarList3`)
-   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`; and for `bring_to_front`,
-     added 2026-11-10: `IsIconic`, `ShowWindow`, `SetForegroundWindow`, `BringWindowToTop`,
-     `AttachThreadInput`)
+   - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`, `GetUserPreferredUILanguages`
+     (added 2026-11-10 so apps started from the desktop, which have no `LANG`, find the user's
+     languages); and for `bring_to_front`, added 2026-11-10: `IsIconic`, `ShowWindow`,
+     `SetForegroundWindow`, `BringWindowToTop`, `AttachThreadInput`)
    - `mac_shell` (macOS: replacing the implementation of winit's window delegate
      `observeValueForKeyPath:ofObject:change:context:` with a checked wrapper that calls the
      original, `class_addMethod` of `applicationShouldHandleReopen:hasVisibleWindows:` on winit's

@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use ashlar_trace_proto::{
-    Breadcrumb, CatalogEvent, Crash, CrashKind, DISPLAY_BUDGET_US, Device, Envelope, Event, FRAME_BUCKETS, FrameStats, Gpu, ItemBody, MAX_NAME_LEN,
-    MAX_PROP_STR_LEN, MAX_PROPS, Perf, PropValue, SessionEnd, SessionStatus, SessionTotals, validate_name,
+    Breadcrumb, CatalogEvent, Crash, CrashKind, DISPLAY_BUDGET_US, Device, Envelope, Event, FRAME_BUCKETS, FrameStats, Gpu, Incident, IncidentRule,
+    ItemBody, MAX_NAME_LEN, MAX_PROP_STR_LEN, MAX_PROPS, Perf, PropValue, SessionEnd, SessionStatus, SessionTotals, validate_name,
 };
 
 pub const DAY_MS: i64 = 86_400_000;
@@ -32,6 +32,8 @@ pub const MAX_CATALOG_EVENTS: usize = 2_000;
 const MAX_FIELD_LEN: usize = 128;
 const MAX_VERSION_LEN: usize = 64;
 const MAX_MAPPED: usize = 32;
+/// Prefix of the counters the server adds for incidents (`incidents.stall`...).
+pub const INCIDENT_COUNTER_PREFIX: &str = "incidents.";
 /// Counters are clamped so that sums over millions of rows cannot overflow an `i64`.
 pub const COUNTER_MAX: u64 = 1 << 40;
 /// Ten years, in seconds.
@@ -319,6 +321,19 @@ fn sanitize_perf(perf: Perf) -> Perf {
         frames.over_budget = Some(frames.frames_over(DISPLAY_BUDGET_US).min(COUNTER_MAX));
         frames
     });
+    let incidents = sanitize_incidents(perf.incidents);
+    let mut counters: BTreeMap<String, u64> = perf
+        .counters
+        .into_iter()
+        .map(|(key, value)| (clean(&key, MAX_NAME_LEN), value.min(COUNTER_MAX)))
+        .filter(|(key, _)| !key.is_empty())
+        .take(MAX_MAPPED)
+        .collect();
+    // incidents also count as counters, so the dashboard's metrics table shows how often each rule fired
+    for incident in &incidents {
+        let total = counters.entry(format!("{INCIDENT_COUNTER_PREFIX}{}", incident.rule.name())).or_default();
+        *total = total.saturating_add(u64::from(incident.count)).min(COUNTER_MAX);
+    }
     Perf {
         window_s: perf.window_s.min(86_400),
         frames,
@@ -326,13 +341,7 @@ fn sanitize_perf(perf: Perf) -> Perf {
         rss_mb: perf.rss_mb,
         rss_peak_mb: perf.rss_peak_mb,
         startup_ms: perf.startup_ms,
-        counters: perf
-            .counters
-            .into_iter()
-            .map(|(key, value)| (clean(&key, MAX_NAME_LEN), value.min(COUNTER_MAX)))
-            .filter(|(key, _)| !key.is_empty())
-            .take(MAX_MAPPED)
-            .collect(),
+        counters,
         gauges: perf
             .gauges
             .into_iter()
@@ -340,7 +349,20 @@ fn sanitize_perf(perf: Perf) -> Perf {
             .filter(|(key, value)| !key.is_empty() && value.is_finite())
             .take(MAX_MAPPED)
             .collect(),
+        incidents,
     }
+}
+
+/// Keeps one entry per known rule (the first), with a count of at least 1.
+fn sanitize_incidents(incidents: Vec<Incident>) -> Vec<Incident> {
+    let mut kept: Vec<Incident> = Vec::new();
+    for incident in incidents.into_iter().take(MAX_MAPPED) {
+        if incident.rule == IncidentRule::Other || kept.iter().any(|seen| seen.rule == incident.rule) {
+            continue;
+        }
+        kept.push(Incident { count: incident.count.clamp(1, 1_000_000), value: incident.value.min(COUNTER_MAX), ..incident });
+    }
+    kept
 }
 
 fn sanitize_crash(crash: Crash) -> Crash {
@@ -646,6 +668,25 @@ mod tests {
         assert_eq!(frames.count, COUNTER_MAX);
         assert_eq!(frames.over_budget, Some(COUNTER_MAX));
         assert_eq!(cleaned.cpu_pct, None);
+    }
+
+    #[test]
+    fn incidents_are_deduplicated_and_counted() {
+        let incident = |rule, count| Incident { rule, at_ms: 0, count, value: 1 };
+        let perf = Perf {
+            incidents: vec![
+                incident(IncidentRule::Stall, 2),
+                incident(IncidentRule::Stall, 5),
+                incident(IncidentRule::Other, 1),
+                incident(IncidentRule::LongFrames, 0),
+            ],
+            ..Perf::default()
+        };
+        let cleaned = sanitize_perf(perf);
+        let rules: Vec<_> = cleaned.incidents.iter().map(|i| (i.rule, i.count)).collect();
+        assert_eq!(rules, vec![(IncidentRule::Stall, 2), (IncidentRule::LongFrames, 1)]);
+        assert_eq!(cleaned.counters.get("incidents.stall"), Some(&2));
+        assert_eq!(cleaned.counters.get("incidents.long_frames"), Some(&1));
     }
 
     #[test]

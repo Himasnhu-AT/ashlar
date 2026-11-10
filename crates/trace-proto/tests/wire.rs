@@ -1,6 +1,8 @@
 //! Pins the wire format. If one of these fails, an existing client or server would break:
 //! add a new optional field instead of changing an old one.
 
+use std::collections::BTreeMap;
+
 use ashlar_trace_proto::*;
 
 const FULL: &str = include_str!("fixtures/envelope_full.json");
@@ -102,6 +104,38 @@ fn display_budget_count_is_additive() {
     assert!(new.contains("\"over_budget\":3"), "{new}");
     let parsed: OldFrameStats = serde_json::from_str(&new).unwrap();
     assert_eq!(parsed.count, 4);
+}
+
+#[test]
+fn incidents_are_additive() {
+    // an older sender leaves them out
+    let old: Perf = serde_json::from_str(r#"{"window_s":60}"#).unwrap();
+    assert!(old.incidents.is_empty());
+    assert!(!serde_json::to_string(&old).unwrap().contains("incidents"), "an empty list is not written");
+
+    let perf =
+        Perf { window_s: 60, incidents: vec![Incident { rule: IncidentRule::Stall, at_ms: 1_500, count: 2, value: 400_000 }], ..Perf::default() };
+    let new = serde_json::to_string(&perf).unwrap();
+    assert!(new.contains(r#""incidents":[{"rule":"stall","at_ms":1500,"count":2,"value":400000}]"#), "{new}");
+    assert_eq!(serde_json::from_str::<Perf>(&new).unwrap(), perf);
+
+    // an older reader (the fields before this one) still parses what a new sender writes
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldPerf {
+        window_s: u32,
+        #[serde(default)]
+        counters: BTreeMap<String, u64>,
+    }
+    let parsed: OldPerf = serde_json::from_str(&new).unwrap();
+    assert_eq!(parsed.window_s, 60);
+
+    // a rule this version does not know reads as Other
+    let future: Perf = serde_json::from_str(r#"{"window_s":1,"incidents":[{"rule":"gpu_reset","at_ms":0,"count":1,"value":0}]}"#).unwrap();
+    assert_eq!(future.incidents[0].rule, IncidentRule::Other);
+    for rule in [IncidentRule::LongFrames, IncidentRule::Stall, IncidentRule::MemoryGrowth] {
+        assert_eq!(serde_json::to_string(&rule).unwrap(), format!("\"{}\"", rule.name()));
+    }
 }
 
 #[test]
