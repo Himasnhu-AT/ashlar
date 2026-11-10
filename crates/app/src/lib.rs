@@ -30,6 +30,7 @@ pub mod driver;
 mod native_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
+mod renderer;
 pub mod runtime;
 pub mod session;
 pub mod stats;
@@ -44,6 +45,7 @@ pub use ashlar_ui::wake;
 
 pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
 pub use driver::Driver;
+pub use renderer::Renderer;
 pub use runtime::{Cx, FilePicker, Pick, Runtime};
 pub use session::{Document, Effect, Session};
 pub use stats::{FrameStats, StatsSummary};

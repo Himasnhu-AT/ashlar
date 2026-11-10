@@ -90,6 +90,18 @@ let code = ashlar_debug::run(vec!["--port".into(), port.to_string(), "--key-dir"
 so it needs no display. It also has a test that opens a real window, which runs only when
 `ASHLAR_DEBUG_REAL_WINDOW=1` is set.
 
+### Real pixels with no window
+
+A `Driver` gives flat grey screenshots by default, which keeps tests that need no GPU fast. For
+real pixels, build it with `Driver::with_renderer(runtime, Renderer::wgpu())`: frames render on a
+wgpu device with no window or surface, so `ui.screenshot`, annotate and trace show what a window
+would, at the scale set with `Driver::pixels_per_point`. A software adapter is preferred when
+there is one. On a machine with no adapter, `Renderer::wgpu()` falls back to grey and
+`Renderer::reason()` says why. Every screenshot reply says which was used: `"renderer": "wgpu"` or
+`"renderer": "none"`. Renders of the same state are byte-identical on the same machine, but can
+differ between GPUs, so compare pixels across machines only with a tolerance.
+`crates/app/tests/headless_render.rs` shows the pattern, including how to skip without a GPU.
+
 ## Without an app: the demo
 
 `ashlar-debug demo --control <port>` serves a small fake app with a text field, buttons, a

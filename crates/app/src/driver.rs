@@ -3,8 +3,10 @@
 //! one (input, `request_repaint`, a repaint timer), so tests can prove that an idle app draws
 //! nothing.
 //!
-//! There is no GPU: `ui.screenshot` gets a blank image of the screen size (the PNG plumbing is
-//! real, the pixels are not). Each frame is still tessellated, as a window would, so the frame
+//! By default there is no GPU: `ui.screenshot` gets a flat grey image of the screen size (the PNG
+//! plumbing is real, the pixels are not). [`Driver::with_renderer`] with [`Renderer::wgpu`]
+//! renders real pixels on a GPU with no window; screenshot replies say which was used
+//! (`"renderer": "wgpu"` or `"none"`). Each frame is still tessellated, as a window would, so the frame
 //! stats ([`Runtime::stats`]) hold the whole CPU frame: `pass`, `tessellate` and `frame_cpu`.
 
 use std::collections::VecDeque;
@@ -15,6 +17,7 @@ use ashlar_control::{Reply, Request};
 use egui::{Event, Rect, ViewportCommand, ViewportId, pos2, vec2};
 use serde_json::Value;
 
+use crate::renderer::Renderer;
 use crate::runtime::Runtime;
 use crate::session::{Document, now};
 
@@ -44,11 +47,19 @@ pub struct Driver<D: Document> {
     hidden: bool,
     /// The display's pixels per point (`None`: egui's default, 1).
     pixels_per_point: Option<f32>,
+    /// What screenshots are rendered with.
+    renderer: Renderer,
 }
 
 impl<D: Document> Driver<D> {
-    /// A 1280×800 point screen at time 0.
+    /// A 1280×800 point screen at time 0, with grey screenshots.
     pub fn new(runtime: Runtime<D>) -> Self {
+        Self::with_renderer(runtime, Renderer::none())
+    }
+
+    /// [`Driver::new`] rendering screenshots with `renderer` (e.g. [`Renderer::wgpu`]: real
+    /// pixels, or grey when there is no GPU).
+    pub fn with_renderer(runtime: Runtime<D>, renderer: Renderer) -> Self {
         let ctx = egui::Context::default();
         let wakes: Arc<Mutex<Wakes>> = Arc::default();
         let w = Arc::clone(&wakes);
@@ -71,7 +82,28 @@ impl<D: Document> Driver<D> {
             screenshots: true,
             hidden: false,
             pixels_per_point: None,
+            renderer,
         }
+        .install_renderer()
+    }
+
+    fn install_renderer(self) -> Self {
+        if let Some(offscreen) = self.renderer.offscreen() {
+            ashlar_ui::devtools::set_offscreen(&self.ctx, Some(offscreen));
+        }
+        self
+    }
+
+    /// What screenshots are rendered with.
+    pub fn renderer(&self) -> &Renderer {
+        &self.renderer
+    }
+
+    /// The grey screenshot of a driver with no GPU renderer: the screen's size in pixels.
+    fn blank(&self) -> Arc<egui::ColorImage> {
+        let ppp = self.ctx.pixels_per_point();
+        let [w, h] = [(self.screen.width() * ppp).round() as usize, (self.screen.height() * ppp).round() as usize];
+        Arc::new(egui::ColorImage::new([w, h], vec![egui::Color32::from_gray(30); w.saturating_mul(h)]))
     }
 
     /// Stop driving; the runtime is handed back (e.g. to [`Runtime::abandon`] it).
@@ -179,6 +211,7 @@ impl<D: Document> Driver<D> {
             stats.record_tessellate(tess);
             stats.record_frame_cpu(pass.saturating_add(tess));
         }
+        self.renderer.textures(&out.textures_delta);
         out.textures_delta.clear();
         self.frames = self.frames.saturating_add(1);
         let done = self.ctx.cumulative_pass_nr();
@@ -191,8 +224,7 @@ impl<D: Document> Driver<D> {
                 match c {
                     ViewportCommand::Screenshot(_) if !self.screenshots => {}
                     ViewportCommand::Screenshot(user_data) => {
-                        let [w, h] = [self.screen.width() as usize, self.screen.height() as usize];
-                        let image = Arc::new(egui::ColorImage::new([w, h], vec![egui::Color32::from_gray(30); w * h]));
+                        let image = self.blank();
                         self.input.push_back(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data: user_data.clone(), image });
                     }
                     ViewportCommand::Close => self.closed = true,
@@ -218,11 +250,11 @@ impl<D: Document> Driver<D> {
         // wakes asked for from here on (also by a hidden pass, which has no repaint delay to
         // report) stay pending
         let done = self.ctx.cumulative_pass_nr();
-        let (rt, time) = (&mut self.runtime, self.time);
+        let (rt, time, renderer) = (&mut self.runtime, self.time, &self.renderer);
         let out = self.ctx.run_logic(&raw, |ctx| {
             rt.logic(ctx);
-            // nothing to upload textures to
             if let Some(mut out) = rt.hidden_pass(ctx, Some(time), shots) {
+                renderer.textures(&out.textures_delta);
                 out.textures_delta.clear();
             }
         });
@@ -231,8 +263,7 @@ impl<D: Document> Driver<D> {
         for c in out.viewport_commands.get(&ViewportId::ROOT).into_iter().flatten() {
             match c {
                 ViewportCommand::Screenshot(user_data) if self.screenshots => {
-                    let [w, h] = [self.screen.width() as usize, self.screen.height() as usize];
-                    let image = Arc::new(egui::ColorImage::new([w, h], vec![egui::Color32::from_gray(30); w * h]));
+                    let image = self.blank();
                     self.input.push_back(Event::Screenshot { viewport_id: ViewportId::ROOT, user_data: user_data.clone(), image });
                     self.next = Some(self.time);
                 }
@@ -305,7 +336,7 @@ impl<D: Document> Driver<D> {
         let limit = self.time + 600.0;
         for _ in 0..10_000 {
             if let Ok(r) = rx.try_recv() {
-                return r;
+                return self.mark_renderer(r);
             }
             if self.closed {
                 break;
@@ -314,7 +345,18 @@ impl<D: Document> Driver<D> {
             self.time = due.max(self.time + 1.0 / 120.0);
             self.frame();
         }
-        rx.try_recv().unwrap_or_else(|_| Reply::err(format!("`{method}` was not answered, and no frame is pending")))
+        let r = rx.try_recv().unwrap_or_else(|_| Reply::err(format!("`{method}` was not answered, and no frame is pending")));
+        self.mark_renderer(r)
+    }
+
+    /// Say in a screenshot reply what rendered it, so callers can tell grey from real pixels.
+    fn mark_renderer(&self, mut r: Reply) -> Reply {
+        if let Reply::Ok(Value::Object(o)) = &mut r
+            && o.contains_key("png")
+        {
+            o.insert("renderer".into(), Value::from(self.renderer.last_used()));
+        }
+        r
     }
 
     /// [`Driver::request`] expecting success.
@@ -346,5 +388,18 @@ mod tests {
         assert_eq!((s.window, s.pass.window, s.tessellate.window, s.frame_cpu.window), (1, 1, 1, 1));
         assert!(s.frame_cpu.max_ms >= s.pass.max_ms && s.frame_cpu.max_ms >= s.tessellate.max_ms, "{s:?}");
         assert!(s.pass.max_ms >= s.max_ms, "the pass holds the UI: {s:?}");
+    }
+
+    #[test]
+    fn grey_screenshots_say_so_and_have_the_pixel_size() {
+        let mut d = driver();
+        d.pixels_per_point(2.0);
+        d.set_screen(200.0, 100.0);
+        d.settle(10);
+        assert_eq!(d.renderer().name(), "none");
+        let shot = d.call("ui.screenshot", serde_json::json!({})).unwrap();
+        assert_eq!(shot["renderer"], "none");
+        assert_eq!((shot["width"].as_u64(), shot["height"].as_u64()), (Some(400), Some(200)));
+        assert!(d.call("app.stats", serde_json::json!({})).unwrap().get("renderer").is_none(), "only screenshot replies are marked");
     }
 }
