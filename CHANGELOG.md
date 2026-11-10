@@ -14,6 +14,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
   for an app), and `check(&MotionRules)` flags overshoot of opacity and colour, reversals without
   bounce, pops, flicker and frames requested after everything settled, with a per-id allow-list.
   The gallery's dialog, toast, theme crossfade and tab switches pass it.
+- `ashlar_ui::overlay`: `Select` (a button with a list of options), `Combobox` (a text field whose
+  options are filtered with the command palette's fuzzy matcher; input-method composition never
+  chooses), and `Popover` (anchored, flips above at the window edge, Escape or an outside click
+  closes, focus moves in and returns). Option lists are virtualized, fade with the `enter_exit`
+  motion token and register `<id>.option.<n>` with ListBox/option roles.
+- `ashlar_ui::help(response, text)`: a tooltip after the new `motion.tooltip_delay` token, also
+  given to screen readers as the control's description.
+- `ashlar_ui::commands::menu::context(response, &spec)`: a context menu built from a `MenuSpec`.
+- Automation roles `ComboBox`, `ListBox`, `ListOption` and `Tooltip`.
 - `ashlar_ui::form`: the settings form pattern. Sections of rows (label, description, control) with a
   modified marker and reset button, a filter that hides non-matching rows and empty sections,
   highlights matches and shows "No settings match", and `Field` with a required marker and an
