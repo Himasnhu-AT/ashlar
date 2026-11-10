@@ -3,6 +3,15 @@
 Newest first. Each entry has the date, the task ids it covers, what changed, numbers before and after,
 and any decision or surprise.
 
+## 2026-11-10: wt/flakes merged
+
+- **IMP-0.8:** the syntax linear-time test measures thread CPU, takes the best of 5 runs, and allows 3
+  tries per size pair. A deliberately quadratic lexer still fails all 3 tries (61× against a 24×
+  limit).
+- **IMP-1.10:** per-thread counting would need `unsafe`, so every test in the ui and notes perf
+  binaries holds `allocs::serial()`, and `count` panics without it. Both suites pass 3× with
+  parallel threads. Idle wake frame: 272. A new perf test in those files must take the lock.
+
 ## 2026-11-10: wt/md2 and wt/native2 merged (CI green); head-to-head approved
 
 - **Agents stalled:** the owner noticed nothing was running. wt-md2, wt-native2 and wt-flakes had gone

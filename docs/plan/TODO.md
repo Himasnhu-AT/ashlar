@@ -13,7 +13,7 @@ a task's state.
 | IMP-0.5 | `cargo deny check licenses` fails: `deny.toml` has no `[licenses]` allow list (pre-existing) | done (9744596) |
 | IMP-0.6 | `ashlar-trace`: a released spool re-adopted its own folder as an orphan (found through a telemetry test) | done (3e2c995) |
 | IMP-0.7 | Pipeline-level shutdown test (a transport that blocks mid-send, then `shutdown_within` times out) | todo (optional) |
-| IMP-0.8 | `ashlar-syntax` `time_is_linear_in_input_size` failed once under machine load (passes alone): make it robust like IMP-0.4 | doing (wt-flakes) |
+| IMP-0.8 | `ashlar-syntax` `time_is_linear_in_input_size` failed once under machine load (passes alone): make it robust like IMP-0.4 | done (3956c2c) |
 | IMP-0.9 | `perf_warn` Driver scroll test passes on one clean run out of three (load): make it robust without retries | todo |
 | IMP-0.4 | `ashlar-trace` edge test: 500 ms wall-clock init limit fails on a loaded machine | done (7729be3) |
 
@@ -28,7 +28,7 @@ a task's state.
 | IMP-1.6 | 120 Hz frame budget in telemetry | done (e7735da) |
 | IMP-1.7 | Binary size and idle memory metrics, `examples/hello` | done for size (4e91720); idle memory probe moved to IMP-2.10 |
 | IMP-1.8 | Launch to first present | done (wt/launch, 4356a62) |
-| IMP-1.10 | Allocation counter is per process: `perf_allocs_idle_wake_frame` fails when perf tests run in parallel (1,823 vs 272 alone). `cargo xtask bench` uses one thread, so the gate holds; make the count per thread or serialise | doing (wt-flakes) |
+| IMP-1.10 | Allocation counter is per process: `perf_allocs_idle_wake_frame` fails when perf tests run in parallel (1,823 vs 272 alone). `cargo xtask bench` uses one thread, so the gate holds; make the count per thread or serialise | done (db8205c, aa502ca) |
 | IMP-1.9 | Complete the head-to-head table | doing (audit-bench; owner approved building the reference framework) |
 
 ## Phase 2: performance
