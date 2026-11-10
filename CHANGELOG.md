@@ -131,6 +131,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 - `ashlar-ui`: `markdown`, Markdown for chat replies (headings, lists, tables, code blocks with Copy,
   inline styles and links), safe for text that is still streaming in.
 
+### Security
+
+- `ashlar-trace-server` and the trace examples use rusqlite 0.41 (bundled SQLite from
+  libsqlite3-sys 0.39), fixing RUSTSEC-2026-0459 (CVE-2026-119375, stale memory read through a
+  crafted database and `-wal` file pair); the yanked async-executor 1.14.0 is replaced by 1.14.1.
+
 ## [0.1.0] - 2026-10-27
 
 First public release, on crates.io.

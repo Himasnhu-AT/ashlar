@@ -59,6 +59,8 @@ const LAYERS: &[(&str, u8)] = &[
 const UI_ONLY: &[&str] = &["egui", "eframe", "winit", "egui-wgpu", "egui_kittest"];
 /// Crates of this rank or lower must build for `wasm32-unknown-unknown`.
 const WASM_MAX_RANK: u8 = 1;
+/// Higher-rank crates that must also build for `wasm32-unknown-unknown` (the web build path).
+const WASM_EXTRA: &[&str] = &["ashlar-ui", "ashlar-app"];
 
 fn layer(name: &str) -> Option<u8> {
     LAYERS.iter().find(|(n, _)| *n == name).map(|(_, l)| *l)
@@ -173,14 +175,15 @@ fn test_cmd() -> Command {
     cmd(&["test", "--workspace"])
 }
 
-/// `cargo check --target wasm32-unknown-unknown` on every crate of rank 0–1, and how many there are.
+/// `cargo check --target wasm32-unknown-unknown` on every crate of rank 0–1 and on [`WASM_EXTRA`],
+/// and how many there are.
 fn wasm_cmd() -> Result<(Command, usize), String> {
     let meta = metadata()?;
     let mut c = cmd(&["check", "--target", "wasm32-unknown-unknown"]);
     let mut n = 0;
     for pkg in meta["packages"].as_array().into_iter().flatten() {
         let name = pkg["name"].as_str().unwrap_or_default();
-        if layer(name).is_some_and(|l| l <= WASM_MAX_RANK) {
+        if layer(name).is_some_and(|l| l <= WASM_MAX_RANK) || WASM_EXTRA.contains(&name) {
             c.args(["-p", name]);
             n += 1;
         }

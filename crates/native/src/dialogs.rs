@@ -97,6 +97,7 @@ impl FileDialog {
 }
 
 /// Longest message text passed to the OS.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_MESSAGE: usize = 8192;
 
 /// How serious a [`message`] is; the OS picks the icon.
@@ -111,6 +112,7 @@ pub enum MessageLevel {
 
 /// Message text as it is given to the OS: line breaks and tabs kept, other control characters
 /// dropped, at most [`MAX_MESSAGE`] characters.
+#[cfg(not(target_arch = "wasm32"))]
 fn clip_message(s: &str) -> String {
     s.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').take(MAX_MESSAGE).collect()
 }

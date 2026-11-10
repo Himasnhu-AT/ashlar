@@ -32,8 +32,9 @@ Long lists are virtualized. No blocking I/O on the UI thread. Benches guard ever
 
 ## 4. Gates before every commit
 `cargo xtask ci`: fmt check, names, layers, deny-panics, deps (cargo-deny, when installed), then
-clippy -D warnings, tests and the wasm32 check of ranks 0–1 side by side (`--no-wait` skips waiting
-for other checkouts' builds). Also `cargo xtask msrv`, `advisories` and `bench`; see docs/contributing.md.
+clippy -D warnings, tests and the wasm32 check (ranks 0–1, `ashlar-ui`, `ashlar-app`) side by side
+(`--no-wait` skips waiting for other checkouts' builds). Also `cargo xtask msrv`, `advisories`
+and `bench`; see docs/contributing.md.
 One task id per commit (`AS-P1.2: history merge keys`), only green states, attribution line at the
 end.
 

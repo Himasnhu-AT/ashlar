@@ -7,8 +7,9 @@ ashlar is a workspace of small crates stacked in ranks. An app depends on the um
 
 A crate depends only on crates of a **lower** rank (dev-dependencies are exempt). Ranks 0–4 never
 depend on a UI crate (`egui`, `eframe`, `winit`, `egui-wgpu`, `egui_kittest`), and ranks 0–1 build
-for `wasm32-unknown-unknown`. `cargo xtask layers` and `cargo xtask wasm` enforce this; the table
-below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` fails the gate).
+for `wasm32-unknown-unknown`, as do `ashlar-ui` and `ashlar-app` (the web build path). `cargo xtask
+layers` and `cargo xtask wasm` enforce this; the table below must match
+`LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` fails the gate).
 
 | Rank | Crate | What it is | Headless | wasm32 |
 |---|---|---|---|---|
@@ -35,8 +36,8 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
 | 4 | `ashlar-assistant` | In-app AI assistant harness, independent of the model: conversation and tool types, providers (an account backend, Anthropic, OpenAI-compatible), the agent loop with approvals, keys in the OS keychain, an MCP server as the tool host | yes | – |
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
-| 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
-| 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
+| 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | yes |
+| 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | yes |
 | 7 | `ashlar-rs` | Umbrella crate (imported as `ashlar`): re-exports the others behind features | no | – |
 | 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
