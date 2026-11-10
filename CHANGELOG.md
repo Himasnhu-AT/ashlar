@@ -9,6 +9,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 ## [Unreleased]
 
 ### Added
+- `ashlar_native::mac_shell` (default feature `mac-shell`, IMP-6.14): `guard_appearance()` checks
+  the window delegate's `effectiveAppearance` changes before winit casts them, so a nil appearance
+  while the screen is captured no longer ends the app; `listen_reopen(waker)` reports Dock reopen
+  clicks; `quiet_requested(prefix)` reads `<PREFIX>_QUIET`. An ashlar app installs both after its
+  first frame, shows and focuses its window on reopen, and with `<PREFIX>_QUIET=1` opens without
+  taking the focus.
 - `ashlar_native::hotkey` (feature `hotkey`, IMP-6.16): system-wide shortcuts on global-hotkey
   (macOS, Windows, Linux on X11). `GlobalShortcuts::new(waker)`, `register(id, &chord)` with the
   keymap's chords (a chord without Ctrl, Alt or ⌘ is refused), `unregister`, `drain()`; dropping

@@ -270,6 +270,11 @@ pub struct Runtime<D: Document> {
     global_shortcuts: Option<ashlar_native::hotkey::GlobalShortcuts>,
     #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
     global_shortcuts_tried: bool,
+    /// Dock reopen requests (macOS), listened for after the first frame.
+    #[cfg(target_os = "macos")]
+    reopen: Option<std::sync::mpsc::Receiver<ashlar_native::mac_shell::Reopen>>,
+    #[cfg(target_os = "macos")]
+    mac_shell_tried: bool,
     /// Bring the window to the front on the next frame (a forwarded launch, a tray click, a
     /// global shortcut), through the OS where the focus request alone may be refused.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -375,6 +380,10 @@ impl<D: Document> Runtime<D> {
             #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
             global_shortcuts_tried: false,
             bring_front: false,
+            #[cfg(target_os = "macos")]
+            reopen: None,
+            #[cfg(target_os = "macos")]
+            mac_shell_tried: false,
             native_picks: Vec::new(),
             os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
             inbox,
@@ -941,6 +950,22 @@ impl<D: Document> Runtime<D> {
                     Err(e) => log::warn!("no global shortcuts: {e}"),
                 }
             }
+        }
+        #[cfg(target_os = "macos")]
+        if self.native && self.first_frame_done && !self.mac_shell_tried {
+            self.mac_shell_tried = true;
+            if let Err(e) = ashlar_native::mac_shell::guard_appearance() {
+                log::debug!("appearance guard: {e}");
+            }
+            let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+            match ashlar_native::mac_shell::listen_reopen(std::sync::Arc::new(move || wake.wake())) {
+                Ok(rx) => self.reopen = Some(rx),
+                Err(e) => log::debug!("Dock reopen: {e}"),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.reopen.as_ref().is_some_and(|rx| rx.try_iter().count() > 0) {
+            self.show_window(ctx);
         }
         if std::mem::take(&mut self.bring_front)
             && let Err(e) = ashlar_native::system::bring_to_front(window)
@@ -2052,11 +2077,22 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         presented: false,
         scene: args.scene,
     };
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         viewport: window_builder(&shared, window, safe_mode),
         wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
+    // `<PREFIX>_QUIET`: open without taking the focus (agents relaunching after each build)
+    if ashlar_native::mac_shell::quiet_requested(&shared.env_prefix) {
+        options.viewport = options.viewport.with_active(false);
+        #[cfg(target_os = "macos")]
+        {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::macos::EventLoopBuilderExtMacOS;
+                b.with_activate_ignoring_other_apps(false);
+            }));
+        }
+    }
     let title = shared.title.clone();
     eframe::run_native(
         &title,

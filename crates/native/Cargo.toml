@@ -30,7 +30,7 @@ type_complexity = "allow"
 undocumented_unsafe_blocks = "deny"
 
 [features]
-default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end"]
+default = ["dialogs", "menu", "clipboard", "power", "open-files", "single-instance", "system", "cli-tool", "memory", "display", "session-end", "mac-shell"]
 full = ["default", "notify", "progress", "secrets"]
 # Dock Quit, logout and shutdown ask the app first (macOS delegate method, Windows session-end
 # messages).
@@ -46,6 +46,14 @@ session-end = [
     "windows/Win32_UI_WindowsAndMessaging",
     "windows/Win32_System_LibraryLoader",
     "windows/Win32_Graphics_Gdi",
+]
+# macOS shell fixes for winit: a nil appearance during screen capture, Dock reopen; and the
+# quiet-launch switch.
+mac-shell = [
+    "dep:objc2",
+    "objc2-app-kit/NSApplication",
+    "objc2-app-kit/NSResponder",
+    "objc2-foundation/NSKeyValueObserving",
 ]
 # Open / save / folder pickers (rfd).
 dialogs = ["dep:rfd", "dep:raw-window-handle"]

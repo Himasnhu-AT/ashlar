@@ -127,7 +127,7 @@ a task's state.
 | IMP-6.11 | Tray / status item | done (wt/shell) |
 | IMP-6.12 | Rich clipboard, secret copy | done (42baf45) |
 | IMP-6.13 | `ashlar-i18n` | done (186ecf4) |
-| IMP-6.14 | macOS shell shims | todo |
+| IMP-6.14 | macOS shell shims | done (wt/shell; guard tested against a stand-in delegate class, reopen and quiet launch not run on a desktop) |
 | IMP-6.15 | Drag-out and native context menus | todo |
 | IMP-6.16 | Global shortcuts and bring-to-front | done (wt/shell; Windows paths compile-checked only) |
 

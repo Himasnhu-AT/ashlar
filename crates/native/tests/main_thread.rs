@@ -88,6 +88,62 @@ fn hotkey() {
     assert!(g.drain().is_empty());
 }
 
+/// The appearance guard against a stand-in for winit's window delegate class: changes without an
+/// `NSAppearance` on both sides (or for another key path) never reach the original observer.
+#[cfg(all(target_os = "macos", feature = "mac-shell"))]
+#[allow(unsafe_code)]
+fn mac_shell() {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use ashlar_native::mac_shell;
+    use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, NSObject, Sel};
+    use objc2::{ClassType, msg_send, sel};
+    use objc2_foundation::{NSKeyValueChangeNewKey, NSKeyValueChangeOldKey, NSString};
+
+    assert!(mac_shell::guard_appearance().is_err(), "no window delegate class yet");
+    assert!(mac_shell::listen_reopen(ashlar_native::no_waker()).is_err(), "no application delegate without an event loop");
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    extern "C-unwind" fn observe(_: *mut AnyObject, _: Sel, _: *mut AnyObject, _: *mut AnyObject, _: *mut AnyObject, _: *mut c_void) {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+    let mut b = ClassBuilder::new(c"WinitWindowDelegate", NSObject::class()).unwrap();
+    // SAFETY: the function's signature is the selector's (v@:@@@^v).
+    unsafe { b.add_method(sel!(observeValueForKeyPath:ofObject:change:context:), observe as extern "C-unwind" fn(_, _, _, _, _, _)) };
+    let cls = b.register();
+    mac_shell::guard_appearance().unwrap();
+    mac_shell::guard_appearance().unwrap(); // a second call does nothing
+
+    let class = |name: &std::ffi::CStr| AnyClass::get(name).unwrap();
+    // SAFETY: plain Foundation / AppKit messages with their documented argument types.
+    unsafe {
+        let delegate: *mut AnyObject = msg_send![cls, new];
+        let send = |key: &str, change: *mut AnyObject| {
+            let key = NSString::from_str(key);
+            let _: () = msg_send![delegate, observeValueForKeyPath: &*key, ofObject: std::ptr::null_mut::<AnyObject>(), change: change, context: std::ptr::null_mut::<c_void>()];
+        };
+        let aqua = NSString::from_str("NSAppearanceNameAqua");
+        let appearance: *mut AnyObject = msg_send![class(c"NSAppearance"), appearanceNamed: &*aqua];
+        assert!(!appearance.is_null());
+        let null: *mut AnyObject = msg_send![class(c"NSNull"), null];
+        let change = |old: *mut AnyObject, new: *mut AnyObject| -> *mut AnyObject {
+            let d: *mut AnyObject = msg_send![class(c"NSMutableDictionary"), dictionary];
+            let _: () = msg_send![d, setObject: old, forKey: NSKeyValueChangeOldKey];
+            let _: () = msg_send![d, setObject: new, forKey: NSKeyValueChangeNewKey];
+            d
+        };
+        send("effectiveAppearance", std::ptr::null_mut());
+        send("effectiveAppearance", change(appearance, null));
+        send("effectiveAppearance", change(null, appearance));
+        send("somethingElse", change(appearance, appearance));
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0, "unsafe changes are dropped");
+        send("effectiveAppearance", change(appearance, appearance));
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1, "a real change reaches the original observer");
+        let _: () = msg_send![delegate, release];
+    }
+}
+
 fn main() {
     #[cfg(all(target_os = "macos", feature = "menu"))]
     menu();
@@ -99,5 +155,7 @@ fn main() {
     tray();
     #[cfg(all(target_os = "macos", feature = "hotkey"))]
     hotkey();
+    #[cfg(all(target_os = "macos", feature = "mac-shell"))]
+    mac_shell();
     println!("main-thread checks passed");
 }

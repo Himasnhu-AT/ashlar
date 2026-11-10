@@ -25,6 +25,11 @@ the video editor's platform crate these were adapted from):
    - `system` (Windows `ShellExecuteW`, `SystemParametersInfoW`; and for `bring_to_front`,
      added 2026-11-10: `IsIconic`, `ShowWindow`, `SetForegroundWindow`, `BringWindowToTop`,
      `AttachThreadInput`)
+   - `mac_shell` (macOS: replacing the implementation of winit's window delegate
+     `observeValueForKeyPath:ofObject:change:context:` with a checked wrapper that calls the
+     original, `class_addMethod` of `applicationShouldHandleReopen:hasVisibleWindows:` on winit's
+     application delegate, and the `msg_send!`s that inspect the KVO change); added 2026-11-10 so a
+     nil appearance during screen capture doesn't end the app and the Dock icon shows the window
    - `single_instance` (Windows `AllowSetForegroundWindow`, one block; added 2026-11-10 so the
      second launch lets the first come to the front)
    - `menu::native::attach_window` (one block: muda's `init_for_hwnd`)
