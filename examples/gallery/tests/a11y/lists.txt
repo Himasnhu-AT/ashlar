@@ -1,0 +1,291 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=true]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Code" [toggled=false]
+  Button "Sidebar" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Label value="List — 100000 rows"
+  List "Demo list"
+    ListItem "Row 0" [1/100000]
+      Label value="Row 0"
+    ListItem "Row 1" [2/100000]
+      Label value="Row 1"
+    ListItem "Row 2" [3/100000]
+      Label value="Row 2"
+    ListItem "Row 3" [selected, 4/100000]
+      Label value="Row 3"
+    ListItem "Row 4" [5/100000]
+      Label value="Row 4"
+    ListItem "Row 5" [6/100000]
+      Label value="Row 5"
+    ListItem "Row 6" [7/100000]
+      Label value="Row 6"
+    ListItem "Row 7" [8/100000]
+      Label value="Row 7"
+    ListItem "Row 8" [9/100000]
+      Label value="Row 8"
+    ListItem "Row 9" [10/100000]
+      Label value="Row 9"
+    ListItem "Row 10" [11/100000]
+      Label value="Row 10"
+    ListItem "Row 11" [12/100000]
+      Label value="Row 11"
+    ListItem "Row 12" [13/100000]
+      Label value="Row 12"
+    ListItem "Row 13" [14/100000]
+      Label value="Row 13"
+    ListItem "Row 14" [15/100000]
+      Label value="Row 14"
+    ListItem "Row 15" [16/100000]
+      Label value="Row 15"
+    ListItem "Row 16" [17/100000]
+      Label value="Row 16"
+    ListItem "Row 17" [18/100000]
+      Label value="Row 17"
+    ListItem "Row 18" [19/100000]
+      Label value="Row 18"
+    ListItem "Row 19" [20/100000]
+      Label value="Row 19"
+    ListItem "Row 20" [21/100000]
+      Label value="Row 20"
+    ListItem "Row 21" [22/100000]
+      Label value="Row 21"
+    ListItem "Row 22" [23/100000]
+      Label value="Row 22"
+    ListItem "Row 23" [24/100000]
+      Label value="Row 23"
+    ListItem "Row 24" [25/100000]
+      Label value="Row 24"
+    ListItem "Row 25" [26/100000]
+      Label value="Row 25"
+    ListItem "Row 26" [27/100000]
+      Label value="Row 26"
+    ListItem "Row 27" [28/100000]
+      Label value="Row 27"
+    ScrollBar
+  Label value="Table — variable row heights"
+  Table "Files"
+    Row
+      ColumnHeader "Name"
+      ColumnHeader "Size"
+      ColumnHeader "Kind"
+    Row "file_000000" [1/100000]
+      Cell
+        Label value="file_000000"
+      Cell
+        Label value="0 KB"
+      Cell
+        Label value="Folder\n(tall row)"
+    Row "file_000001" [selected, 2/100000]
+      Cell
+        Label value="file_000001"
+      Cell
+        Label value="37 KB"
+      Cell
+        Label value="Document"
+    Row "file_000002" [3/100000]
+      Cell
+        Label value="file_000002"
+      Cell
+        Label value="74 KB"
+      Cell
+        Label value="Document"
+    Row "file_000003" [4/100000]
+      Cell
+        Label value="file_000003"
+      Cell
+        Label value="111 KB"
+      Cell
+        Label value="Document"
+    Row "file_000004" [5/100000]
+      Cell
+        Label value="file_000004"
+      Cell
+        Label value="148 KB"
+      Cell
+        Label value="Document"
+    Row "file_000005" [6/100000]
+      Cell
+        Label value="file_000005"
+      Cell
+        Label value="185 KB"
+      Cell
+        Label value="Folder\n(tall row)"
+    Row "file_000006" [7/100000]
+      Cell
+        Label value="file_000006"
+      Cell
+        Label value="222 KB"
+      Cell
+        Label value="Document"
+    Row "file_000007" [8/100000]
+      Cell
+        Label value="file_000007"
+      Cell
+        Label value="259 KB"
+      Cell
+        Label value="Document"
+    Row "file_000008" [9/100000]
+      Cell
+        Label value="file_000008"
+      Cell
+        Label value="296 KB"
+      Cell
+        Label value="Document"
+    Row "file_000009" [10/100000]
+      Cell
+        Label value="file_000009"
+      Cell
+        Label value="333 KB"
+      Cell
+        Label value="Document"
+    Row "file_000010" [11/100000]
+      Cell
+        Label value="file_000010"
+      Cell
+        Label value="370 KB"
+      Cell
+        Label value="Folder\n(tall row)"
+    Row "file_000011" [12/100000]
+      Cell
+        Label value="file_000011"
+      Cell
+        Label value="407 KB"
+      Cell
+        Label value="Document"
+    Row "file_000012" [13/100000]
+      Cell
+        Label value="file_000012"
+      Cell
+        Label value="444 KB"
+      Cell
+        Label value="Document"
+    Row "file_000013" [14/100000]
+      Cell
+        Label value="file_000013"
+      Cell
+        Label value="481 KB"
+      Cell
+        Label value="Document"
+    Row "file_000014" [15/100000]
+      Cell
+        Label value="file_000014"
+      Cell
+        Label value="518 KB"
+      Cell
+        Label value="Document"
+    Row "file_000015" [16/100000]
+      Cell
+        Label value="file_000015"
+      Cell
+        Label value="555 KB"
+      Cell
+        Label value="Folder\n(tall row)"
+    Row "file_000016" [17/100000]
+      Cell
+        Label value="file_000016"
+      Cell
+        Label value="592 KB"
+      Cell
+        Label value="Document"
+    Row "file_000017" [18/100000]
+      Cell
+        Label value="file_000017"
+      Cell
+        Label value="629 KB"
+      Cell
+        Label value="Document"
+    Row "file_000018" [19/100000]
+      Cell
+        Label value="file_000018"
+      Cell
+        Label value="666 KB"
+      Cell
+        Label value="Document"
+    Row "file_000019" [20/100000]
+      Cell
+        Label value="file_000019"
+      Cell
+        Label value="703 KB"
+      Cell
+        Label value="Document"
+    Row "file_000020" [21/100000]
+      Cell
+        Label value="file_000020"
+      Cell
+        Label value="740 KB"
+      Cell
+        Label value="Folder\n(tall row)"
+    Row "file_000021" [22/100000]
+      Cell
+        Label value="file_000021"
+      Cell
+        Label value="777 KB"
+      Cell
+        Label value="Document"
+    Row "file_000022" [23/100000]
+      Cell
+        Label value="file_000022"
+      Cell
+        Label value="814 KB"
+      Cell
+        Label value="Document"
+    Row "file_000023" [24/100000]
+      Cell
+        Label value="file_000023"
+      Cell
+        Label value="851 KB"
+      Cell
+        Label value="Document"
+    ScrollBar
+  Label value="Tree — 10 041 nodes"
+  Tree "Outline"
+    TreeItem "Chapter 1" [expanded, 1/40]
+    TreeItem "Section 1.1" [expanded, 1/25]
+    TreeItem "Paragraph 1" [1/10]
+    TreeItem "Paragraph 2" [2/10]
+    TreeItem "Paragraph 3" [3/10]
+    TreeItem "Paragraph 4" [4/10]
+    TreeItem "Paragraph 5" [5/10]
+    TreeItem "Paragraph 6" [6/10]
+    TreeItem "Paragraph 7" [7/10]
+    TreeItem "Paragraph 8" [8/10]
+    TreeItem "Paragraph 9" [9/10]
+    TreeItem "Paragraph 10" [10/10]
+    TreeItem "Section 1.2" [selected, collapsed, 2/25]
+    TreeItem "Section 1.3" [collapsed, 3/25]
+    TreeItem "Section 1.4" [collapsed, 4/25]
+    TreeItem "Section 1.5" [collapsed, 5/25]
+    TreeItem "Section 1.6" [collapsed, 6/25]
+    TreeItem "Section 1.7" [collapsed, 7/25]
+    TreeItem "Section 1.8" [collapsed, 8/25]
+    TreeItem "Section 1.9" [collapsed, 9/25]
+    TreeItem "Section 1.10" [collapsed, 10/25]
+    TreeItem "Section 1.11" [collapsed, 11/25]
+    TreeItem "Section 1.12" [collapsed, 12/25]
+    TreeItem "Section 1.13" [collapsed, 13/25]
+    TreeItem "Section 1.14" [collapsed, 14/25]
+    TreeItem "Section 1.15" [collapsed, 15/25]
+    TreeItem "Section 1.16" [collapsed, 16/25]
+    TreeItem "Section 1.17" [collapsed, 17/25]
+    TreeItem "Section 1.18" [collapsed, 18/25]
+    TreeItem "Section 1.19" [collapsed, 19/25]
+    TreeItem "Section 1.20" [collapsed, 20/25]
+    ScrollBar

@@ -133,11 +133,12 @@ fn write_perf(out: &mut String, perf: &Perf) {
         let p95 = frames.quantile_us(0.95).unwrap_or(0);
         let _ = writeln!(
             out,
-            "  Frames: {} (average {:.1} ms, 95th percentile {:.1} ms, worst {:.1} ms, {} slow, {} frozen)",
+            "  Frames: {} (average {:.1} ms, 95th percentile {:.1} ms, worst {:.1} ms, {} over 8.3 ms, {} slow, {} frozen)",
             frames.count,
             avg as f64 / 1000.0,
             f64::from(p95) / 1000.0,
             f64::from(frames.max_us) / 1000.0,
+            frames.over_budget_frames(),
             frames.slow,
             frames.frozen
         );
@@ -281,6 +282,7 @@ mod tests {
             "Example CPU, 10 cores",
             "32768 MB",
             "Frames: 2",
+            "1 over 8.3 ms, 1 slow, 0 frozen",
             "300 MB (peak 350 MB)",
             "Startup: 800 ms",
             "Kind:     panic",

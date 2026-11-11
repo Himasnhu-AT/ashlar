@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod bench;
+mod launch;
 mod names;
 mod panics;
 mod trace;
@@ -32,6 +33,10 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-log", 0),
     ("ashlar-obfuscate", 0),
     ("ashlar-docs", 0),
+    ("ashlar-motion", 0),
+    ("ashlar-syntax", 0),
+    ("ashlar-diff", 0),
+    ("ashlar-i18n", 0),
     ("ashlar-store", 1),
     ("ashlar-native", 2),
     ("ashlar-control", 2),
@@ -49,15 +54,19 @@ const LAYERS: &[(&str, u8)] = &[
     ("ashlar-app", 6),
     ("ashlar-rs", 7),
     ("ashlar-example-gallery", 8),
+    ("ashlar-example-hello", 8),
     ("ashlar-example-notes", 8),
     ("ashlar-example-trace-demo-cli", 8),
     ("ashlar-example-trace-loadgen", 8),
+    ("ashlar-example-web-hello", 8),
     ("xtask", 9),
 ];
 /// Crates no rank 0–4 crate may depend on (directly).
 const UI_ONLY: &[&str] = &["egui", "eframe", "winit", "egui-wgpu", "egui_kittest"];
 /// Crates of this rank or lower must build for `wasm32-unknown-unknown`.
 const WASM_MAX_RANK: u8 = 1;
+/// Higher-rank crates that must also build for `wasm32-unknown-unknown` (the web build path).
+const WASM_EXTRA: &[&str] = &["ashlar-ui", "ashlar-app", "ashlar-example-web-hello"];
 
 fn layer(name: &str) -> Option<u8> {
     LAYERS.iter().find(|(n, _)| *n == name).map(|(_, l)| *l)
@@ -172,14 +181,15 @@ fn test_cmd() -> Command {
     cmd(&["test", "--workspace"])
 }
 
-/// `cargo check --target wasm32-unknown-unknown` on every crate of rank 0–1, and how many there are.
+/// `cargo check --target wasm32-unknown-unknown` on every crate of rank 0–1 and on [`WASM_EXTRA`],
+/// and how many there are.
 fn wasm_cmd() -> Result<(Command, usize), String> {
     let meta = metadata()?;
     let mut c = cmd(&["check", "--target", "wasm32-unknown-unknown"]);
     let mut n = 0;
     for pkg in meta["packages"].as_array().into_iter().flatten() {
         let name = pkg["name"].as_str().unwrap_or_default();
-        if layer(name).is_some_and(|l| l <= WASM_MAX_RANK) {
+        if layer(name).is_some_and(|l| l <= WASM_MAX_RANK) || WASM_EXTRA.contains(&name) {
             c.args(["-p", name]);
             n += 1;
         }
@@ -317,7 +327,7 @@ fn advisories() -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | trace-stress | trace-load | trace-demo>";
+const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | launch [--runs N] [--memory [--settle SECS]] | trace-stress | trace-load | trace-demo>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -334,6 +344,7 @@ fn main() -> ExitCode {
         "msrv" => msrv(),
         "advisories" => advisories(),
         "bench" => bench::bench(&root(), rest),
+        "launch" => launch::launch(&root(), rest),
         "trace-stress" => trace::stress(),
         "trace-load" => trace::load(),
         "trace-demo" => trace::demo(),

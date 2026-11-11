@@ -16,22 +16,35 @@
 //! | [`crash`] | panic hook, crash logs, last panic, launch guard (from `ashlar-log`) |
 //! | [`logging`] | stderr + rotating file + in-memory ring (`app.logs`), directive filters (from `ashlar-log`) |
 //! | [`stats`] | frame-time p50/p95/max (`app.stats`) |
+//! | [`frame_log`] | `ASHLAR_FRAME_LOG=FILE`: one JSON line per frame, size-bounded |
+//! | [`perf_warn`] | debug-build stall and same-frame warnings, `ASHLAR_FRAME_BUDGET_MS` |
+//! | [`caret`] | the text caret's blink, run on the wake scheduler; solid after a while without input |
 //! | [`wake`] | frame requests with a reason, frames and requests per reason (`app.stats` → `wakes`; from `ashlar-ui`) |
 //! | [`telemetry`] | ashlar-telemetry hook points (feature `telemetry`) |
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod app;
 mod builtins;
+pub mod caret;
+mod clock;
 mod control;
 pub mod driver;
+pub mod frame_log;
+#[cfg(all(feature = "headless", not(target_arch = "wasm32")))]
+mod headless_run;
 #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
 mod native_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod offscreen;
+mod open;
+pub mod perf_warn;
+pub mod record;
+mod renderer;
 pub mod runtime;
 pub mod session;
 pub mod stats;
 pub mod telemetry;
+pub mod window_state;
 
 /// Logging and crash safety live in the headless `ashlar-log` crate (a CLI can use them without
 /// the window); re-exported here unchanged.
@@ -40,11 +53,13 @@ pub use ashlar_log::{crash, logging};
 /// it too); re-exported here unchanged.
 pub use ashlar_ui::wake;
 
-pub use app::{App, Error, Headless, SetupFn, ViewFn, cli_main};
+pub use app::{App, Error, Headless, SetupFn, ViewFn, ViewportFn, cli_main};
+pub use ashlar_native::single_instance::Forwarded;
 pub use driver::Driver;
+pub use renderer::Renderer;
 pub use runtime::{Cx, FilePicker, Pick, Runtime};
-pub use session::{Document, Effect, Session};
-pub use stats::{FrameStats, StatsSummary};
+pub use session::{Document, Effect, Origin, Session};
+pub use stats::{FrameStats, LaunchTimes, StatsSummary};
 
 /// Methods the windowed runtime answers on the control port besides the standard ones.
 pub fn control_methods() -> Vec<String> {

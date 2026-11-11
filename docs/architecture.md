@@ -7,8 +7,9 @@ ashlar is a workspace of small crates stacked in ranks. An app depends on the um
 
 A crate depends only on crates of a **lower** rank (dev-dependencies are exempt). Ranks 0–4 never
 depend on a UI crate (`egui`, `eframe`, `winit`, `egui-wgpu`, `egui_kittest`), and ranks 0–1 build
-for `wasm32-unknown-unknown`. `cargo xtask layers` and `cargo xtask wasm` enforce this; the table
-below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` fails the gate).
+for `wasm32-unknown-unknown`, as do `ashlar-ui` and `ashlar-app` (the web build path). `cargo xtask
+layers` and `cargo xtask wasm` enforce this; the table below must match
+`LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` fails the gate).
 
 | Rank | Crate | What it is | Headless | wasm32 |
 |---|---|---|---|---|
@@ -19,6 +20,10 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 0 | `ashlar-docs` | Documentation library for agents: folders are categories, markdown files are documents, embedded at build time, a run-time folder on top | yes | yes |
 | 0 | `ashlar-log` | Logging and crash safety: directive filters, stderr + rotating file + ring, panic hook, launch guard | yes | yes |
 | 0 | `ashlar-obfuscate` | Compile-time string obfuscation: build-time values kept out of a strings dump of the binary | yes | yes |
+| 0 | `ashlar-motion` | Motion maths: closed-form springs, curves, animated values that keep their velocity on retarget, reduced-motion rules per value class, motion tokens, OKLab/OKLCH colour, gesture helpers | yes | yes |
+| 0 | `ashlar-syntax` | Syntax highlighting: linear-time lexers for 18 languages, line states for incremental views, a `Highlighter` trait for bigger engines | yes | yes |
+| 0 | `ashlar-diff` | Text diffs: Myers with a cost cap, word-level changes, hunks with collapsible context, a unified-patch parser and writer | yes | yes |
+| 0 | `ashlar-i18n` | Translations: JSON catalogs per locale with fallback chains, `{name}` templates, CLDR plural categories, number formatting, locale negotiation and catalog checks | yes | yes |
 | 1 | `ashlar-trace` | Telemetry SDK: consent, spool, sending, crash/hang/frame/system signals, event catalog | yes | yes (no-op) |
 | 1 | `ashlar-store` | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave | yes | yes |
 | 2 | `ashlar-native` | Native OS features behind one API: dialogs, menus, clipboard, power, notifications, secrets | yes | – |
@@ -34,10 +39,10 @@ below must match `LAYERS` in `xtask/src/main.rs` (a crate missing from `LAYERS` 
 | 4 | `ashlar-cli` | Standard CLI verbs over the command registry | yes | – |
 | 4 | `ashlar-assistant` | In-app AI assistant harness, independent of the model: conversation and tool types, providers (an account backend, Anthropic, OpenAI-compatible), the agent loop with approvals, keys in the OS keychain, an MCP server as the tool host | yes | – |
 | 4 | `ashlar-debug` | `ashlar-debug`: drive a running app's UI from the shell (snapshot, refs, click, wait, screenshot, scripted UI tests) | yes | – |
-| 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | – |
-| 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | – |
+| 5 | `ashlar-ui` | UI components on egui: theme tokens, controls, layout, docking, icons | no | yes |
+| 6 | `ashlar-app` | Runtime: App builder, frame scheduler, crash guard, logging, telemetry, agent control | no | yes |
 | 7 | `ashlar-rs` | Umbrella crate (imported as `ashlar`): re-exports the others behind features | no | – |
-| 8 | `ashlar-example-gallery`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen` | Example apps | no | – |
+| 8 | `ashlar-example-gallery`, `ashlar-example-hello`, `ashlar-example-notes`, `ashlar-example-trace-demo-cli`, `ashlar-example-trace-loadgen`, `ashlar-example-web-hello` | Example apps | no | – |
 | 9 | `xtask` | Repo gates and tools (`cargo xtask …`) | – | – |
 
 Adding a crate: give it the lowest rank its dependencies allow, add it to `LAYERS` and to this
@@ -63,7 +68,10 @@ with both `path` and `version`.
    revision numbers, not by diffing. Long lists are virtualized. No blocking I/O on the UI thread.
    Edits are copy-on-write with structural sharing. Every hot path has a perf test, and
    `cargo xtask bench --compare` guards it (see below).
-6. **Stable contracts.** Items marked `CONTRACT` in `ashlar-command` are shared across crates
+6. **Motion is a policy.** Nothing animates on first show, the user's own hand is never
+   animated, reduced motion is applied per value class (`ashlar-motion`'s `Class`), and settled
+   animations request no frames.
+7. **Stable contracts.** Items marked `CONTRACT` in `ashlar-command` are shared across crates
    built in parallel and change only additively.
 
 ## Performance gate
@@ -77,6 +85,11 @@ bench: <metric> <value> <unit>        e.g. bench: edit_100k 812 ns
 
 Units ending in `/s` are higher-is-better; all others lower-is-better. A test that prints no
 `bench:` line is measured by wall time, which is noisy, so prefer explicit metrics.
+
+One step is not a test: `perf_hello_size` builds `examples/hello` (an empty document, a heading
+and a checkbox) in release, strips a copy and reports `hello_stripped_bytes`, the size the
+framework adds to every app. `cargo build --profile release-small` (fat LTO, one codegen unit,
+`opt-level = "s"`, stripped) is the workspace's size profile.
 
 ```sh
 cargo xtask bench                             # writes target/bench/bench.{json,md}

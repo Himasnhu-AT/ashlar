@@ -2,7 +2,8 @@
 //! dialogs), the repaint policy, and the eframe glue.
 //!
 //! Repaints happen only for: input (egui/eframe), a store revision change made during a frame, a
-//! job's wake, a control request, toasts and egui animations, injected agent input, and pending
+//! job's wake, a control request, toasts and egui animations, injected agent input, the text
+//! caret's blink for a while after input ([`crate::caret`]), and pending
 //! work that asks for its own frame (settings and autosave wake hooks when a save is due, the
 //! autosave writer when a write finished). Every request goes through [`crate::wake`] with a
 //! reason (`app.stats` → `wakes`). An idle app, clean or dirty, requests nothing and draws no
@@ -21,20 +22,33 @@ use ashlar_fs::{ConfigStore, DirConfig, MemoryConfig, Settings};
 use ashlar_jobs::Jobs;
 use ashlar_store::{Autosave, AutosaveConfig, RecoveryCandidate, Revision};
 use ashlar_ui::automation;
+use ashlar_ui::commands::keys::works_while_typing;
 use ashlar_ui::commands::{CommandPalette, KeymapChange, KeymapEditor, MenuSpec, dispatch, menu_bar};
 use ashlar_ui::devtools;
 use ashlar_ui::dialog::{Dialog, DialogButton, DialogOutcome};
 use ashlar_ui::toasts::Toasts;
-use ashlar_ui::tokens::{self, ThemeMode, Tokens};
+use ashlar_ui::tokens::{self, ThemeMode};
 use ashlar_ui::wake::{self, Reason, Scheduler, WakeStats};
 use serde_json::{Value, json};
 
 use crate::app::{App, Error, SetupFn, Shared, ViewFn};
+use crate::caret::Caret;
 use crate::control::UiQueue;
 use crate::crash::{self, LaunchGuard, PreviousLaunch};
-use crate::session::{Document, Effect, Session, now};
+use crate::open::Inbox;
+use crate::session::{Document, Effect, Origin, Session, now};
 use crate::stats::FrameStats;
 use crate::telemetry::Telemetry;
+use crate::window_state::{self, WindowState};
+use ashlar_native::session_end::{self, EndKind, EndRequest};
+
+/// Wakes for a quit, logout or shutdown request from the OS (IMP-6.7).
+const SESSION_END: Reason = Reason("session_end");
+
+mod prefs;
+
+pub use ashlar_motion::MotionPrefs;
+pub use ashlar_native::system::Preferences;
 
 /// Top-level menus in this order; menus the app adds follow in first-seen order.
 pub const MENU_ORDER: &[&str] = &["File", "Edit", "View"];
@@ -45,11 +59,26 @@ pub struct Launch {
     /// Start without restoring view settings (after a crash during startup, or `--safe-mode`).
     pub safe_mode: bool,
     pub previous: Option<PreviousLaunch>,
-    /// A file named on the command line.
+    /// A file named on the command line; it opens after the first frame.
     pub open: Option<PathBuf>,
     pub control_port: Option<u16>,
     pub(crate) guard: Option<LaunchGuard>,
     pub(crate) telemetry: Telemetry,
+    /// Files from the OS and later launches, set up before the window opened.
+    pub(crate) inbox: Option<Inbox>,
+    /// Held while this is the app's only instance ([`App::single_instance`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code, reason = "held for its drop, which stops listening")]
+    pub(crate) instance: Option<ashlar_native::single_instance::PrimaryGuard>,
+    /// The first line of `run()`, and when eframe had built the window (native only).
+    pub(crate) process_start: Option<std::time::Instant>,
+    pub(crate) window_at: Option<std::time::Instant>,
+    /// `<PREFIX>_READY_FILE`: gets `{pid, ready_ms}` once the first frame is presented.
+    pub(crate) ready_file: Option<PathBuf>,
+    /// The first present was recorded.
+    pub(crate) presented: bool,
+    /// A scene to apply once the session is set up (`--scene`).
+    pub(crate) scene: Option<String>,
 }
 
 /// Which file dialog a command asked for.
@@ -72,10 +101,41 @@ pub struct Cx<'a, D: Document> {
     /// App settings (debounced, saved in the config folder).
     pub settings: &'a mut Settings,
     queued: &'a mut Vec<(String, Value)>,
+    dropped: &'a [PathBuf],
     ctx: egui::Context,
+    /// Who changed the document since the view last drew (`None`: unchanged).
+    origin: Option<Origin>,
 }
 
 impl<D: Document> Cx<'_, D> {
+    /// The design tokens of the current theme (`cx.tokens().space.md`).
+    pub fn tokens(&self) -> tokens::Tokens {
+        tokens::current(&self.ctx)
+    }
+
+    /// Who changed the document since the view last drew; `None` when it did not change (or
+    /// changed without an edit: opened, replaced).
+    pub fn origin(&self) -> Option<Origin> {
+        self.origin
+    }
+
+    /// The value to draw for `id`, moving toward `target` along `curve`
+    /// ([`ashlar_ui::motion::value`], [`Class::Other`](ashlar_motion::Class::Other)). When the
+    /// document changed by the user's own hand since the last frame ([`Origin::animates`] is
+    /// false) it jumps to `target` instead ([`ashlar_ui::motion::set`]): typing and drags show at
+    /// once, while undo, agent and job changes animate.
+    pub fn motion<T>(&self, id: impl egui::AsId, target: T, curve: impl Into<ashlar_motion::Curve>) -> T
+    where
+        T: ashlar_motion::Animatable + Send + Sync + 'static,
+    {
+        let id = egui::Id::new(id);
+        if self.origin.is_some_and(|o| !o.animates()) {
+            ashlar_ui::motion::set(&self.ctx, id, target);
+            return target;
+        }
+        ashlar_ui::motion::value(&self.ctx, id, target, ashlar_motion::Class::Other, curve)
+    }
+
     /// The current document.
     pub fn doc(&self) -> &D {
         self.session.doc()
@@ -101,6 +161,12 @@ impl<D: Document> Cx<'_, D> {
 
     pub fn ctx(&self) -> &egui::Context {
         &self.ctx
+    }
+
+    /// Files dropped on the window this frame that the runtime did not open as the document
+    /// (another extension, or a second document). Empty with [`App::accept_drops`] off.
+    pub fn dropped_files(&self) -> &[PathBuf] {
+        self.dropped
     }
 
     /// Run a command after the view returns (menus, buttons). Errors are shown as toasts.
@@ -175,6 +241,8 @@ pub struct Runtime<D: Document> {
     cache: InfoCache,
     control: Option<(Server, Receiver<Request>)>,
     injected_requests: Vec<Request>,
+    /// The revision the view last drew ([`Cx::origin`]).
+    view_rev: Option<Revision>,
     autosave: Option<AutosaveState>,
     recovery: Vec<RecoveryCandidate>,
     modals: Vec<Modal>,
@@ -188,14 +256,75 @@ pub struct Runtime<D: Document> {
     view_error: Option<String>,
     allow_close: bool,
     quit_after_save: bool,
+    /// Quit, logout and shutdown requests from the OS (native only) and where answering them is.
+    session_end: Option<Receiver<EndRequest>>,
+    end_state: session_end::State,
+    /// The last answer given to the OS: `Some(true)` allowed the end.
+    end_reply: Option<bool>,
+    /// A command the confirm dialog's Save holds back until the save (maybe through Save As)
+    /// is done.
+    after_save: Option<(String, Value)>,
+    /// A file dialog a command asked for, shown at the start of the next frame (IMP-6.5).
+    pending_pick: Option<Pick>,
+    /// The window placement written to the settings (IMP-6.4).
+    window: window_state::Tracker,
     shown_title: String,
+    /// (dirty, file generation) the title was made for.
+    title_key: Option<(bool, u64)>,
+    /// The view generation last written to the settings.
+    persisted_view: Option<u64>,
     picker: Option<FilePicker>,
     passes: u64,
+    /// Times each pass for the perf warnings (`None`: nothing uses it).
+    probe: Option<crate::perf_warn::Probe>,
+    /// `ASHLAR_RECORD`: input and control requests appended for replay ([`crate::record`]).
+    recorder: Option<crate::record::Recorder>,
+    probe_installed: bool,
+    /// `app.stats` → `process`.
+    process: crate::stats::ProcessProbe,
+    /// The wake counts at the probe's previous frame (their growth is the frame's reasons).
+    probe_wakes: ashlar_ui::wake::WakeStats,
+    caret: Caret,
+    /// `app.clock`: the time frames see (pause, step, resume).
+    clock: crate::clock::Clock,
     /// Running in a real window (not the headless driver): OS menus may be installed.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) native: bool,
     #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
     native_menu: Option<crate::native_menu::NativeMenu>,
+    /// The OS menu bar was tried (installed and attached, or refused) on the first frame.
+    #[cfg_attr(not(all(feature = "native-menu", any(target_os = "macos", target_os = "windows"))), allow(dead_code))]
+    native_menu_tried: bool,
+    /// The tray icon ([`App::tray`](crate::App::tray)), installed with the OS menu bar.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray: Option<ashlar_native::tray::Tray>,
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    tray_tried: bool,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts: Option<ashlar_native::hotkey::GlobalShortcuts>,
+    #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+    global_shortcuts_tried: bool,
+    /// Dock reopen requests (macOS), listened for after the first frame.
+    #[cfg(target_os = "macos")]
+    reopen: Option<std::sync::mpsc::Receiver<ashlar_native::mac_shell::Reopen>>,
+    #[cfg(target_os = "macos")]
+    mac_shell_tried: bool,
+    /// Bring the window to the front on the next frame (a forwarded launch, a tray click, a
+    /// global shortcut), through the OS where the focus request alone may be refused.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    bring_front: bool,
+    /// Ids picked in the OS menu bar, run by [`Runtime::logic`] (also fed by
+    /// [`crate::Driver::native_menu_pick`]).
+    native_picks: Vec<String>,
+    os_prefs: prefs::OsPrefs,
+    /// Files from the OS and later launches.
+    inbox: Inbox,
+    /// Paths dropped since the last [`Runtime::logic`] (when drops are accepted).
+    drops: Vec<PathBuf>,
+    /// Dropped files left for the view this frame ([`Cx::dropped_files`]).
+    dropped: Vec<PathBuf>,
+    /// A file from outside waiting for open dialogs to close; a newer one replaces it.
+    open_next: Option<PathBuf>,
 }
 
 fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -207,7 +336,10 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 impl<D: Document> Runtime<D> {
-    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, launch: Launch) -> Self {
+    pub(crate) fn new(shared: Arc<Shared<D>>, view: Option<ViewFn<D>>, setup: Option<SetupFn>, mut launch: Launch) -> Self {
+        // `system_locales()` also reads the OS's language list (desktop launches have no `LANG`)
+        ashlar_i18n::set_native_languages(ashlar_native::system::preferred_languages);
+        let inbox = launch.inbox.take().unwrap_or_default();
         let mut session = Session::new(Arc::clone(&shared.format));
         session.set_windowed(true);
         session.telemetry = launch.telemetry.clone();
@@ -242,6 +374,7 @@ impl<D: Document> Runtime<D> {
             cache: InfoCache::default(),
             control: None,
             injected_requests: Vec::new(),
+            view_rev: None,
             autosave: None,
             recovery: Vec::new(),
             modals: Vec::new(),
@@ -254,26 +387,84 @@ impl<D: Document> Runtime<D> {
             view_error: None,
             allow_close: false,
             quit_after_save: false,
+            session_end: None,
+            end_state: session_end::State::Idle,
+            end_reply: None,
+            after_save: None,
+            pending_pick: None,
+            window: window_state::Tracker::default(),
             shown_title: String::new(),
+            title_key: None,
+            persisted_view: None,
             picker: None,
             passes: 0,
+            probe: crate::perf_warn::Probe::from_env(),
+            recorder: crate::record::Recorder::from_env(),
+            probe_installed: false,
+            process: crate::stats::ProcessProbe::default(),
+            probe_wakes: ashlar_ui::wake::WakeStats::default(),
+            caret: Caret::default(),
+            clock: crate::clock::Clock::default(),
             native: false,
             #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
             native_menu: None,
+            native_menu_tried: false,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray: None,
+            #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+            tray_tried: false,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts: None,
+            #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+            global_shortcuts_tried: false,
+            bring_front: false,
+            #[cfg(target_os = "macos")]
+            reopen: None,
+            #[cfg(target_os = "macos")]
+            mac_shell_tried: false,
+            native_picks: Vec::new(),
+            os_prefs: prefs::OsPrefs::new(shared.follow_system_accent, shared.motion),
+            inbox,
+            drops: Vec::new(),
+            dropped: Vec::new(),
+            open_next: None,
             launch,
             shared,
         };
-        rt.start_autosave();
-        if let Some(path) = rt.launch.open.take() {
-            let r = rt.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
-            if let Err(e) = r {
-                rt.toasts.error(e.to_string());
-            }
+        if let (Some(s), Some(w)) = (rt.launch.process_start, rt.launch.window_at) {
+            rt.stats.set_to_window(w.saturating_duration_since(s));
         }
+        rt.start_autosave();
+        // `launch.open` waits for the first frame (open_from_outside): the window shows first
         if rt.launch.safe_mode {
             rt.modals.push(Modal::SafeMode);
         }
+        // with a command-line document, the scene waits for it (open_from_outside)
+        if rt.launch.open.is_none() {
+            rt.apply_launch_scene();
+        }
         rt
+    }
+
+    /// The `--scene` named at launch, once.
+    fn apply_launch_scene(&mut self) {
+        if let Some(name) = self.launch.scene.take()
+            && let Err(e) = self.apply_scene(&name)
+        {
+            log::error!("{e}");
+            self.toasts.error(e);
+        }
+    }
+
+    /// Run the scene called `name` ([`crate::App::scene`]) on the session. Its effects run on
+    /// the next frame.
+    pub fn apply_scene(&mut self, name: &str) -> Result<(), String> {
+        let shared = Arc::clone(&self.shared);
+        let Some(scene) = shared.scene(name) else {
+            return Err(format!("no scene `{name}` (scenes: {})", shared.scene_names().join(", ")));
+        };
+        let session = &mut self.session;
+        catch_unwind(AssertUnwindSafe(|| scene(session))).map_err(|p| format!("scene `{name}` panicked: {}", panic_text(p.as_ref())))
     }
 
     fn start_autosave(&mut self) {
@@ -315,6 +506,30 @@ impl<D: Document> Runtime<D> {
         &self.toasts
     }
 
+    /// Write one JSON line per frame to `path` (what `ASHLAR_FRAME_LOG=path` does; see
+    /// [`crate::frame_log`]), from the next frame on. Replaces an earlier log.
+    pub fn log_frames(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let log = crate::frame_log::FrameLog::create(path.as_ref(), crate::frame_log::MAX_BYTES)?;
+        self.probe.get_or_insert_with(crate::perf_warn::Probe::default).set_log(log);
+        Ok(())
+    }
+
+    /// Record every frame's input and time, and every control request, to `path` (what
+    /// `ASHLAR_RECORD=path` does; see [`crate::record`]), from the next frame on. Replaces an
+    /// earlier recording. [`crate::Driver::replay`] plays it back.
+    pub fn record_to(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.recorder = Some(crate::record::Recorder::create(path.as_ref(), crate::record::MAX_BYTES)?);
+        Ok(())
+    }
+
+    /// Watch frames with these warning meters instead of the environment's (tests).
+    #[cfg(test)]
+    pub(crate) fn watch_frames(&mut self, warn: crate::perf_warn::PerfWarn) -> crate::perf_warn::Probe {
+        let p = crate::perf_warn::Probe::with_warn(warn);
+        self.probe = Some(p.clone());
+        p
+    }
+
     /// Frame-time statistics (`app.stats`).
     pub fn stats(&self) -> &FrameStats {
         &self.stats
@@ -332,6 +547,12 @@ impl<D: Document> Runtime<D> {
     /// Passes run so far (frames, plus egui's occasional extra layout pass).
     pub fn passes(&self) -> u64 {
         self.passes
+    }
+
+    /// Replace the OS preferences (reduced motion, accent, contrast) with `source` (tests). Call
+    /// it before the first frame; it is read again whenever the window gains focus.
+    pub fn set_preferences(&mut self, source: impl FnMut() -> Preferences + 'static) {
+        self.os_prefs.source = Some(Box::new(source));
     }
 
     /// Replace the native file dialogs (tests, scripted runs).
@@ -376,8 +597,15 @@ impl<D: Document> Runtime<D> {
         }
         self.started = true;
         devtools::install(ctx);
+        // without eframe's AccessKit adapter no screen reader can turn AccessKit on
+        if !cfg!(feature = "accesskit") {
+            devtools::set_platform_accesskit(ctx, false);
+        }
+        self.inbox.set_ctx(ctx);
         let mode = if self.launch.safe_mode { ThemeMode::System } else { self.settings.get::<ThemeMode>("theme").unwrap_or_default() };
-        tokens::install(ctx, &Tokens::light(), &Tokens::dark(), mode);
+        // OS accent, contrast and reduced motion; tokens the setup below installs win
+        let (light, dark) = self.os_prefs.startup(ctx);
+        tokens::install(ctx, &light, &dark, mode);
         if let Some(setup) = self.setup.take()
             && let Err(p) = catch_unwind(AssertUnwindSafe(|| setup(ctx)))
         {
@@ -411,6 +639,16 @@ impl<D: Document> Runtime<D> {
                 }
             }
         }
+        // the event loop runs by now, so winit's application delegate exists
+        if self.native {
+            match session_end::listen(Arc::new({
+                let w = wake::waker(ctx, SESSION_END);
+                move || w.wake()
+            })) {
+                Ok(rx) => self.session_end = Some(rx),
+                Err(e) => log::debug!("quit requests from the OS: {e}"),
+            }
+        }
     }
 
     // ------------------------------------------------------------------ the frame
@@ -420,17 +658,34 @@ impl<D: Document> Runtime<D> {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.launch.telemetry.begin_turn();
         self.ensure_started(ctx);
+        self.os_prefs.poll(ctx);
         self.serve_control(ctx);
-        for rec in self.jobs.drain_ready(&mut self.session) {
+        self.show_pending_pick(ctx, None);
+        let outer = self.session.swap_source(Some(Origin::Job));
+        let done = self.jobs.drain_ready(&mut self.session);
+        self.session.swap_source(outer);
+        for rec in done {
             if rec.status == ashlar_jobs::Status::Failed {
                 self.toasts.error(format!("{}: {}", rec.label, rec.message));
             }
         }
         self.apply_effects(ctx);
+        self.open_from_outside(ctx);
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
-        for id in self.native_menu.as_ref().map(|m| m.drain()).unwrap_or_default() {
-            self.run_ui_command(ctx, &id, json!({}));
+        if let Some(m) = &self.native_menu {
+            self.native_picks.extend(m.drain());
         }
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        self.drain_tray(ctx);
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if let Some(g) = &self.global_shortcuts {
+            let pressed = g.drain();
+            if !pressed.is_empty() {
+                self.show_window(ctx);
+            }
+            self.native_picks.extend(pressed);
+        }
+        self.run_native_picks(ctx);
         self.launch.telemetry.end_turn();
     }
 
@@ -451,7 +706,8 @@ impl<D: Document> Runtime<D> {
         raw.dropped_files.clear();
         raw.viewport_id = egui::ViewportId::ROOT;
         // eframe hands no time to a hidden window: go on from the last pass on the wall clock
-        let last = ctx.input(|i| i.time);
+        // (host time: `app.clock` turns it into the app's in `raw_input_hook`)
+        let last = self.clock.host_time();
         raw.time = Some(time.unwrap_or_else(|| self.created.map_or(last, |c| c.elapsed().as_secs_f64())).max(last));
         if raw.screen_rect.is_none()
             && let Some(r) = raw.viewports.get(&egui::ViewportId::ROOT).and_then(|v| v.inner_rect)
@@ -475,13 +731,122 @@ impl<D: Document> Runtime<D> {
         Some(out)
     }
 
-    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): credit the
-    /// frame to the wake reasons that were due. (Injected agent input is handed to egui by the
-    /// debugger's plugin.)
+    /// The start of a frame (eframe's `raw_input_hook`, before [`Runtime::logic`]): set the
+    /// frame's time (`app.clock` may hold it), then credit the frame to the wake reasons that were
+    /// due. (Injected agent input is handed to egui by the debugger's plugin.)
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // the host's time and input, before `app.clock` changes them: what replay hands back
+        if let Some(r) = &mut self.recorder
+            && !r.frame(raw)
+        {
+            self.recorder = None;
+        }
+        self.clock.begin_frame(raw);
         // installed every frame: an app may reset egui's memory, which holds the scheduler
         self.wakes.install(ctx);
         self.wakes.begin_frame(raw.time.unwrap_or_else(|| ctx.input(|i| i.time)));
+        if let Some(p) = &self.probe {
+            // before egui's pass begins, so the plugin times the first frame too
+            if !self.probe_installed {
+                ctx.add_plugin(p.plugin());
+                self.probe_installed = true;
+            }
+            let now = self.wakes.stats();
+            p.begin_frame(crate::perf_warn::credited(&self.probe_wakes, &now));
+            self.probe_wakes = now;
+        }
+        // on the web a dropped file has no path to open: the view reads it from egui's input
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.shared.accept_drops {
+            self.drops.extend(raw.dropped_files.iter().map(|f| f.path().to_path_buf()));
+        }
+    }
+
+    /// Open what the OS, a later launch or a drop asked for: one document at a time, after any
+    /// open dialog, through `file.open` (a dirty document asks to save first). A forwarded launch
+    /// brings the window to the front.
+    fn open_from_outside(&mut self, ctx: &egui::Context) {
+        let (items, focus) = self.inbox.drain();
+        if focus {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.bring_front = true;
+        }
+        let mut files = items.into_iter().filter_map(|item| match item {
+            ashlar_native::open_files::Opened::File(p) => Some(p),
+            ashlar_native::open_files::Opened::Url(u) => {
+                log::info!("asked to open {u}: URLs are not handled");
+                None
+            }
+        });
+        if let Some(p) = files.next() {
+            self.open_next = Some(p);
+        }
+        // the command-line document, once the first frame is up (a slow load no longer delays it)
+        if self.first_frame_done
+            && let Some(path) = self.launch.open.take()
+        {
+            self.run_ui_command(ctx, "file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+            self.apply_launch_scene();
+        }
+        let skipped = files.count();
+        if skipped > 0 {
+            log::info!("{skipped} more file(s) to open ignored: one document at a time");
+        }
+        if !self.drops.is_empty() {
+            let (open, rest) = crate::open::split_drops(std::mem::take(&mut self.drops), &self.shared.extensions);
+            if open.is_some() {
+                self.open_next = open;
+            }
+            self.dropped = rest;
+        }
+        if self.modal_open() {
+            return;
+        }
+        if let Some(p) = self.open_next.take() {
+            self.run_ui_command(ctx, "file.open", json!({"path": p.to_string_lossy()}));
+        }
+    }
+
+    /// Called at the start of every native frame: the frame after the first one finds that frame
+    /// presented. Records `launch_to_present_ms` and writes the ready file.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn note_presented(&mut self) {
+        if !self.first_frame_done || std::mem::replace(&mut self.launch.presented, true) {
+            return;
+        }
+        let Some(start) = self.launch.process_start else { return };
+        let took = start.elapsed();
+        self.stats.set_presented(took);
+        let t = self.stats.launch();
+        let f = |v: Option<f64>| v.map_or_else(|| "-".to_owned(), |v| format!("{v:.1}"));
+        log::info!(
+            "launch: window {} ms, first frame {} ms (runtime {} ms), presented {} ms",
+            f(t.to_window_ms),
+            f(t.to_first_frame_ms),
+            f(self.stats.summary().first_frame_ms),
+            f(t.launch_to_present_ms)
+        );
+        if let Some(path) = self.launch.ready_file.take() {
+            let body = json!({"pid": std::process::id(), "ready_ms": took.as_secs_f64() * 1000.0}).to_string();
+            // off the UI thread; a launcher polls for the file
+            let spawned = std::thread::Builder::new().name("ashlar-ready".into()).spawn(move || {
+                let r = catch_unwind(AssertUnwindSafe(|| ashlar_fs::atomic_write(&path, body.as_bytes())));
+                match r {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => log::warn!("ready file {}: {e}", path.display()),
+                    Err(_) => log::warn!("ready file {}: the writer panicked", path.display()),
+                }
+            });
+            if let Err(e) = spawned {
+                log::warn!("ready file: {e}");
+            }
+        }
+    }
+
+    /// Queue a later launch's arguments, as [`App::single_instance`] receives them (tests).
+    pub(crate) fn forwarded(&self, f: ashlar_native::single_instance::Forwarded) {
+        self.inbox.forward(f);
     }
 
     /// Draw the frame.
@@ -493,7 +858,8 @@ impl<D: Document> Runtime<D> {
         self.passes = self.passes.saturating_add(1);
         // timed wakes not yet due when this frame ran (input came first) stay scheduled
         self.wakes.rearm(&ctx);
-        let rev_before = self.session.revision();
+        // before anything consumes this frame's input events
+        self.caret.begin(&ctx);
         let (focused, active) = ctx.input(|i| (i.focused, !i.events.is_empty()));
         self.launch.telemetry.input(focused, active);
 
@@ -502,7 +868,12 @@ impl<D: Document> Runtime<D> {
             && let Some(id) = dispatch(&ctx, &self.keymap)
         {
             self.run_ui_command(&ctx, &id, json!({}));
+            // the command may have changed what the menus show
+            self.refresh_infos();
         }
+        // nothing is drawn yet: changes made so far (control requests, jobs, a key command) show
+        // in this frame; only changes made from here on need another
+        let rev_before = self.session.revision();
         self.update_title(&ctx);
         if !self.native_menu_active() {
             let spec = &self.cache.menu;
@@ -512,6 +883,7 @@ impl<D: Document> Runtime<D> {
             }
         }
         self.draw_view(ui);
+        self.dropped.clear();
         for (id, params) in std::mem::take(&mut self.queued) {
             self.run_ui_command(&ctx, &id, params);
         }
@@ -519,9 +891,12 @@ impl<D: Document> Runtime<D> {
         self.draw_modals(&ctx);
         self.draw_tools(&ctx);
         self.toasts.show(&ctx);
+        self.run_toast_actions(&ctx);
         self.handle_close(&ctx);
+        self.poll_session_end(&ctx);
         self.apply_effects(&ctx);
         self.persist_view();
+        self.track_window(&ctx);
         self.tick_storage(&ctx);
         self.feed_devtools(&ctx);
 
@@ -529,10 +904,16 @@ impl<D: Document> Runtime<D> {
         if self.session.revision() != rev_before {
             wake::wake(&ctx, Reason::DOCUMENT);
         }
-        if let Some(s) = started {
-            let took = s.elapsed();
+        self.caret.end(&ctx);
+        let took = started.map(|s| s.elapsed());
+        if let Some(took) = took {
             self.stats.record(took);
             self.launch.telemetry.frame(took);
+        }
+        self.process.tick();
+        let ran = self.session.take_ran();
+        if let Some(p) = &self.probe {
+            p.end_ui(took, ran);
         }
         if !self.first_frame_done {
             self.first_frame_done = true;
@@ -542,21 +923,30 @@ impl<D: Document> Runtime<D> {
             if let Some(c) = self.created {
                 self.stats.set_first_frame(c.elapsed());
             }
+            if let Some(s) = self.launch.process_start {
+                self.stats.set_to_first_frame(s.elapsed());
+            }
+            // one more frame: it opens the command-line document and records the present
+            if self.native || self.launch.open.is_some() {
+                wake::wake(&ctx, Reason::STARTUP);
+            }
             self.launch.telemetry.first_frame();
-            self.install_native_menu(&ctx);
         }
         self.launch.telemetry.end_turn();
     }
 
     fn draw_view(&mut self, ui: &mut egui::Ui) {
-        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, .. } = self;
+        let Runtime { session, shared, jobs, toasts, settings, queued, view, view_error, dropped, view_rev, .. } = self;
+        let rev = session.revision();
+        let origin = if *view_rev == Some(rev) { None } else { session.origin() };
+        *view_rev = Some(rev);
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(err) = view_error.as_deref() {
                 ui.centered_and_justified(|ui| ui.label(format!("This view stopped after an internal error:\n{err}")));
                 return;
             }
             let Some(view) = view.as_mut() else { return };
-            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, ctx: ui.ctx().clone() };
+            let mut cx = Cx { session, registry: &shared.registry, jobs, toasts, settings, queued, dropped, ctx: ui.ctx().clone(), origin };
             let r = catch_unwind(AssertUnwindSafe(|| view(ui, &mut cx)));
             if let Err(p) = r {
                 let msg = crash::last_panic().map_or_else(|| panic_text(p.as_ref()), |r| format!("{} ({})", r.message, r.location));
@@ -577,15 +967,129 @@ impl<D: Document> Runtime<D> {
         }
     }
 
-    fn install_native_menu(&mut self, ctx: &egui::Context) {
+    /// After the first frame, install the OS menu bar and attach it to the window. Until it is
+    /// attached (and when that fails) the in-window bar shows.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn install_native_menu(&mut self, ctx: &egui::Context, window: &eframe::Frame) {
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
-        if self.native {
-            self.native_menu = crate::native_menu::NativeMenu::install(&self.cache.infos, ctx);
+        if self.native && self.first_frame_done && !self.native_menu_tried {
+            self.native_menu_tried = true;
+            self.native_menu = crate::native_menu::NativeMenu::install(&self.cache.infos, ctx, window);
+            // the in-window bar goes (or stays) with the next frame
+            wake::wake(ctx, Reason::MENU);
         }
-        let _ = ctx;
+        #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.tray_tried {
+            self.tray_tried = true;
+            if let Some(spec) = self.shared.tray.clone() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::tray::Tray::new(spec, std::sync::Arc::new(move || wake.wake())) {
+                    Ok(t) => self.tray = Some(t),
+                    Err(e) => log::warn!("no tray icon: {e}"),
+                }
+            }
+        }
+        #[cfg(all(feature = "hotkey", not(target_arch = "wasm32")))]
+        if self.native && self.first_frame_done && !self.global_shortcuts_tried {
+            self.global_shortcuts_tried = true;
+            if !self.shared.global_shortcuts.is_empty() {
+                let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+                match ashlar_native::hotkey::GlobalShortcuts::new(std::sync::Arc::new(move || wake.wake())) {
+                    Ok(mut g) => {
+                        for (command, chord) in &self.shared.global_shortcuts {
+                            let done = ashlar_command::shortcut::Chord::parse(chord)
+                                .map_err(|e| ashlar_native::NativeError::Invalid(e.0))
+                                .and_then(|c| g.register(command.clone(), &c));
+                            if let Err(e) = done {
+                                log::warn!("global shortcut `{chord}` for `{command}` skipped: {e}");
+                            }
+                        }
+                        self.global_shortcuts = Some(g);
+                    }
+                    Err(e) => log::warn!("no global shortcuts: {e}"),
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.native && self.first_frame_done && !self.mac_shell_tried {
+            self.mac_shell_tried = true;
+            if let Err(e) = ashlar_native::mac_shell::guard_appearance() {
+                log::debug!("appearance guard: {e}");
+            }
+            let wake = ashlar_ui::wake::waker(ctx, Reason::MENU);
+            match ashlar_native::mac_shell::listen_reopen(std::sync::Arc::new(move || wake.wake())) {
+                Ok(rx) => self.reopen = Some(rx),
+                Err(e) => log::debug!("Dock reopen: {e}"),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if self.reopen.as_ref().is_some_and(|rx| rx.try_iter().count() > 0) {
+            self.show_window(ctx);
+        }
+        if std::mem::take(&mut self.bring_front)
+            && let Err(e) = ashlar_native::system::bring_to_front(window)
+            && !e.is_unsupported()
+        {
+            log::debug!("bring to front: {e}");
+        }
+        let _ = (ctx, window);
     }
 
-    fn modal_open(&self) -> bool {
+    /// Show, restore and focus the window, now through the viewport and on the next frame
+    /// through the OS.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn show_window(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        self.bring_front = true;
+        wake::wake(ctx, Reason::MENU);
+    }
+
+    /// Tray menu picks run like OS menu picks; a click on the icon shows the window.
+    #[cfg(all(feature = "tray", not(target_arch = "wasm32")))]
+    fn drain_tray(&mut self, ctx: &egui::Context) {
+        let Some(t) = &self.tray else { return };
+        for e in t.events() {
+            match e {
+                ashlar_native::tray::TrayEvent::Menu(id) => self.native_picks.push(id),
+                ashlar_native::tray::TrayEvent::Activate => self.show_window(ctx),
+            }
+        }
+    }
+
+    /// Run the ids picked in the OS menu bar, under the rules key presses follow: nothing runs
+    /// while a dialog or the palette is open, and while a text field has the keyboard a command
+    /// whose shortcut belongs to the field ([`works_while_typing`]) is skipped. The OS reports a
+    /// click and a key equivalent the same way, so a click on such an item while typing is
+    /// skipped too; text-editing shortcuts have no key equivalent (see `native_menu`), so this
+    /// mostly affects clicks on Undo / Redo while a text field is focused, which then belong to
+    /// the field anyway.
+    fn run_native_picks(&mut self, ctx: &egui::Context) {
+        if self.native_picks.is_empty() {
+            return;
+        }
+        let picks = std::mem::take(&mut self.native_picks);
+        let typing = ctx.egui_wants_keyboard_input();
+        for id in picks {
+            if self.modal_open() {
+                log::debug!("menu pick `{id}` ignored: a dialog is open");
+                continue;
+            }
+            if typing && self.keymap.keys_for(&id).first().is_some_and(|c| !works_while_typing(c)) {
+                log::debug!("menu pick `{id}` ignored: a text field has the keyboard");
+                continue;
+            }
+            self.run_ui_command(ctx, &id, json!({}));
+        }
+    }
+
+    /// Queue an OS menu pick (the headless driver's stand-in for the OS menu bar).
+    pub(crate) fn push_native_pick(&mut self, id: impl Into<String>) {
+        self.native_picks.push(id.into());
+    }
+
+    pub(crate) fn modal_open(&self) -> bool {
         !self.modals.is_empty() || self.palette.is_open() || self.view_error.is_some()
     }
 
@@ -594,6 +1098,15 @@ impl<D: Document> Runtime<D> {
     fn refresh_infos(&mut self) {
         let key = (self.session.revision(), self.session.view_generation(), self.session.file_generation(), self.keymap_gen);
         if self.cache.key == Some(key) {
+            return;
+        }
+        // only the document changed (typing): what the menus show moves only if a command's
+        // enabled state did, and checking that is far cheaper than rebuilding every info
+        if let Some(old) = self.cache.key
+            && (old.1, old.2, old.3) == (key.1, key.2, key.3)
+            && self.enabled_unchanged()
+        {
+            self.cache.key = Some(key);
             return;
         }
         let mut infos = self.shared.registry.infos(&self.session);
@@ -608,6 +1121,28 @@ impl<D: Document> Runtime<D> {
         #[cfg(all(feature = "native-menu", any(target_os = "macos", target_os = "windows")))]
         if let Some(m) = &mut self.native_menu {
             m.update(&self.cache.infos);
+        }
+    }
+
+    /// Every command's enabled state (and reason) is what the cached infos say.
+    fn enabled_unchanged(&self) -> bool {
+        let specs = self.shared.registry.specs();
+        specs.len() == self.cache.infos.len()
+            && specs.iter().zip(&self.cache.infos).all(|(spec, info)| match (spec.enabled)(&self.session) {
+                Ok(()) => info.enabled,
+                Err(reason) => !info.enabled && info.disabled_reason.as_deref() == Some(reason.as_str()),
+            })
+    }
+
+    /// With [`App::run_toast_actions`](crate::App::run_toast_actions) on: run the clicked toast
+    /// actions that name a registered command.
+    fn run_toast_actions(&mut self, ctx: &egui::Context) {
+        if !self.shared.toast_commands {
+            return;
+        }
+        let shared = Arc::clone(&self.shared);
+        for a in self.toasts.take_actions_where(|a| shared.registry.find(&a.command).is_some()) {
+            self.run_ui_command(ctx, &a.command, json!({}));
         }
     }
 
@@ -648,20 +1183,8 @@ impl<D: Document> Runtime<D> {
                 tokens::set_mode(ctx, mode);
                 let _ = self.settings.set("theme", &mode);
             }
-            Effect::PickOpen => {
-                if let Some(path) = self.pick(Pick::Open) {
-                    let r = self.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
-                    self.report(r);
-                }
-            }
-            Effect::PickSaveAs => match self.pick(Pick::SaveAs) {
-                Some(path) => {
-                    let r = self.execute("file.save_as", json!({"path": path.to_string_lossy()}));
-                    self.report(r);
-                    self.continue_quit(ctx);
-                }
-                None => self.quit_after_save = false,
-            },
+            Effect::PickOpen => self.request_pick(ctx, Pick::Open),
+            Effect::PickSaveAs => self.request_pick(ctx, Pick::SaveAs),
             Effect::ConfirmDiscard { command, params } => self.modals.push(Modal::Confirm { quit: false, command: Some((command, params)) }),
             Effect::Quit { discard } => {
                 if self.session.is_dirty() && !discard {
@@ -679,14 +1202,67 @@ impl<D: Document> Runtime<D> {
         }
     }
 
-    fn pick(&mut self, kind: Pick) -> Option<PathBuf> {
-        if let Some(p) = &mut self.picker {
-            return p(kind);
+    /// Ask for a file dialog. It is not shown inside this frame (a blocking dialog would freeze
+    /// it half drawn, menus open): the next frame shows it first and acts on the pick.
+    fn request_pick(&mut self, ctx: &egui::Context, kind: Pick) {
+        if let Some(open) = self.pending_pick {
+            log::debug!("a {kind:?} dialog was asked for while a {open:?} dialog waits: ignored");
+            return;
         }
-        self.launch.telemetry.pause_hangs();
-        let r = native_pick(&self.shared, &self.session, kind);
-        self.launch.telemetry.resume_hangs();
-        r
+        self.pending_pick = Some(kind);
+        wake::wake(ctx, Reason("dialog"));
+    }
+
+    /// Show the dialog asked for last frame, over `parent` when there is a window, and act on the
+    /// pick: called before the frame's work, by [`Runtime::logic`] and (with the window) by eframe.
+    pub(crate) fn show_pending_pick(&mut self, ctx: &egui::Context, parent: Option<&eframe::Frame>) {
+        let Some(kind) = self.pending_pick.take() else { return };
+        let picked = match &mut self.picker {
+            Some(p) => p(kind),
+            None => {
+                // the dialog blocks the event loop: not a hang
+                self.launch.telemetry.pause_hangs();
+                let r = native_pick(&self.shared, &self.session, kind, parent);
+                self.launch.telemetry.resume_hangs();
+                r
+            }
+        };
+        self.deliver_pick(ctx, kind, picked);
+        self.apply_effects(ctx);
+        wake::wake(ctx, Reason("dialog"));
+    }
+
+    fn deliver_pick(&mut self, ctx: &egui::Context, kind: Pick, picked: Option<PathBuf>) {
+        match (kind, picked) {
+            (Pick::Open, Some(path)) => {
+                let r = self.execute("file.open", json!({"path": path.to_string_lossy(), "discard": true}));
+                self.report(r);
+            }
+            (Pick::Open, None) => {}
+            (Pick::SaveAs, Some(path)) => {
+                let r = self.execute("file.save_as", json!({"path": path.to_string_lossy()}));
+                self.report(r);
+                self.continue_after_save(ctx);
+            }
+            (Pick::SaveAs, None) => {
+                self.quit_after_save = false;
+                self.after_save = None;
+                if self.answering_end() {
+                    self.end_step(ctx, session_end::Event::SaveFailed);
+                }
+            }
+        }
+    }
+
+    /// The save the confirm dialog started is over: quit, or run the command it held back.
+    fn continue_after_save(&mut self, ctx: &egui::Context) {
+        self.continue_quit(ctx);
+        let next = self.after_save.take();
+        if let Some((id, params)) = next
+            && !self.session.is_dirty()
+        {
+            self.run_ui_command(ctx, &id, params);
+        }
     }
 
     // ------------------------------------------------------------------ closing
@@ -706,14 +1282,79 @@ impl<D: Document> Runtime<D> {
         }
     }
 
+    fn poll_session_end(&mut self, ctx: &egui::Context) {
+        let requests: Vec<EndRequest> = self.session_end.as_ref().map(|rx| rx.try_iter().collect()).unwrap_or_default();
+        for r in requests {
+            self.end_requested(ctx, r.kind, session_end::CAN_WAIT);
+        }
+    }
+
+    /// The OS asks the app to end (Dock Quit, logout, shutdown): the same dirty check and
+    /// cleanup as closing the window, answered through `session_end::step`.
+    fn end_requested(&mut self, ctx: &egui::Context, kind: EndKind, can_wait: bool) {
+        let dirty = self.session.is_dirty();
+        self.end_step(ctx, session_end::Event::Requested { kind, dirty, can_wait });
+    }
+
+    /// Whether the confirm dialog on screen answers an OS end request.
+    fn answering_end(&self) -> bool {
+        matches!(self.end_state, session_end::State::Asking(_) | session_end::State::Saving(_))
+    }
+
+    fn end_step(&mut self, ctx: &egui::Context, event: session_end::Event) {
+        let (state, effects) = session_end::step(self.end_state, event);
+        self.end_state = state;
+        for effect in effects {
+            match effect {
+                session_end::Effect::Ask => {
+                    if !self.modals.iter().any(|m| matches!(m, Modal::Confirm { quit: true, .. })) {
+                        self.modals.push(Modal::Confirm { quit: true, command: None });
+                    }
+                }
+                session_end::Effect::Save => {
+                    self.quit_after_save = true;
+                    self.after_save = None;
+                    let r = self.execute("file.save", json!({}));
+                    self.report(r);
+                    self.apply_effects(ctx);
+                    // saved in place (or failed); a Save As answers when its dialog closes
+                    if self.pending_pick.is_none() {
+                        self.quit_after_save = false;
+                        let next = if self.session.is_dirty() { session_end::Event::SaveFailed } else { session_end::Event::Saved };
+                        self.end_step(ctx, next);
+                    }
+                }
+                session_end::Effect::Shutdown { keep_recovery } => self.shutdown_inner(keep_recovery),
+                session_end::Effect::Allow => {
+                    self.end_reply = Some(true);
+                    session_end::reply(true);
+                    // macOS ends the process from the reply; elsewhere close the window too
+                    if !cfg!(target_os = "macos") || self.session_end.is_none() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                session_end::Effect::Refuse => {
+                    self.end_reply = Some(false);
+                    session_end::reply(false);
+                }
+            }
+        }
+    }
+
     fn close(&mut self, ctx: &egui::Context, discarded: bool) {
         self.shutdown(discarded);
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     /// Settle everything before the process ends: stop jobs, flush settings, end autosave.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn shutdown(&mut self, _discarded: bool) {
+        self.shutdown_inner(false);
+    }
+
+    /// `keep_recovery`: unsaved changes the user wasn't asked about (a logout that can't wait)
+    /// stay in the autosave files for the next launch to offer.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+    fn shutdown_inner(&mut self, keep_recovery: bool) {
         if self.allow_close {
             return;
         }
@@ -730,8 +1371,9 @@ impl<D: Document> Runtime<D> {
                     log::warn!("autosave: {e}");
                 }
             }
-            // a clean exit (saved, or the user chose not to keep the changes)
-            if let Err(e) = a.autosave.close(false) {
+            // a clean exit (saved, or the user chose not to keep the changes), unless the
+            // changes were never offered for saving
+            if let Err(e) = a.autosave.close(keep_recovery && self.session.is_dirty()) {
                 log::warn!("autosave cleanup: {e}");
             }
         }
@@ -757,7 +1399,10 @@ impl<D: Document> Runtime<D> {
     fn continue_quit(&mut self, ctx: &egui::Context) {
         if self.quit_after_save {
             self.quit_after_save = false;
-            if !self.session.is_dirty() {
+            if self.answering_end() {
+                let next = if self.session.is_dirty() { session_end::Event::SaveFailed } else { session_end::Event::Saved };
+                self.end_step(ctx, next);
+            } else if !self.session.is_dirty() {
                 self.close(ctx, false);
             }
         }
@@ -765,7 +1410,34 @@ impl<D: Document> Runtime<D> {
 
     // ------------------------------------------------------------------ storage
 
+    /// Keep the settings' `"window"` placement current: written only when the viewport info
+    /// changes it (the settings debounce the file; closing flushes it). Once the window shows,
+    /// a restored placement that no monitor shows moves back onto the screen.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if !self.native || !self.shared.remember_window || self.shared.dirs.is_none() {
+            return;
+        }
+        let settings = &self.settings;
+        let tracker = &mut self.window;
+        let update = ctx.input(|i| tracker.update(i.viewport(), || settings.get::<WindowState>(window_state::KEY).unwrap_or_default()));
+        if let Some(pos) = update.move_to {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos.into()));
+        }
+        if let Some(state) = update.save
+            && let Err(e) = self.settings.set(window_state::KEY, &state)
+        {
+            log::warn!("window placement not saved: {e}");
+        }
+    }
+
+    /// Write the view state to the settings when it changed (keyed by its generation: no copy
+    /// or comparison on frames that did not change it).
     fn persist_view(&mut self) {
+        let generation = self.session.view_generation();
+        if self.persisted_view == Some(generation) {
+            return;
+        }
+        self.persisted_view = Some(generation);
         let view = Value::Object(self.session.view_state().clone());
         if self.settings.get_value("view") != Some(&view) {
             self.settings.set_value("view", view);
@@ -773,7 +1445,8 @@ impl<D: Document> Runtime<D> {
     }
 
     fn tick_storage(&mut self, ctx: &egui::Context) {
-        let t = ctx.input(|i| i.time).max(0.0);
+        // host time: saves go on while `app.clock` holds the app's time
+        let t = self.clock.host_time().max(ctx.input(|i| i.time)).max(0.0);
         let now = Duration::from_secs_f64(t);
         // a pending save asks for its own frame through the settings' wake hook
         if let Err(e) = self.settings.tick(now) {
@@ -813,8 +1486,15 @@ impl<D: Document> Runtime<D> {
         }
     }
 
+    /// Set the window title when what it shows changed: the dirty mark, or the file (the
+    /// display name changes only with the file generation).
     fn update_title(&mut self, ctx: &egui::Context) {
-        let dirty = if self.session.is_dirty() { " •" } else { "" };
+        let key = (self.session.is_dirty(), self.session.file_generation());
+        if self.title_key == Some(key) {
+            return;
+        }
+        self.title_key = Some(key);
+        let dirty = if key.0 { " •" } else { "" };
         let title = format!("{}{dirty} — {}", self.session.display_name(), self.shared.title);
         if title != self.shown_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -865,6 +1545,7 @@ impl<D: Document> Runtime<D> {
                 }) {
                     Some(DialogOutcome::Button(1)) => {
                         self.settings.remove("view");
+                        self.persisted_view = None;
                         self.settings.remove("theme");
                         ctx.memory_mut(|m| *m = egui::Memory::default());
                         self.wakes.install(ctx);
@@ -890,6 +1571,16 @@ impl<D: Document> Runtime<D> {
         let out = Dialog::new("ashlar.confirm_discard", &title, &buttons).show(ctx, |ui| {
             ui.label("Your changes will be lost if you don't save them.");
         });
+        if quit && self.answering_end() {
+            let event = match out {
+                Some(DialogOutcome::Button(1)) => session_end::Event::Discard,
+                Some(DialogOutcome::Button(2)) => session_end::Event::Save,
+                Some(_) => session_end::Event::Cancel,
+                None => return false,
+            };
+            self.end_step(ctx, event);
+            return true;
+        }
         match out {
             Some(DialogOutcome::Button(1)) => {
                 if quit {
@@ -901,14 +1592,17 @@ impl<D: Document> Runtime<D> {
             }
             Some(DialogOutcome::Button(2)) => {
                 self.quit_after_save = quit;
+                self.after_save = if quit { None } else { command };
                 let r = self.execute("file.save", json!({}));
                 self.report(r);
                 self.apply_effects(ctx);
-                if !self.session.is_dirty() {
-                    if quit {
-                        self.continue_quit(ctx);
-                    } else if let Some((id, params)) = command {
-                        self.run_ui_command(ctx, &id, params);
+                if self.pending_pick.is_none() {
+                    // saved in place (or failed): no Save As to wait for
+                    if self.session.is_dirty() {
+                        self.quit_after_save = false;
+                        self.after_save = None;
+                    } else {
+                        self.continue_after_save(ctx);
                     }
                 }
                 true
@@ -992,16 +1686,26 @@ impl<D: Document> Runtime<D> {
             return;
         }
         let info = self.info();
-        let mut queue = UiQueue::default();
+        let mut queue = UiQueue { scenes: !self.shared.scenes.is_empty(), ..UiQueue::default() };
         for req in reqs {
+            if let Some(r) = &mut self.recorder
+                && !r.request(req.method(), req.params())
+            {
+                self.recorder = None;
+            }
+            let outer = self.session.swap_source(Some(Origin::Agent));
             let mut bound = self.shared.registry.bind(&mut self.session);
             ashlar_control::handle(req, &mut bound, &mut queue, &info);
+            self.session.swap_source(outer);
             self.apply_effects(ctx);
         }
         for req in std::mem::take(&mut queue.pending) {
             self.answer_ui(ctx, req);
         }
-        wake::wake(ctx, Reason::CONTROL);
+        // No wake after answering: the port's waker asked for this frame, and requests are served
+        // in `logic`, before the view draws, so this frame already draws what they changed.
+        // Debugger requests that need later frames (input, screenshots, waits) ask for them in
+        // `devtools`, and effects ask for their own.
     }
 
     fn answer_ui(&mut self, ctx: &egui::Context, req: Request) {
@@ -1080,12 +1784,45 @@ impl<D: Document> Runtime<D> {
                     o.insert("jobs".into(), self.jobs.to_json());
                     o.insert("log_lines_dropped".into(), json!(crate::logging::dropped()));
                     o.insert("wakes".into(), serde_json::to_value(self.wakes.stats()).unwrap_or(Value::Null));
+                    o.insert("process".into(), serde_json::to_value(self.process.read()).unwrap_or(Value::Null));
                 }
                 if p.get("reset").and_then(Value::as_bool) == Some(true) {
                     self.stats.reset_window();
                 }
                 req.ok(v);
             }
+            ashlar_control::APP_CLOCK => {
+                let op = match ashlar_control::ClockOp::from_params(&p) {
+                    Ok(op) => op,
+                    Err(e) => return req.fail(e),
+                };
+                let (now, predicted_dt) = ctx.input(|i| (i.time, i.predicted_dt));
+                match op {
+                    ashlar_control::ClockOp::Read => {}
+                    ashlar_control::ClockOp::Pause => self.clock.pause(now, predicted_dt),
+                    ashlar_control::ClockOp::Step { ms } => {
+                        self.clock.step(now, predicted_dt, ms / 1000.0);
+                        // the frame at the new time
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                    ashlar_control::ClockOp::Resume => {
+                        self.clock.resume();
+                        wake::wake(ctx, Reason::CONTROL);
+                    }
+                }
+                req.ok(json!({"paused": self.clock.is_paused(), "time": self.clock.time(now)}));
+            }
+            ashlar_control::UI_SCENE => match p.get("name").and_then(Value::as_str) {
+                None => req.ok(json!({"scenes": self.shared.scene_names()})),
+                Some(name) => match self.apply_scene(name) {
+                    Ok(()) => {
+                        self.apply_effects(ctx);
+                        wake::wake(ctx, Reason::CONTROL);
+                        req.ok(json!({"scene": name}));
+                    }
+                    Err(e) => req.fail(e),
+                },
+            },
             "app.logs" => {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(200).min(crate::logging::RING_LINES as u64) as usize;
                 let level = p.get("level").and_then(Value::as_str).and_then(crate::logging::level_of).unwrap_or(log::Level::Trace);
@@ -1128,7 +1865,7 @@ fn human_age(secs: i64) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick) -> Option<PathBuf> {
+fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick, parent: Option<&eframe::Frame>) -> Option<PathBuf> {
     use ashlar_native::dialogs::FileDialog;
     let exts: Vec<&str> = shared.extensions.iter().map(String::as_str).collect();
     let mut d = FileDialog::new();
@@ -1138,15 +1875,21 @@ fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick
     if let Some(dir) = session.path().and_then(std::path::Path::parent) {
         d = d.directory(dir);
     }
-    let r = match kind {
-        Pick::Open => d.title("Open").open_file(),
+    let d = match kind {
+        Pick::Open => d.title("Open"),
         Pick::SaveAs => {
             let name = match exts.first() {
                 Some(e) if session.path().is_none() => format!("Untitled.{e}"),
                 _ => session.display_name(),
             };
-            d.title("Save As").file_name(name).save_file()
+            d.title("Save As").file_name(name)
         }
+    };
+    let r = match (kind, parent) {
+        (Pick::Open, Some(w)) => d.parent(w).open_file(),
+        (Pick::Open, None) => d.open_file(),
+        (Pick::SaveAs, Some(w)) => d.parent(w).save_file(),
+        (Pick::SaveAs, None) => d.save_file(),
     };
     match r {
         Ok(p) => Some(p),
@@ -1159,7 +1902,7 @@ fn native_pick<D: Document>(shared: &Shared<D>, session: &Session<D>, kind: Pick
 }
 
 #[cfg(target_arch = "wasm32")]
-fn native_pick<D: Document>(_shared: &Shared<D>, _session: &Session<D>, _kind: Pick) -> Option<PathBuf> {
+fn native_pick<D: Document>(_shared: &Shared<D>, _session: &Session<D>, _kind: Pick, _parent: Option<&eframe::Frame>) -> Option<PathBuf> {
     None
 }
 
@@ -1190,6 +1933,9 @@ impl<D: Document> EframeApp<D> {
 
 impl<D: Document> eframe::App for EframeApp<D> {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.rt.note_presented();
+        // before the frame's work: the last frame is on screen, the dialog opens over the window
+        self.rt.show_pending_pick(ctx, Some(frame));
         self.rt.logic(ctx);
         self.install_offscreen(ctx, frame);
         let Some(mut out) = self.rt.hidden_pass(ctx, None, Vec::new()) else { return };
@@ -1211,7 +1957,13 @@ impl<D: Document> eframe::App for EframeApp<D> {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.install_offscreen(ui.ctx(), frame);
+        // the previous frame's whole CPU time, painting included
+        if let Some(d) = frame.info().cpu_usage.and_then(|s| Duration::try_from_secs_f32(s).ok()) {
+            self.rt.stats.record_frame_cpu(d);
+        }
         self.rt.ui(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.rt.install_native_menu(ui.ctx(), frame);
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -1226,19 +1978,22 @@ impl<D: Document> eframe::App for EframeApp<D> {
 #[cfg(not(target_arch = "wasm32"))]
 struct Args {
     control: Option<u16>,
+    scene: Option<String>,
     safe_mode: bool,
     open: Option<PathBuf>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_args(env_prefix: &str) -> Args {
-    let mut a = Args { control: None, safe_mode: false, open: None };
+    let mut a = Args { control: None, scene: None, safe_mode: false, open: None };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--control" => a.control = it.next().and_then(|p| p.parse().ok()),
             s if s.starts_with("--control=") => a.control = s.trim_start_matches("--control=").parse().ok(),
             "--safe-mode" => a.safe_mode = true,
+            "--scene" => a.scene = it.next(),
+            s if s.starts_with("--scene=") => a.scene = Some(s.trim_start_matches("--scene=").to_string()),
             s if !s.starts_with('-') && a.open.is_none() => a.open = Some(PathBuf::from(s)),
             _ => {}
         }
@@ -1249,8 +2004,9 @@ fn parse_args(env_prefix: &str) -> Args {
     a
 }
 
-/// On the web: run in the `<canvas>` whose id is the app's name (or `ashlar`). Returns at once;
-/// the app runs in the browser's event loop.
+/// On the web: run in the `<canvas>` [`App::canvas_id`] names (default: the app's name, then
+/// `ashlar`). Returns at once; the app runs in the browser's event loop. When it cannot start, a
+/// visible error is put next to the canvas (or at the top of the page) and logged to the console.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     use wasm_bindgen::JsCast;
@@ -1269,23 +2025,109 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     });
     crash::install(None, &shared.name, &shared.version);
     let document = web_sys::window().and_then(|w| w.document()).ok_or_else(|| Error::Window("no document".into()))?;
-    let canvas = document
-        .get_element_by_id(&shared.name)
-        .or_else(|| document.get_element_by_id("ashlar"))
-        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
-        .ok_or_else(|| Error::Window(format!("no <canvas id=\"{}\"> in the page", shared.name)))?;
+    let ids: Vec<String> = shared.canvas_id.iter().cloned().chain([shared.name.clone(), "ashlar".to_string()]).collect();
+    let canvas = ids.iter().find_map(|id| document.get_element_by_id(id).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()));
+    let Some(canvas) = canvas else {
+        let wanted = ids.first().map_or("ashlar", String::as_str);
+        let msg = format!("{} could not start: the page has no <canvas id=\"{wanted}\">.", shared.title);
+        show_web_error(&document, None, &msg);
+        return Err(Error::Window(msg));
+    };
+    let title = shared.title.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let creator: eframe::AppCreator<'static> =
             Box::new(move |_cc| Ok(Box::new(EframeApp { rt: Runtime::new(shared, view, setup, Launch::default()), offscreen: false })));
+        let target = canvas.clone();
         if let Err(e) = eframe::WebRunner::new().start(canvas, eframe::WebOptions::default(), creator).await {
             log::error!("the app could not start: {e:?}");
+            let detail = e.as_string().unwrap_or_else(|| "the browser may not support WebGL or WebGPU".to_string());
+            show_web_error(&document, Some(&target), &format!("{title} could not start: {detail}"));
         }
     });
     Ok(())
 }
 
+/// Put `msg` in a visible box right after `canvas` (or first in the page's body), replacing an
+/// earlier one; screen readers announce it (`role="alert"`). Errors here are only logged.
+#[cfg(target_arch = "wasm32")]
+fn show_web_error(document: &web_sys::Document, canvas: Option<&web_sys::HtmlCanvasElement>, msg: &str) {
+    const ID: &str = "ashlar-start-error";
+    let shown = (|| -> Result<(), wasm_bindgen::JsValue> {
+        if let Some(old) = document.get_element_by_id(ID) {
+            old.remove();
+        }
+        let div = document.create_element("div")?;
+        div.set_id(ID);
+        div.set_attribute("role", "alert")?;
+        div.set_attribute(
+            "style",
+            "margin:12px;padding:12px 16px;border:1px solid #c62828;border-radius:6px;background:#fdecea;\
+             color:#5f2120;font:14px/1.4 system-ui,sans-serif;max-width:640px",
+        )?;
+        div.set_text_content(Some(msg));
+        match canvas.and_then(|c| c.parent_node().map(|p| (p, c.next_sibling()))) {
+            Some((parent, next)) => drop(parent.insert_before(&div, next.as_ref())?),
+            None => match document.body() {
+                Some(body) => drop(body.insert_before(&div, body.first_child().as_ref())?),
+                None => return Err("no <body>".into()),
+            },
+        }
+        Ok(())
+    })();
+    if let Err(e) = shown {
+        log::error!("could not show the start error in the page: {e:?}");
+    }
+}
+
+/// The window as the app describes it, at the placement it had last time (kept on screen), with
+/// the app's icon and its own changes last.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_builder<D: Document>(shared: &Shared<D>, window: crate::app::WindowSpec, safe_mode: bool) -> egui::ViewportBuilder {
+    let mut b =
+        egui::ViewportBuilder::default().with_title(shared.title.clone()).with_inner_size(shared.window_size).with_app_id(shared.name.clone());
+    if shared.remember_window
+        && !safe_mode
+        && let Some(d) = &shared.dirs
+    {
+        let settings = Settings::load(Arc::new(DirConfig::new(d.config.clone())), "settings.json", &[]);
+        if let Some(saved) = settings.get::<WindowState>(window_state::KEY) {
+            // checked against the monitors the OS lists now (macOS, Windows); where it lists none,
+            // sizes and coordinates are only bounded and the first frame moves a window no monitor
+            // shows
+            b = window_state::apply(b, &window_state::clamp(saved, &window_state::monitors_now()));
+        }
+    }
+    if let Some(png) = window.icon {
+        match catch_unwind(AssertUnwindSafe(|| eframe::icon_data::from_png_bytes(&png))) {
+            Ok(Ok(icon)) => b = b.with_icon(icon),
+            Ok(Err(e)) => log::warn!("the app icon is not a PNG ashlar can read: {e}"),
+            Err(_) => log::warn!("the app icon could not be decoded"),
+        }
+    }
+    let Some(f) = window.viewport else { return b };
+    let fallback = b.clone();
+    catch_unwind(AssertUnwindSafe(move || f(b))).unwrap_or_else(|p| {
+        log::error!("App::viewport panicked: {}", panic_text(p.as_ref()));
+        fallback
+    })
+}
+
+/// eframe's wgpu setup with `latency` frames queued at most (IMP-2.10: one swapchain image fewer).
+#[cfg(not(target_arch = "wasm32"))]
+fn wgpu_options(latency: u32) -> eframe::egui_wgpu::WgpuConfiguration {
+    let surface = eframe::egui_wgpu::SurfaceConfig {
+        present_mode: eframe::egui_wgpu::wgpu::PresentMode::AutoVsync,
+        desired_maximum_frame_latency: Some(latency),
+    };
+    eframe::egui_wgpu::WgpuConfiguration { surface, ..Default::default() }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
+    // launch timings count from here (IMP-6.9)
+    let process_start = now();
+    let mut app = app;
+    let window = app.take_window();
     let (shared, view, setup) = app.split();
     let args = parse_args(&shared.env_prefix);
     let logs = shared.dirs.as_ref().map(|d| d.logs.clone());
@@ -1293,6 +2135,17 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
         && let Err(e) = d.ensure()
     {
         eprintln!("{}: could not create its folders: {e}", shared.name);
+    }
+    // before anything else: a second launch hands its files to the first and exits
+    let inbox = Inbox::default();
+    let mut instance = None;
+    if shared.single_instance {
+        let launch_args: Vec<String> = std::env::args().skip(1).collect();
+        match ashlar_native::single_instance::SingleInstance::new(&shared.name).claim(&launch_args, inbox.forwarder()) {
+            Ok(ashlar_native::single_instance::Launch::Forwarded) => return Ok(()),
+            Ok(ashlar_native::single_instance::Launch::Primary(g)) => instance = Some(g),
+            Err(e) => eprintln!("{}: running without the single-instance check: {e}", shared.name),
+        }
     }
     let env_var = format!("{}_LOG", shared.env_prefix);
     let filter = crate::logging::filter_from_env(&[env_var.as_str(), "RUST_LOG"], "info");
@@ -1324,19 +2177,48 @@ pub(crate) fn run_native<D: Document>(app: App<D>) -> Result<(), Error> {
     if safe_mode {
         log::warn!("starting in safe mode ({previous:?})");
     }
-    let launch = Launch { safe_mode, previous: Some(previous), open: args.open, control_port: args.control, guard, telemetry };
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(shared.title.clone())
-            .with_inner_size(shared.window_size)
-            .with_app_id(shared.name.clone()),
+    // main thread, before the event loop: Finder's launch documents arrive as Apple events
+    #[cfg(target_os = "macos")]
+    inbox.listen_os();
+    let ready_file = std::env::var_os(format!("{}_READY_FILE", shared.env_prefix)).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let mut launch = Launch {
+        safe_mode,
+        previous: Some(previous),
+        open: args.open,
+        control_port: args.control,
+        guard,
+        telemetry,
+        inbox: Some(inbox),
+        instance,
+        process_start,
+        window_at: None,
+        ready_file,
+        presented: false,
+        scene: args.scene,
+    };
+    let mut options = eframe::NativeOptions {
+        viewport: window_builder(&shared, window, safe_mode),
+        wgpu_options: wgpu_options(shared.frame_latency),
         ..Default::default()
     };
+    // `<PREFIX>_QUIET`: open without taking the focus (agents relaunching after each build)
+    if ashlar_native::mac_shell::quiet_requested(&shared.env_prefix) {
+        options.viewport = options.viewport.with_active(false);
+        #[cfg(target_os = "macos")]
+        {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::macos::EventLoopBuilderExtMacOS;
+                b.with_activate_ignoring_other_apps(false);
+            }));
+        }
+    }
     let title = shared.title.clone();
     eframe::run_native(
         &title,
         options,
         Box::new(move |_cc| {
+            // eframe has built the window and its wgpu surface by now
+            launch.window_at = now();
             let mut rt = Runtime::new(shared, view, setup, launch);
             rt.native = true;
             Ok(Box::new(EframeApp { rt, offscreen: false }))
@@ -1355,5 +2237,238 @@ mod tests {
         assert_eq!(human_age(600), "10 min");
         assert_eq!(human_age(7200), "2 h");
         assert_eq!(human_age(300_000), "3 days");
+    }
+
+    /// A runtime as `run()` builds it, with `launch` filled in.
+    fn launched(app: crate::App<i64>, launch: Launch) -> Runtime<i64> {
+        let (shared, view, setup) = app.split();
+        let mut rt = Runtime::new(shared, view, setup, launch);
+        rt.set_preferences(Preferences::default);
+        rt
+    }
+
+    #[test]
+    fn launch_times_and_the_ready_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ready = dir.path().join("ready.json");
+        let start = std::time::Instant::now().checked_sub(Duration::from_millis(5));
+        let launch = Launch { process_start: start, window_at: now(), ready_file: Some(ready.clone()), ..Default::default() };
+        let mut d = crate::Driver::new(launched(crate::App::new("launchtest", "0.0.0"), launch));
+        d.runtime.note_presented();
+        assert_eq!(d.runtime.stats().launch().launch_to_present_ms, None, "nothing is presented before a frame");
+        d.frame();
+        d.runtime.note_presented();
+        let t = d.runtime.stats().summary().launch;
+        let (w, f, p) = (t.to_window_ms.unwrap(), t.to_first_frame_ms.unwrap(), t.launch_to_present_ms.unwrap());
+        assert!(w >= 5.0 && w <= f && f <= p, "window {w}, first frame {f}, present {p}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let body = loop {
+            if let Ok(text) = std::fs::read_to_string(&ready) {
+                break text;
+            }
+            assert!(std::time::Instant::now() < deadline, "no ready file");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["pid"].as_u64(), Some(u64::from(std::process::id())));
+        assert_eq!(v["ready_ms"].as_f64(), Some(p));
+    }
+
+    #[test]
+    fn headless_runs_report_no_launch_times() {
+        let mut d = crate::Driver::new(crate::App::<i64>::new("launchtest", "0.0.0").runtime());
+        d.frame();
+        d.runtime.note_presented();
+        assert_eq!(d.runtime.stats().launch(), crate::LaunchTimes::default());
+    }
+
+    #[test]
+    fn the_command_line_document_opens_after_the_first_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.num");
+        let mut h = crate::App::<i64>::new("launchtest", "0.0.0").headless();
+        h.session_mut().edit("set", |n| *n = 7);
+        h.session_mut().save_as(&path).unwrap();
+        let app = crate::App::<i64>::new("launchtest", "0.0.0").file_extension("num");
+        let mut d = crate::Driver::new(launched(app, Launch { open: Some(path.clone()), ..Default::default() }));
+        assert_eq!(d.runtime.session().path(), None, "nothing loads before the window");
+        d.frame();
+        assert!(d.runtime.stats().summary().first_frame_ms.is_some(), "the first frame is drawn");
+        assert_eq!(d.runtime.session().path(), None, "with the empty document");
+        d.settle(10);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()), "the next frame opens the file");
+        assert_eq!(*d.runtime.session().doc(), 7);
+    }
+
+    #[test]
+    fn menus_follow_enabled_state_but_typing_rebuilds_nothing() {
+        let mut rt = crate::App::<i64>::new("runtimetest", "0.0.0").runtime();
+        let undo = |rt: &Runtime<i64>| rt.cache.infos.iter().find(|i| i.id == "app.undo").map(|i| i.enabled);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "nothing to undo yet");
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(true), "an edit enables Undo");
+        assert_eq!(rt.cache.menu.find("app.undo").map(|i| i.enabled), Some(true), "and the menu shows it");
+        let seq = rt.cache.seq;
+        rt.session_mut().edit("bump", |n| *n += 1);
+        rt.refresh_infos();
+        assert_eq!(rt.cache.seq, seq, "another edit changes no command's state: the infos stay");
+        assert_eq!(rt.cache.key.map(|k| k.0), Some(rt.session().revision()), "and are current");
+        rt.session_mut().undo();
+        rt.session_mut().undo();
+        rt.refresh_infos();
+        assert_eq!(undo(&rt), Some(false), "undoing everything disables Undo again");
+    }
+
+    fn enter() -> egui::Event {
+        egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// A driver whose dialogs answer from `answers` and log what they were asked.
+    fn picking(answers: Vec<(Pick, PathBuf)>) -> (crate::Driver<i64>, std::rc::Rc<std::cell::RefCell<Vec<Pick>>>) {
+        let app = crate::App::<i64>::new("picktest", "0.0.0").file_extension("num");
+        let mut rt = launched(app, Launch::default());
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = asked.clone();
+        rt.set_file_picker(move |kind| {
+            log.borrow_mut().push(kind);
+            answers.iter().find(|(k, _)| *k == kind).map(|(_, p)| p.clone())
+        });
+        let mut d = crate::Driver::new(rt);
+        d.frame();
+        (d, asked)
+    }
+
+    #[test]
+    fn the_pick_arrives_on_the_next_frame() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("a.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 3);
+        let r = d.runtime.execute("file.save_as", json!({})).unwrap();
+        assert_eq!(r["pending"], "dialog");
+        d.frame();
+        assert!(asked.borrow().is_empty(), "no dialog inside the frame that asked for it");
+        assert_eq!(d.runtime.pending_pick, Some(Pick::SaveAs));
+        d.frame();
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs], "the next frame shows it");
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()), "and saves there");
+        assert!(!d.runtime.session().is_dirty());
+    }
+
+    #[test]
+    fn quitting_a_dirty_untitled_document_saves_through_the_dialog_then_closes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("q.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        d.request_close();
+        d.frame();
+        assert!(d.runtime.modal_open(), "the confirm dialog asks first");
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()));
+        assert!(d.runtime.is_closing(), "the quit goes on once saved");
+    }
+
+    #[test]
+    fn a_cancelled_save_as_keeps_the_window_open() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        d.request_close();
+        d.frame();
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert!(!d.runtime.is_closing(), "cancelled: nothing closes");
+        assert!(!d.runtime.quit_after_save, "and a later save does not quit");
+    }
+
+    /// An OS end request (Dock Quit, logout) answered in the next frame.
+    fn os_end(d: &mut crate::Driver<i64>, kind: EndKind, can_wait: bool) {
+        let ctx = d.ctx().clone();
+        d.runtime.end_requested(&ctx, kind, can_wait);
+        d.frame();
+    }
+
+    #[test]
+    fn a_dock_quit_of_a_clean_document_cleans_up_and_allows_at_once() {
+        let (mut d, _) = picking(Vec::new());
+        os_end(&mut d, EndKind::Quit, true);
+        assert_eq!(d.runtime.end_reply, Some(true));
+        assert!(d.runtime.is_closing(), "shut down before answering");
+        assert!(!d.runtime.modal_open());
+    }
+
+    #[test]
+    fn a_dock_quit_of_a_dirty_document_asks_then_saves_then_allows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("q.num");
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, path.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Quit, true);
+        assert!(d.runtime.modal_open(), "the confirm dialog asks first");
+        assert_eq!(d.runtime.end_reply, None, "no answer to the OS yet");
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.session().path(), Some(path.as_path()));
+        assert_eq!(d.runtime.end_reply, Some(true), "saved: the quit goes on");
+        assert!(d.runtime.is_closing());
+    }
+
+    #[test]
+    fn a_cancelled_save_as_refuses_the_os_quit() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Logout, true);
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs]);
+        assert_eq!(d.runtime.end_reply, Some(false), "the logout is cancelled");
+        assert!(!d.runtime.is_closing());
+        assert_eq!(d.runtime.end_state, session_end::State::Idle, "a later quit asks again");
+    }
+
+    #[test]
+    fn a_logout_that_cant_wait_allows_and_keeps_the_changes_for_recovery() {
+        let (mut d, asked) = picking(Vec::new());
+        d.runtime.session_mut().edit("set", |n| *n = 9);
+        os_end(&mut d, EndKind::Logout, false);
+        assert!(asked.borrow().is_empty() && !d.runtime.modal_open(), "nothing is asked");
+        assert_eq!(d.runtime.end_reply, Some(true));
+        assert!(d.runtime.is_closing());
+    }
+
+    #[test]
+    fn opening_over_a_dirty_untitled_document_saves_then_shows_the_open_dialog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (saved, other) = (dir.path().join("s.num"), dir.path().join("o.num"));
+        let mut h = crate::App::<i64>::new("picktest", "0.0.0").headless();
+        h.session_mut().edit("set", |n| *n = 42);
+        h.session_mut().save_as(&other).unwrap();
+        let (mut d, asked) = picking(vec![(Pick::SaveAs, saved.clone()), (Pick::Open, other.clone())]);
+        d.runtime.session_mut().edit("set", |n| *n = 5);
+        let r = d.runtime.execute("file.open", json!({})).unwrap();
+        assert_eq!(r["pending"], "confirm");
+        d.frame();
+        d.settle(10);
+        d.push_event(enter());
+        d.frame();
+        d.settle(10);
+        assert_eq!(*asked.borrow(), vec![Pick::SaveAs, Pick::Open], "save first, then pick the file to open");
+        assert!(saved.exists(), "the changes were saved");
+        assert_eq!(d.runtime.session().path(), Some(other.as_path()));
+        assert_eq!(*d.runtime.session().doc(), 42);
     }
 }

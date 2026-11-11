@@ -51,7 +51,7 @@ The server creates or updates the session record only for envelopes that carry a
 | `session_heartbeat` | `seq`, `duration_s`, `focused_s`, `active_s`, `idle_s` — running totals |
 | `session_end` | `status` (`exited`, `crashed`, `abnormal`), the same totals, `errors` |
 | `event` | `name`, `category`, `dynamic`, `props` (bool, integer, float or short string values) |
-| `perf` | `window_s`, `frames`, `cpu_pct`, `rss_mb`, `rss_peak_mb`, `startup_ms`, `counters`, `gauges` |
+| `perf` | `window_s`, `frames`, `cpu_pct`, `rss_mb`, `rss_peak_mb`, `startup_ms`, `counters`, `gauges`, `incidents[]` |
 | `crash` | `kind`, `fatal`, `message`, `location`, `thread`, `backtrace`, `blocked_ms`, `exit_code`, `signal`, `context`, `breadcrumbs[]`, `perf` |
 | `drops` | `reasons` — what the client discarded, by reason |
 
@@ -65,7 +65,11 @@ The server creates or updates the session record only for envelopes that carry a
 
 `session_end.errors` counts handled errors and panics the process survived. The panic that ends a `crashed` session is not included.
 
-`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms; slow includes frozen), `frozen` (over 700 ms) and `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket. Histograms merge by adding buckets.
+`perf.frames` is a histogram: `count`, `sum_us`, `max_us`, `slow` (over 16.667 ms, the 60 Hz frame budget; slow includes frozen), `frozen` (over 700 ms), `buckets`, one count per upper bound in `FRAME_BUCKET_BOUNDS_US` plus an overflow bucket, and the optional `over_budget` (over 8.333 ms, `DISPLAY_BUDGET_US`, the 120 Hz frame budget; it includes slow). Histograms merge by adding buckets.
+
+`over_budget` was added within schema 1. Clients that predate it leave it out, and older servers ignore it. Because 8.333 ms is one of the bucket bounds, a reader counts it from the buckets when it is missing (`FrameStats::over_budget_frames`), and the server always counts it from the buckets it stores, so old and new clients report the same figure.
+
+`perf.incidents` lists the incident rules that fired in the window, at most one entry per rule: `rule` (`long_frames`: 3 frames over 8.333 ms within 1 s; `stall`: one frame of 250 ms or more; `memory_growth`: 5 rising per-minute memory floors, the last at least 64 MiB and 20% above the first), `at_ms` (when it first fired, in milliseconds since process start), `count` (how often it fired in the window) and `value` (the worst figure: the slowest frame in microseconds for `long_frames` and `stall`, the growth in MiB for `memory_growth`). It was added within schema 1: clients that predate it leave it out, older servers ignore it, and readers treat an unknown `rule` as `other`.
 
 ## Names
 

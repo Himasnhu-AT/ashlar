@@ -242,3 +242,42 @@ fn invalid_rects_are_inert() {
         assert!(!painted && !senses && finite, "{rect:?}");
     }
 }
+
+/// One pass at time `t` that places the indicator for `target`.
+fn indicator_at(ctx: &egui::Context, t: f64, target: Rect) -> Rect {
+    let input = egui::RawInput { time: Some(t), predicted_dt: 1.0 / 60.0, ..Default::default() };
+    let mut out = Rect::NOTHING;
+    ctx.run_ui(input, |ui| out = indicator(ui.ctx(), Id::new("strip"), target)).textures_delta.clear();
+    out
+}
+
+#[test]
+fn indicator_slides_by_its_edges_and_settles() {
+    let ctx = egui::Context::default();
+    let requests = |ctx: &egui::Context| crate::wake::Scheduler::of(ctx).stats().requests_for(crate::wake::Reason::ANIMATION);
+    let (a, b) = (Rect::from_min_max(pos2(0.0, 28.0), pos2(80.0, 30.0)), Rect::from_min_max(pos2(120.0, 28.0), pos2(200.0, 30.0)));
+    // first show: at rest, no frames
+    assert_eq!(indicator_at(&ctx, 0.0, a), a);
+    assert_eq!(requests(&ctx), 0);
+    let mut last = a;
+    let mut t = 0.0;
+    for _ in 0..60 {
+        t += 1.0 / 60.0;
+        let r = indicator_at(&ctx, t, b);
+        assert!(r.left() >= last.left() && r.right() >= last.right(), "went back: {r:?} after {last:?}");
+        // edges that do not move stay put
+        assert_eq!((r.top(), r.bottom()), (28.0, 30.0));
+        last = r;
+    }
+    assert_eq!(last, b);
+    let flat = requests(&ctx);
+    for _ in 0..100 {
+        t += 1.0 / 60.0;
+        assert_eq!(indicator_at(&ctx, t, b), b);
+    }
+    assert_eq!(requests(&ctx), flat);
+
+    // reduced motion: it jumps
+    crate::motion::set_prefs(&ctx, ashlar_motion::MotionPrefs::REDUCED);
+    assert_eq!(indicator_at(&ctx, t + 1.0 / 60.0, a), a);
+}

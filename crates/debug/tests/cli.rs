@@ -321,6 +321,45 @@ fn a_trace_records_every_action() {
 }
 
 #[test]
+fn a_trace_in_a_batch_records_with_port_and_no_session() {
+    let f = Fixture::new("trace-port");
+    let port = f.demo.port.to_string();
+    let none = Env { session: "none".into(), ..f.env.clone() };
+    let dir = f.root.path().join("ci-trace");
+    // The CI flow from docs/debugging-uis.md: `--port P batch -` with `trace start` at the top.
+    let script = format!("trace start {}\nfill @e2 \"a b\"\nsnapshot\nclick @e3\nassert text id=status \"Saved: a b\"\n", dir.display());
+    let (code, out, err) = cli(&none, &["--port", &port, "batch", "-"], &script);
+    assert_eq!(code, Exit::Ok, "{out}{err}");
+    let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+    files.sort();
+    assert_eq!(files, ["001-fill.png", "001-fill.txt", "002-click.png", "002-click.txt", "steps.jsonl"]);
+    let steps: Vec<Value> = std::fs::read_to_string(dir.join("steps.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[1]["command"], "click @e3");
+    assert!(std::fs::read_to_string(dir.join("002-click.txt")).unwrap().contains("label \"Saved: a b\""));
+    // No session file was written for the batch's trace.
+    assert_eq!(ashlar_debug::session::load(&none, "none").unwrap(), None);
+
+    // `trace stop` inside the batch reports the steps; actions after it are not recorded.
+    let dir2 = f.root.path().join("ci-trace-2");
+    let script = format!("trace start {}\nclick @e3\ntrace stop\nclick @e3\n", dir2.display());
+    let v = {
+        let (code, out, err) = cli(&none, &["--json", "--app", "demo", "batch", "-"], &script);
+        assert_eq!(code, Exit::Ok, "{out}{err}");
+        serde_json::from_str::<Value>(out.trim()).unwrap()
+    };
+    assert_eq!(v["result"]["steps"][2]["result"]["steps"], 1);
+    assert_eq!(std::fs::read_to_string(dir2.join("steps.jsonl")).unwrap().lines().count(), 1);
+
+    // Outside a batch, --port/--app has nowhere to keep a trace: a usage error, not silence.
+    for target in [["--port", port.as_str()], ["--app", "demo"]] {
+        let (code, _, err) = cli(&none, &[target[0], target[1], "trace", "start", dir.to_str().unwrap()], "");
+        assert_eq!(code, Exit::Usage, "{err}");
+        assert!(err.contains("inside `batch`"), "{err}");
+    }
+}
+
+#[test]
 fn port_and_app_name_reach_an_app_without_a_session() {
     let f = Fixture::new("direct");
     let port = f.demo.port.to_string();

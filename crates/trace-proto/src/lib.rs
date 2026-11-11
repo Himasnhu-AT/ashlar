@@ -38,8 +38,13 @@ pub const FRAME_BUCKET_BOUNDS_US: [u32; 15] =
 /// Number of buckets in [`FrameStats::buckets`].
 pub const FRAME_BUCKETS: usize = FRAME_BUCKET_BOUNDS_US.len() + 1;
 
-/// A frame slower than this many microseconds counts as slow.
+/// A frame slower than this many microseconds counts as slow (the 60 Hz frame budget).
 pub const SLOW_FRAME_US: u32 = 16_667;
+
+/// The frame budget of a 120 Hz display, in microseconds: a frame slower than this counts as over
+/// budget ([`FrameStats::over_budget`]). It is one of [`FRAME_BUCKET_BOUNDS_US`], so the count can
+/// be read exactly from any histogram, including one from a sender that predates the field.
+pub const DISPLAY_BUDGET_US: u32 = 8_333;
 
 /// A frame slower than this many microseconds counts as frozen.
 pub const FROZEN_FRAME_US: u32 = 700_000;
@@ -348,7 +353,67 @@ pub struct Perf {
     /// Host-defined gauges, as last value in the window.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gauges: BTreeMap<String, f64>,
+    /// Incident rules that fired during the window, at most one entry per rule. Added within
+    /// schema 1: senders that predate it leave it out, and older readers ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incidents: Vec<Incident>,
 }
+
+/// A performance rule that fired during a window. Repeats of the same rule within one window are
+/// folded into one entry: `count` says how often it fired and `value` keeps the worst figure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Incident {
+    pub rule: IncidentRule,
+    /// When the rule first fired in the window, in milliseconds since the process started.
+    pub at_ms: u64,
+    /// How often the rule fired in the window (at least 1).
+    pub count: u32,
+    /// The worst figure seen, in the unit [`IncidentRule`] gives for the rule.
+    pub value: u64,
+}
+
+/// Which rule an [`Incident`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IncidentRule {
+    /// [`LONG_FRAMES_RUN`] frames over [`DISPLAY_BUDGET_US`] within [`LONG_FRAMES_SPAN_MS`].
+    /// `value`: the slowest of them, in microseconds.
+    LongFrames,
+    /// One frame of at least [`STALL_US`]. `value`: its length, in microseconds.
+    Stall,
+    /// [`MEMORY_FLOORS`] rising per-minute memory floors, the last at least
+    /// [`MEMORY_GROWTH_MIB`] and [`MEMORY_GROWTH_PCT`] percent above the first.
+    /// `value`: the growth, in MiB.
+    MemoryGrowth,
+    /// A rule this version does not know.
+    #[serde(other)]
+    Other,
+}
+
+impl IncidentRule {
+    /// The rule's wire name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::LongFrames => "long_frames",
+            Self::Stall => "stall",
+            Self::MemoryGrowth => "memory_growth",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// [`IncidentRule::LongFrames`]: how many frames over budget make an incident...
+pub const LONG_FRAMES_RUN: usize = 3;
+/// ...and the span, in milliseconds, they must fall within.
+pub const LONG_FRAMES_SPAN_MS: u64 = 1_000;
+/// [`IncidentRule::Stall`]: a frame at least this long, in microseconds.
+pub const STALL_US: u32 = 250_000;
+/// [`IncidentRule::MemoryGrowth`]: how many rising minute floors make an incident...
+pub const MEMORY_FLOORS: usize = 5;
+/// ...the least growth from the first floor to the last, in MiB...
+pub const MEMORY_GROWTH_MIB: u64 = 64;
+/// ...and in percent of the first floor.
+pub const MEMORY_GROWTH_PCT: u64 = 20;
 
 /// Frame times over one window, as a histogram that can be merged by adding buckets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,6 +427,11 @@ pub struct FrameStats {
     pub frozen: u64,
     /// Counts per bucket of [`FRAME_BUCKET_BOUNDS_US`], plus one overflow bucket.
     pub buckets: Vec<u64>,
+    /// Frames slower than [`DISPLAY_BUDGET_US`] (the 120 Hz budget). Added within schema 1, so it is
+    /// `None` from senders that predate it: read it with [`FrameStats::over_budget_frames`], which
+    /// then counts it from the buckets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub over_budget: Option<u64>,
 }
 
 impl FrameStats {
@@ -374,10 +444,24 @@ impl FrameStats {
         FRAME_BUCKET_BOUNDS_US.iter().position(|bound| us <= *bound).unwrap_or(FRAME_BUCKET_BOUNDS_US.len())
     }
 
+    /// Frames in the buckets above the one holding `us`: exactly the frames slower than `us` when
+    /// `us` is one of [`FRAME_BUCKET_BOUNDS_US`].
+    pub fn frames_over(&self, us: u32) -> u64 {
+        self.buckets.iter().skip(Self::bucket_index(us).saturating_add(1)).fold(0u64, |sum, n| sum.saturating_add(*n))
+    }
+
+    /// Frames slower than [`DISPLAY_BUDGET_US`]: [`FrameStats::over_budget`], or when the sender
+    /// left it out, the count from the buckets.
+    pub fn over_budget_frames(&self) -> u64 {
+        self.over_budget.unwrap_or_else(|| self.frames_over(DISPLAY_BUDGET_US))
+    }
+
     pub fn record(&mut self, us: u32) {
         if self.buckets.len() != FRAME_BUCKETS {
             self.buckets.resize(FRAME_BUCKETS, 0);
         }
+        let over = self.over_budget_frames();
+        self.over_budget = Some(if us > DISPLAY_BUDGET_US { over.saturating_add(1) } else { over });
         self.count = self.count.saturating_add(1);
         self.sum_us = self.sum_us.saturating_add(u64::from(us));
         self.max_us = self.max_us.max(us);
@@ -395,6 +479,10 @@ impl FrameStats {
     pub fn merge(&mut self, other: &FrameStats) {
         if self.buckets.len() < FRAME_BUCKETS {
             self.buckets.resize(FRAME_BUCKETS, 0);
+        }
+        // still `None` when neither side carried the count: it then stays countable from the buckets
+        if self.over_budget.is_some() || other.over_budget.is_some() {
+            self.over_budget = Some(self.over_budget_frames().saturating_add(other.over_budget_frames()));
         }
         self.count = self.count.saturating_add(other.count);
         self.sum_us = self.sum_us.saturating_add(other.sum_us);

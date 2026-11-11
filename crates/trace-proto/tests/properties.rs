@@ -85,6 +85,14 @@ fn perf(rng: &mut Rng) -> Perf {
         startup_ms: rng.maybe(|rng| rng.number() as u32),
         counters: (0..rng.below(4)).map(|_| (rng.text(), rng.number())).collect(),
         gauges: (0..rng.below(4)).map(|_| (rng.text(), rng.float())).collect(),
+        incidents: (0..rng.below(4))
+            .map(|i| Incident {
+                rule: [IncidentRule::LongFrames, IncidentRule::Stall, IncidentRule::MemoryGrowth][i as usize % 3],
+                at_ms: rng.number(),
+                count: rng.number() as u32,
+                value: rng.number(),
+            })
+            .collect(),
     }
 }
 
@@ -263,6 +271,9 @@ fn frame_stats_keep_their_invariants() {
             assert_eq!(stats.buckets.len(), FRAME_BUCKETS, "seed {seed}");
             assert_eq!(stats.count, stats.buckets.iter().sum::<u64>(), "seed {seed}: count is the sum of the buckets");
             assert!(stats.frozen <= stats.slow && stats.slow <= stats.count, "seed {seed}");
+            let over = stats.over_budget_frames();
+            assert_eq!(over, stats.frames_over(DISPLAY_BUDGET_US), "seed {seed}: the over-budget count agrees with the buckets");
+            assert!(stats.slow <= over && over <= stats.count, "seed {seed}");
             // Quantiles never decrease as q grows, never exceed the largest frame, and exist iff there are frames.
             let quantiles: Vec<Option<u32>> =
                 [-1.0, 0.0, 0.01, 0.25, 0.5, 0.5, 0.9, 0.99, 1.0, 2.0, f64::NAN].iter().map(|q| stats.quantile_us(*q)).collect();
@@ -283,6 +294,7 @@ fn frame_stats_keep_their_invariants() {
         let all = merged(&merged(&a, &b), &c);
         assert_eq!(all.count, a.count + b.count + c.count);
         assert_eq!(all.max_us, a.max_us.max(b.max_us).max(c.max_us));
+        assert_eq!(all.over_budget_frames(), all.frames_over(DISPLAY_BUDGET_US), "seed {seed}");
         // A histogram from a peer with too few or too many buckets does not break the merge.
         let mut short = b.clone();
         short.buckets.truncate(rng.below(FRAME_BUCKETS as u64) as usize);

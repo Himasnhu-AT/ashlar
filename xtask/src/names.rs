@@ -40,10 +40,11 @@ pub const FORBIDDEN: &[(u64, usize, Match)] = &[
 ];
 
 /// What is scanned: every text file in the repository (crates, examples, docs, agent instructions,
-/// CI and tooling config), except build output, VCS data, the local code-graph cache and the allow
-/// list itself. Extensionless files are scanned too.
+/// CI and tooling config), except build output, VCS data, the local code-graph cache, untracked
+/// local agent state (`.claude`, which holds agent worktrees: each is a whole second checkout) and the
+/// allow list itself. Extensionless files are scanned too.
 const SCANNED_EXTENSIONS: &[&str] = &["rs", "md", "toml", "txt", "json", "yml", "yaml", "html", "css", "wgsl", "ftl", "hbs", "js", "svg"];
-const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules", "graft"];
+const SKIPPED_DIRS: &[&str] = &["target", ".git", "node_modules", "graft", ".claude"];
 const ALLOW_FILE: &str = "xtask/names-allow.txt";
 
 pub fn fnv1a(text: &str) -> u64 {

@@ -2,12 +2,27 @@
 //! the caller paints.
 //!
 //! The caller owns everything else: ids, which tab is selected, labels, the overflow menu, close
-//! buttons, context menus and drags.
+//! buttons, context menus and drags. [`indicator`] animates a selection underline or pill.
+//! [`TabStrip`] puts all of it together.
 
 use egui::accesskit::Role;
 use egui::{Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo, WidgetType};
 
+use crate::automation::{self, Details};
 use crate::layout::{EXTENT, usable};
+
+mod strip;
+pub use strip::{MAX_TABS, TabStrip, TabStripResponse, TabStripStyle, reorder};
+pub(crate) use strip::{Strip, StripTab};
+
+/// Where to paint a strip's selection indicator (an underline or a pill) this frame: `target`,
+/// the selected tab's indicator at rest, animated by its edges with the snap spring, so it slides
+/// from the previously selected tab and an edge that does not move stays put. Call it once per
+/// frame per strip with the strip's id. It only moves paint: the tabs keep their own rects for
+/// hit testing. The first call returns `target`; under reduced motion it jumps.
+pub fn indicator(ctx: &egui::Context, strip: Id, target: Rect) -> Rect {
+    crate::motion::rect(ctx, strip.with("ashlar_ui::tab_indicator"), target, ashlar_motion::tokens::SNAP.enter)
+}
 
 /// The outcome of [`fit`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -125,13 +140,14 @@ pub struct Tab<'a> {
     selected: bool,
     sense: Sense,
     focus_stroke: Option<Stroke>,
+    automation: &'a str,
 }
 
 impl<'a> Tab<'a> {
     /// `id` must be unique and stable (two tabs with the same label still need two ids);
     /// `label` is the accessible name.
     pub fn new(id: Id, label: &'a str, selected: bool) -> Self {
-        Self { id, label, selected, sense: Sense::click(), focus_stroke: None }
+        Self { id, label, selected, sense: Sense::click(), focus_stroke: None, automation: "" }
     }
 
     /// What the tab senses (default: clicks). Use `Sense::click_and_drag()` for draggable tabs.
@@ -144,6 +160,13 @@ impl<'a> Tab<'a> {
     /// disables it.
     pub fn focus_stroke(mut self, stroke: Stroke) -> Self {
         self.focus_stroke = Some(stroke);
+        self
+    }
+
+    /// Register the tab for automation under this dotted id (role `Tab`, with its selected state);
+    /// empty (the default) registers nothing.
+    pub fn automation(mut self, id: &'a str) -> Self {
+        self.automation = id;
         self
     }
 
@@ -163,6 +186,10 @@ impl<'a> Tab<'a> {
             node.clear_toggled();
             node.set_selected(self.selected);
         });
+        if !self.automation.is_empty() {
+            let details = Details { value: None, selected: Some(self.selected) };
+            automation::register_with(ui, &response, self.automation, self.label, automation::Role::Tab, details);
+        }
 
         paint(ui, &response);
 

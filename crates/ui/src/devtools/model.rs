@@ -230,6 +230,7 @@ pub fn ak_role(r: ak::Role) -> &'static str {
         R::Status => "status",
         R::Alert => "alert",
         R::Tooltip => "tooltip",
+        R::Document => "document",
         R::GenericContainer | R::Group => "group",
         _ => "generic",
     }
@@ -256,8 +257,27 @@ pub fn ashlar_role(r: Role) -> Option<&'static str> {
         Role::Search => "searchbox",
         Role::Status => "status",
         Role::Tab => "tab",
+        Role::Switch => "switch",
+        Role::Radio => "radio",
+        Role::RadioGroup => "radiogroup",
+        Role::Progress => "progressbar",
+        Role::Label => "label",
+        Role::Group => "group",
+        Role::Disclosure => "button",
+        Role::Alert => "alert",
+        Role::Link => "link",
+        Role::ComboBox => "combobox",
+        Role::ListBox => "listbox",
+        Role::ListOption => "option",
+        Role::Tooltip => "tooltip",
+        Role::Document => "document",
         Role::Other => return None,
     })
+}
+
+/// Roles whose `selected` state is a checked state (a toggle, a switch, a radio option).
+fn checkable(r: Role) -> bool {
+    matches!(r, Role::Toggle | Role::Switch | Role::Radio)
 }
 
 const INTERACTIVE_ROLES: &[&str] = &[
@@ -420,7 +440,7 @@ impl Model {
                 if !e.value.is_empty() {
                     n.value = Some(e.value.clone());
                 }
-                if e.role == Role::Toggle {
+                if checkable(e.role) {
                     n.checked = e.selected.or(n.checked);
                 } else if e.selected.is_some() {
                     n.selected = e.selected;
@@ -449,8 +469,8 @@ impl Model {
                 name: e.label.clone(),
                 value: (!e.value.is_empty()).then(|| e.value.clone()),
                 enabled: e.enabled,
-                selected: if e.role == Role::Toggle { None } else { e.selected },
-                checked: if e.role == Role::Toggle { e.selected } else { None },
+                selected: if checkable(e.role) { None } else { e.selected },
+                checked: if checkable(e.role) { e.selected } else { None },
                 visible: rect.is_positive(),
                 rect,
                 interactive: is_input_role(role),

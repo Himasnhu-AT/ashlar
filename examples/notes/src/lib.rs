@@ -2,6 +2,7 @@
 //! autosave and recovery, a command palette, a virtualized list that stays fast at 100 000 notes,
 //! agent control and a `notes-cli` binary, all from one [`app`] definition.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ashlar::prelude::*;
@@ -31,12 +32,18 @@ pub struct Notes {
 }
 
 impl Notes {
+    /// Where note `id` is. Notes this app writes are in ascending id order, so this is a binary
+    /// search; a note out of order (a hand-edited file) is still found, by a scan.
     pub fn index_of(&self, id: u64) -> Option<usize> {
+        let i = self.notes.partition_point(|n| n.id < id);
+        if self.notes.get(i).is_some_and(|n| n.id == id) {
+            return Some(i);
+        }
         self.notes.iter().position(|n| n.id == id)
     }
 
     pub fn get(&self, id: u64) -> Option<&Note> {
-        self.notes.iter().find(|n| n.id == id).map(|n| &**n)
+        self.index_of(id).and_then(|i| self.notes.get(i)).map(|n| &**n)
     }
 }
 
@@ -157,7 +164,28 @@ fn list(s: &mut S, p: &Value) -> R {
 }
 
 fn matches(n: &Note, lower_query: &str) -> bool {
-    lower_query.is_empty() || n.title.to_lowercase().contains(lower_query) || n.body.to_lowercase().contains(lower_query)
+    matches_text(&n.title, &n.body, lower_query)
+}
+
+fn matches_text(title: &str, body: &str, lower_query: &str) -> bool {
+    contains_lower(title, lower_query) || contains_lower(body, lower_query)
+}
+
+/// Whether `hay` contains `needle` (already lowercase) ignoring case, without allocating: bytes
+/// for ASCII, `char::to_lowercase` otherwise (which, unlike `str::to_lowercase`, does not make a
+/// word-final sigma `ς`).
+fn contains_lower(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.is_ascii() && hay.is_ascii() {
+        let n = needle.as_bytes();
+        return hay.as_bytes().windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
+    }
+    hay.char_indices().any(|(i, _)| {
+        let mut h = hay.get(i..).unwrap_or_default().chars().flat_map(char::to_lowercase);
+        needle.chars().all(|c| h.next() == Some(c))
+    })
 }
 
 const ADD: &[Param] = &[Param::string("title"), Param::string("body")];
@@ -185,39 +213,124 @@ pub fn commands() -> Vec<CommandSpec<S>> {
 // View
 // ---------------------------------------------------------------------------------------------
 
+/// Finds a note's index by id in the view, for one revision: a binary search when the ids are in
+/// order (they always are in files this app writes), a map otherwise. Either way a missing id
+/// costs no scan.
+#[derive(Default)]
+enum Ids {
+    #[default]
+    Sorted,
+    Map(HashMap<u64, usize>),
+}
+
+impl Ids {
+    fn new(doc: &Notes) -> Self {
+        if doc.notes.is_sorted_by(|a, b| a.id < b.id) {
+            Ids::Sorted
+        } else {
+            let mut map = HashMap::with_capacity(doc.notes.len());
+            for (i, n) in doc.notes.iter().enumerate() {
+                // the first note with an id wins, as `Notes::index_of` finds it
+                map.entry(n.id).or_insert(i);
+            }
+            Ids::Map(map)
+        }
+    }
+
+    fn find(&self, doc: &Notes, id: u64) -> Option<usize> {
+        let i = match self {
+            Ids::Sorted => doc.notes.partition_point(|n| n.id < id),
+            Ids::Map(map) => *map.get(&id)?,
+        };
+        doc.notes.get(i).is_some_and(|n| n.id == id).then_some(i)
+    }
+}
+
 /// What the view keeps between frames.
 #[derive(Default)]
 struct ViewState {
     query: String,
-    /// Indices of notes matching `query`, for (revision, query).
+    /// Indices of notes matching `filter_query` at `filter_rev`, ascending.
     filtered: Vec<usize>,
-    filter_key: Option<(Revision, String)>,
+    filter_rev: Option<Revision>,
+    filter_query: String,
+    /// `filter_query`, lowercased.
+    lower_query: String,
+    /// Bumped whenever `filtered` changes.
+    filter_gen: u64,
+    /// Note index by id, for `ids_rev`.
+    ids: Ids,
+    ids_rev: Option<Revision>,
     /// Editor buffers for the selected note, synced when it or the document changes.
     editing: Option<(u64, Revision)>,
     title: String,
     body: String,
     scroll_to: Option<usize>,
-    /// Row of the selected note in `filtered`, for (filter key, selected id).
+    /// Row of the selected note in `filtered`, for (filter_gen, selected id).
     sel_row: Option<usize>,
-    sel_key: Option<(Option<(Revision, String)>, Option<u64>)>,
+    sel_key: Option<(u64, Option<u64>)>,
     /// The list itself changed the selection last frame (no need to scroll to it).
     picked_in_list: bool,
+    /// "N notes" for `count_of` notes, rebuilt only when the count changes.
+    count_text: String,
+    count_of: Option<usize>,
+    /// The undo merge key of `merge_of` (`note-<id>`), rebuilt only when the edited note changes.
+    merge_key: String,
+    merge_of: Option<u64>,
 }
 
 impl ViewState {
+    /// Bring the id index and the filter up to `rev` and the current query: O(notes) once per
+    /// revision or query change, nothing per frame.
     fn refilter(&mut self, doc: &Notes, rev: Revision) {
-        let key = (rev, self.query.clone());
-        if self.filter_key.as_ref() == Some(&key) {
+        if self.ids_rev != Some(rev) {
+            self.ids = Ids::new(doc);
+            self.ids_rev = Some(rev);
+        }
+        if self.filter_rev == Some(rev) && self.filter_query == self.query {
             return;
         }
-        let q = self.query.to_lowercase();
+        if self.filter_query != self.query || self.filter_rev.is_none() {
+            self.filter_query.clone_from(&self.query);
+            self.lower_query = self.query.to_lowercase();
+        }
         self.filtered.clear();
-        if q.is_empty() {
+        if self.lower_query.is_empty() {
             self.filtered.extend(0..doc.notes.len());
         } else {
-            self.filtered.extend(doc.notes.iter().enumerate().filter(|(_, n)| matches(n, &q)).map(|(i, _)| i));
+            let q = self.lower_query.as_str();
+            self.filtered.extend(doc.notes.iter().enumerate().filter(|(_, n)| matches(n, q)).map(|(i, _)| i));
         }
-        self.filter_key = Some(key);
+        self.filter_rev = Some(rev);
+        self.filter_gen = self.filter_gen.wrapping_add(1);
+    }
+
+    /// The view edited the text of note `index` (which now matches the query or not: `hit`),
+    /// taking the document from `before` to `after`. The ids did not move, and only that note can
+    /// have entered or left the filter, so re-check just it instead of every note.
+    fn note_edited(&mut self, index: usize, hit: bool, before: Revision, after: Revision) {
+        if self.ids_rev == Some(before) {
+            self.ids_rev = Some(after);
+        }
+        if self.filter_rev != Some(before) || self.filter_query != self.query {
+            // out of date anyway: the next frame filters from scratch
+            return;
+        }
+        self.filter_rev = Some(after);
+        if self.lower_query.is_empty() {
+            return;
+        }
+        match (self.filtered.binary_search(&index), hit) {
+            (Ok(pos), false) => {
+                self.filtered.remove(pos);
+                self.filter_gen = self.filter_gen.wrapping_add(1);
+            }
+            (Err(pos), true) => {
+                self.filtered.insert(pos, index);
+                self.filter_gen = self.filter_gen.wrapping_add(1);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -231,21 +344,25 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
 
         egui::Panel::left("notes.sidebar").default_size(280.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                let r = ui.button("New Note");
+                let r = ui.button(ashlar::ui::cache::button_text(ui, "notes.add", "New Note"));
                 automation::register(ui, &r, "notes.add", "New Note", Role::Button);
                 if r.clicked() {
                     cx.dispatch("note.add", json!({}));
                 }
-                ui.label(format!("{} notes", doc.notes.len()));
+                if st.count_of != Some(doc.notes.len()) {
+                    st.count_text = format!("{} notes", doc.notes.len());
+                    st.count_of = Some(doc.notes.len());
+                }
+                ashlar::ui::cache::label(ui, "notes.count", &st.count_text);
             });
             if SearchField::new("notes.search", &mut st.query).hint("Search notes").show(ui).changed {
                 st.refilter(&doc, rev);
             }
             ui.separator();
-            let sel_key = (st.filter_key.clone(), selected);
-            if st.sel_key.as_ref() != Some(&sel_key) {
-                // O(rows) once per change of selection or filter, never per frame
-                st.sel_row = selected.and_then(|id| st.filtered.iter().position(|&i| doc.notes.get(i).is_some_and(|n| n.id == id)));
+            let sel_key = (st.filter_gen, selected);
+            if st.sel_key != Some(sel_key) {
+                // `filtered` is ascending, so a binary search for the note's index
+                st.sel_row = selected.and_then(|id| st.ids.find(&doc, id)).and_then(|i| st.filtered.binary_search(&i).ok());
                 if !std::mem::take(&mut st.picked_in_list) {
                     st.scroll_to = st.sel_row;
                 }
@@ -259,8 +376,11 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
                 .scroll_to(st.scroll_to.take())
                 .row_label(&label)
                 .show(ui, |ui, row| {
+                    // a cached galley per note (a steady frame lays out nothing); not selectable, so a
+                    // click on the title selects the note
+                    let id = filtered.get(row.index).and_then(|&i| doc.notes.get(i)).map_or(u64::MAX, |n| n.id);
                     let title = label(row.index);
-                    ui.label(if title.is_empty() { "Untitled" } else { title });
+                    ashlar::ui::cache::row_label(ui, ("notes.row", id), if title.is_empty() { "Untitled" } else { title });
                 });
             if let Some(row) = out.select
                 && let Some(n) = filtered.get(row).and_then(|&i| doc.notes.get(i))
@@ -270,12 +390,12 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
             }
         });
 
-        let Some(id) = selected.filter(|id| doc.get(*id).is_some()) else {
+        let Some((id, index)) = selected.and_then(|id| Some((id, st.ids.find(&doc, id)?))) else {
             ui.centered_and_justified(|ui| ui.label("Select a note, or create one with New Note."));
             return;
         };
         if st.editing != Some((id, rev))
-            && let Some(n) = doc.get(id)
+            && let Some(n) = doc.notes.get(index)
         {
             st.title.clone_from(&n.title);
             st.body.clone_from(&n.body);
@@ -287,15 +407,24 @@ fn view() -> impl FnMut(&mut egui::Ui, &mut Cx<'_, Notes>) {
         automation::register_with(ui, &b, "notes.body", "Body", Role::Field, automation::Details { value: Some(&st.body), selected: None });
         if t.changed() || b.changed() {
             let (title, body) = (st.title.clone(), st.body.clone());
+            let before = cx.revision();
+            if st.merge_of != Some(id) {
+                st.merge_key = format!("note-{id}");
+                st.merge_of = Some(id);
+            }
             // typing in one note is one undo step until something else happens
-            cx.edit_merged("Edit Note", &format!("note-{id}"), |d| {
-                if let Some(n) = d.notes.iter_mut().find(|n| n.id == id) {
-                    let n = Arc::make_mut(n);
-                    n.title = title;
-                    n.body = body;
+            cx.edit_merged("Edit Note", &st.merge_key, |d| {
+                // `index` is where the note was in the snapshot this frame drew
+                let i = if d.notes.get(index).is_some_and(|n| n.id == id) { Some(index) } else { d.index_of(id) };
+                // a new note rather than `make_mut`, which would copy the old text first
+                if let Some(n) = i.and_then(|i| d.notes.get_mut(i)) {
+                    *n = Arc::new(Note { id, title, body });
                 }
             });
-            st.editing = Some((id, cx.revision()));
+            let after = cx.revision();
+            let hit = matches_text(&st.title, &st.body, &st.lower_query);
+            st.note_edited(index, hit, before, after);
+            st.editing = Some((id, after));
         }
     }
 }
@@ -309,4 +438,47 @@ pub fn app() -> App<Notes> {
         .commands(commands())
         .instructions("A note-taking app. Notes have an id, a title and a body. Use note.add, note.edit, note.delete and note.list; file.save_as / file.open with a `path` to save and load.")
         .view(view())
+        .scene("empty", |_: &mut S| {})
+        .scene("two-notes", |s: &mut S| {
+            for (title, body) in [("Groceries", "milk, eggs"), ("Ideas", "a faster list")] {
+                let _ = add(s, &json!({"title": title, "body": body}));
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn matching_ignores_case_like_lowercasing_does() {
+        let hays = ["Note 42", "GENERATED note number 7.", "Straße und Ärger", "ÉCOLE", "İstanbul", "", "abc"];
+        let queries = ["", "note", "NOTE 4", "number 7.", "straSSe", "ärg", "école", "i̇st", "abcd", "c", "x"];
+        for h in hays {
+            for q in queries {
+                let lq = q.to_lowercase();
+                assert_eq!(contains_lower(h, &lq), h.to_lowercase().contains(&lq), "{h:?} contains {q:?}");
+            }
+        }
+    }
+
+    fn doc(ids: &[u64]) -> Notes {
+        Notes { notes: ids.iter().map(|&id| Arc::new(Note { id, ..Note::default() })).collect(), next_id: 0 }
+    }
+
+    #[test]
+    fn notes_are_found_by_id_in_order_or_not() {
+        for ids in [&[1, 2, 5, 9][..], &[9, 1, 5, 2], &[3, 3, 1], &[]] {
+            let d = doc(ids);
+            let index = Ids::new(&d);
+            for id in 0..11 {
+                let expect = ids.iter().position(|&x| x == id);
+                assert_eq!(d.index_of(id), expect, "index_of {id} in {ids:?}");
+                assert_eq!(index.find(&d, id), expect, "Ids::find {id} in {ids:?}");
+            }
+        }
+        assert!(matches!(Ids::new(&doc(&[1, 2, 3])), Ids::Sorted));
+        assert!(matches!(Ids::new(&doc(&[2, 1])), Ids::Map(_)));
+    }
 }

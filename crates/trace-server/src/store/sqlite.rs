@@ -1109,6 +1109,8 @@ fn load_perf(conn: &Connection, app_id: i64, from: i64, to: i64, keep: &Keep) ->
             slow: non_negative(row.get(6)?),
             frozen: non_negative(row.get(7)?),
             buckets,
+            // not stored: counted from the buckets (DISPLAY_BUDGET_US is a bucket bound)
+            over_budget: None,
         };
         let acc = groups.entry(key).or_default();
         acc.frames.merge(&frames);

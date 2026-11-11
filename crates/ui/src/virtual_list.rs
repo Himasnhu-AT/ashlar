@@ -2,8 +2,9 @@
 //! frame costs O(visible rows) whatever the row count.
 //!
 //! Rows have one uniform height, or variable heights given by a function. Variable heights are
-//! summed once into an offset table (O(rows)) and kept until the row count or the caller's
-//! `revision` changes; each frame then finds the first visible row by binary search.
+//! read once into a Fenwick tree (O(rows)) and kept until the row count or the caller's
+//! `revision` changes; rows named in [`VirtualList::changed_rows`] are read again in O(log rows)
+//! each. Each frame then finds the first visible row in O(log rows).
 //!
 //! The list draws hover, selection and stripes, handles the keyboard (arrows, Home/End, Page
 //! Up/Down, Enter) when it has the focus, and calls the app's painter for each visible row. The app
@@ -25,9 +26,15 @@
 
 use std::ops::Range;
 
-use egui::{Id, Key, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::accesskit::{Role as NodeRole, SortDirection};
+use egui::{Event, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+
+use ashlar_motion::gesture::{VelocityTracker, decay_k, deceleration, project, rubber_band};
+use ashlar_motion::{Class, Curve, tokens as mtokens};
 
 use crate::automation::{self, Details, Role};
+use crate::motion;
+use crate::selection::Selection;
 use crate::tokens::{self, Tokens};
 
 /// Rows beyond this are not shown (an offset table for 10M rows is 80 MB).
@@ -38,7 +45,8 @@ pub const MAX_ROWS: usize = 10_000_000;
 pub enum RowHeights<'a> {
     Uniform(f32),
     /// `height(i)` for every row; called for all rows only when `revision` or the row count
-    /// changes. Non-finite or negative heights count as 0, heights are capped at 10 000 points.
+    /// changes, and for the rows in [`VirtualList::changed_rows`]. Non-finite or negative heights
+    /// count as 0, heights are capped at 10 000 points.
     Variable {
         revision: u64,
         height: &'a dyn Fn(usize) -> f32,
@@ -49,60 +57,139 @@ fn sane_height(h: f32) -> f64 {
     if h.is_finite() { h.clamp(0.0, 10_000.0) as f64 } else { 0.0 }
 }
 
-/// Offsets of variable-height rows: `offsets[i]` is row `i`'s top, `offsets[rows]` the total.
+/// Variable row heights and their running sums, in a Fenwick tree: a row's top, the row at a
+/// given y and a change to one row's height each cost O(log rows).
 #[derive(Clone, Default)]
-struct Offsets {
-    offsets: Vec<f64>,
+pub(crate) struct Offsets {
+    heights: Vec<f32>,
+    /// `tree[k]` (1-based) sums the heights of rows `k - lowbit(k) .. k`.
+    tree: Vec<f64>,
+    total: f64,
     revision: u64,
-    rows: usize,
+}
+
+fn lowbit(k: usize) -> usize {
+    k & k.wrapping_neg()
 }
 
 impl Offsets {
-    fn update(&mut self, rows: usize, revision: u64, height: &dyn Fn(usize) -> f32) -> bool {
-        if self.rows == rows && self.revision == revision && self.offsets.len() == rows + 1 {
-            return false;
+    /// Read every row's height when the row count or `revision` changed, else only `changed`
+    /// rows. True when anything was read.
+    fn update(&mut self, rows: usize, revision: u64, height: &dyn Fn(usize) -> f32, changed: &[usize]) -> bool {
+        if self.heights.len() == rows && self.revision == revision && self.tree.len() == rows + 1 {
+            let mut any = false;
+            for &row in changed {
+                if let Some(old) = self.heights.get(row).copied() {
+                    let new = sane_height(height(row)) as f32;
+                    if new != old {
+                        self.set(row, old, new);
+                        any = true;
+                    }
+                }
+            }
+            return any;
         }
-        self.offsets.clear();
-        self.offsets.reserve(rows + 1);
-        let mut y = 0.0f64;
-        self.offsets.push(0.0);
+        // two linear passes: every node takes its prefix sum, then (from the top down, so the
+        // lower prefixes are still there) the prefix before its range is taken off
+        self.heights.clear();
+        self.heights.reserve(rows);
+        self.tree.clear();
+        self.tree.reserve(rows + 1);
+        self.tree.push(0.0);
+        let mut sum = 0.0f64;
         for i in 0..rows {
-            y += sane_height(height(i));
-            self.offsets.push(y);
+            let h = sane_height(height(i));
+            self.heights.push(h as f32);
+            sum += h;
+            self.tree.push(sum);
         }
-        self.rows = rows;
+        for k in (1..=rows).rev() {
+            let before = self.tree.get(k - lowbit(k)).copied().unwrap_or(0.0);
+            if let Some(node) = self.tree.get_mut(k) {
+                *node -= before;
+            }
+        }
+        self.total = sum;
         self.revision = revision;
         true
+    }
+
+    fn set(&mut self, row: usize, old: f32, new: f32) {
+        if let Some(h) = self.heights.get_mut(row) {
+            *h = new;
+        }
+        let delta = new as f64 - old as f64;
+        let mut k = row + 1;
+        while let Some(node) = self.tree.get_mut(k) {
+            *node += delta;
+            k += lowbit(k);
+        }
+        // sums drift by rounding with each change; the total is read from the tree
+        self.total = self.prefix(self.heights.len());
+    }
+
+    fn rows(&self) -> usize {
+        self.heights.len()
+    }
+
+    /// Sum of the heights of rows `0..i` (row `i`'s top).
+    fn prefix(&self, i: usize) -> f64 {
+        let mut k = i.min(self.heights.len());
+        let mut sum = 0.0;
+        while k > 0 {
+            sum += self.tree.get(k).copied().unwrap_or(0.0);
+            k -= lowbit(k);
+        }
+        sum.max(0.0)
+    }
+
+    fn height(&self, i: usize) -> f64 {
+        self.heights.get(i).copied().unwrap_or(0.0) as f64
+    }
+
+    /// The last row whose top is at or above `y` (rows of zero height are passed over).
+    fn row_at(&self, y: f64) -> usize {
+        let n = self.heights.len();
+        let mut pos = 0usize;
+        let mut rest = y;
+        let mut step = if n == 0 { 0 } else { 1usize << (usize::BITS - 1 - n.leading_zeros()) };
+        while step > 0 {
+            if let Some(&sum) = self.tree.get(pos + step)
+                && sum <= rest
+            {
+                pos += step;
+                rest -= sum;
+            }
+            step >>= 1;
+        }
+        pos
     }
 }
 
 /// Geometry of the rows (no egui involved): total height, row spans and visible ranges.
 pub(crate) enum Layout<'o> {
     Uniform { rows: usize, height: f64 },
-    Variable(&'o [f64]),
+    Variable(&'o Offsets),
 }
 
 impl Layout<'_> {
     fn rows(&self) -> usize {
         match self {
             Layout::Uniform { rows, .. } => *rows,
-            Layout::Variable(o) => o.len().saturating_sub(1),
+            Layout::Variable(o) => o.rows(),
         }
     }
     fn total(&self) -> f64 {
         match self {
             Layout::Uniform { rows, height } => *rows as f64 * height,
-            Layout::Variable(o) => o.last().copied().unwrap_or(0.0),
+            Layout::Variable(o) => o.total,
         }
     }
     /// (top, height) of row `i`.
     fn span(&self, i: usize) -> (f64, f64) {
         match self {
             Layout::Uniform { height, .. } => (i as f64 * height, *height),
-            Layout::Variable(o) => {
-                let top = o.get(i).copied().unwrap_or(0.0);
-                (top, o.get(i + 1).copied().unwrap_or(top) - top)
-            }
+            Layout::Variable(o) => (o.prefix(i), o.height(i)),
         }
     }
     /// The row containing `y` (clamped to the rows).
@@ -119,7 +206,7 @@ impl Layout<'_> {
                     0
                 }
             }
-            Layout::Variable(o) => o.partition_point(|top| *top <= y).saturating_sub(1),
+            Layout::Variable(o) => o.row_at(y),
         };
         i.min(rows - 1)
     }
@@ -173,7 +260,15 @@ pub struct VirtualList<'a> {
     scroll_to: Option<usize>,
     max_height: Option<f32>,
     row_label: Option<&'a dyn Fn(usize) -> &'a str>,
+    type_ahead: Option<&'a dyn Fn(usize) -> &'a str>,
+    selection: Option<&'a mut Selection>,
+    changed_rows: &'a [usize],
+    fling: bool,
+    label: Option<&'a str>,
 }
+
+/// Typed letters within this many seconds of each other build one type-ahead prefix.
+pub const TYPE_AHEAD_SECS: f64 = 1.0;
 
 impl<'a> VirtualList<'a> {
     pub fn new(id: &'a str, rows: usize, heights: RowHeights<'a>) -> Self {
@@ -188,7 +283,30 @@ impl<'a> VirtualList<'a> {
             scroll_to: None,
             max_height: None,
             row_label: None,
+            type_ahead: None,
+            selection: None,
+            changed_rows: &[],
+            fling: false,
+            label: None,
         }
+    }
+    /// Drag the list to scroll it (off by default): let go while moving and it keeps going, then
+    /// eases to rest; pulled past either end it stretches with rubber-band resistance and springs
+    /// back. Reduced motion keeps the drag but drops the fling.
+    pub fn fling(mut self, on: bool) -> Self {
+        self.fling = on;
+        self
+    }
+    /// The name a screen reader announces for the list (a human name, not the automation id).
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.label = Some(text).filter(|t| !t.is_empty());
+        self
+    }
+    /// Rows whose height changed since the last frame, with [`RowHeights::Variable`]: only these
+    /// are measured again (O(log rows) each) while the revision and row count stay the same.
+    pub fn changed_rows(mut self, rows: &'a [usize]) -> Self {
+        self.changed_rows = rows;
+        self
     }
     /// The selected (cursor) row: highlighted and moved by the keyboard.
     pub fn selected(mut self, row: Option<usize>) -> Self {
@@ -218,15 +336,29 @@ impl<'a> VirtualList<'a> {
         self.max_height = Some(h);
         self
     }
-    /// Accessible/automation label of a row (visible rows only).
+    /// Accessible/automation label of a row (visible rows only): the screen reader's name for it.
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.row_label = Some(f);
         self
     }
+    /// Type-ahead: letters typed while the list has the focus, within [`TYPE_AHEAD_SECS`] of
+    /// each other, move the cursor to the next row whose text starts with them (ignoring case).
+    /// `text(row)` is called only on a keystroke, from the cursor on.
+    pub fn type_ahead(mut self, text: &'a dyn Fn(usize) -> &'a str) -> Self {
+        self.type_ahead = Some(text);
+        self
+    }
+    /// Multi-selection owned by the app: click, Shift-click and Shift+arrows, ⌘/Ctrl-click and
+    /// ⌘A update it in place. Its cursor replaces [`selected`](Self::selected); rows from
+    /// [`is_selected`](Self::is_selected) still show as selected.
+    pub fn selection(mut self, selection: &'a mut Selection) -> Self {
+        self.selection = Some(selection);
+        self
+    }
 
-    pub fn show(self, ui: &mut Ui, row: impl FnMut(&mut Ui, Row)) -> ListResponse {
+    pub fn show(mut self, ui: &mut Ui, row: impl FnMut(&mut Ui, Row)) -> ListResponse {
         let base = ui.make_persistent_id(self.id);
-        show_rows(ui, base, &self, LIST, None, row)
+        show_rows(ui, base, &mut self, LIST, None, row)
     }
 }
 
@@ -242,14 +374,66 @@ pub(crate) struct Header<'h> {
 pub(crate) struct Kind {
     pub role: Role,
     pub rows: bool,
+    /// AccessKit roles of the container and of each visible row.
+    pub node: NodeRole,
+    pub item: NodeRole,
 }
 
-pub(crate) const LIST: Kind = Kind { role: Role::List, rows: true };
+pub(crate) const LIST: Kind = Kind { role: Role::List, rows: true, node: NodeRole::List, item: NodeRole::ListItem };
+
+/// The widget id of visible row `i` (its AccessKit node id).
+pub(crate) fn row_id(base: Id, i: usize) -> Id {
+    base.with(("row", i))
+}
+
+/// `s` starts with `prefix`, ignoring case.
+fn starts_with_ci(s: &str, prefix: &str) -> bool {
+    let mut s = s.chars().flat_map(char::to_lowercase);
+    prefix.chars().flat_map(char::to_lowercase).all(|p| s.next() == Some(p))
+}
+
+/// Feed this frame's typed text into the type-ahead buffer and find the row it names.
+pub(crate) fn type_ahead<'t>(ui: &Ui, base: Id, rows: usize, cursor: Option<usize>, text: &dyn Fn(usize) -> &'t str) -> Option<usize> {
+    let typed: String = ui.input(|i| {
+        if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
+            return String::new();
+        }
+        i.events.iter().filter_map(|e| if let Event::Text(t) = e { Some(t.as_str()) } else { None }).collect()
+    });
+    if typed.is_empty() || rows == 0 {
+        return None;
+    }
+    let key = base.with("type_ahead");
+    let now = ui.input(|i| i.time);
+    let (mut buf, last): (String, f64) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_default();
+    if !(now - last).is_finite() || now - last > TYPE_AHEAD_SECS || now < last {
+        buf.clear();
+    }
+    let fresh = buf.is_empty();
+    for c in typed.chars().filter(|c| !c.is_control()) {
+        if (c != ' ' || !buf.is_empty()) && buf.len() < 64 {
+            buf.push(c);
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(key, (buf.clone(), now)));
+    if buf.is_empty() {
+        return None;
+    }
+    let find = |prefix: &str, from: usize| (0..rows).map(|k| from.saturating_add(k) % rows).find(|&r| starts_with_ci(text(r), prefix));
+    // a new prefix starts after the cursor; a longer one may stay on it
+    let from = cursor.map_or(0, |c| if fresh { c.saturating_add(1) } else { c });
+    find(&buf, from).or_else(|| {
+        // "f", "f", "f" cycles through the rows starting with "f"
+        let mut chars = buf.chars();
+        let first = chars.next()?;
+        chars.all(|c| c == first).then(|| find(first.encode_utf8(&mut [0; 4]), cursor.map_or(0, |c| c.saturating_add(1)))).flatten()
+    })
+}
 
 pub(crate) fn show_rows(
     ui: &mut Ui,
     base: Id,
-    list: &VirtualList<'_>,
+    list: &mut VirtualList<'_>,
     kind: Kind,
     header: Option<Header<'_>>,
     mut row_fn: impl FnMut(&mut Ui, Row),
@@ -261,10 +445,10 @@ pub(crate) fn show_rows(
         RowHeights::Uniform(h) => Layout::Uniform { rows: list.rows, height: sane_height(h).max(1.0) },
         RowHeights::Variable { revision, height } => {
             let mut o: Offsets = ui.data_mut(|d| d.remove_temp::<Offsets>(offsets_id)).unwrap_or_default();
-            o.update(list.rows, revision, height);
+            o.update(list.rows, revision, height, list.changed_rows);
             offsets = Some(o);
             match &offsets {
-                Some(o) => Layout::Variable(&o.offsets),
+                Some(o) => Layout::Variable(o),
                 None => Layout::Uniform { rows: 0, height: 1.0 },
             }
         }
@@ -275,6 +459,20 @@ pub(crate) fn show_rows(
     let height = list.max_height.filter(|h| h.is_finite() && *h > 0.0).map_or(avail.height(), |h| h.min(avail.height().max(h.min(40.0))));
     let outer = Rect::from_min_size(avail.min, vec2(avail.width(), height.max(t.control_height)));
     let response = ui.interact(outer, base, Sense::focusable_noninteractive());
+    let mut sel = list.selection.take();
+    // nodes are built only while a screen reader (or a test) has AccessKit enabled
+    let accesskit = ui
+        .ctx()
+        .accesskit_node_builder(base, |node| {
+            node.set_role(kind.node);
+            if let Some(label) = list.label {
+                node.set_label(label);
+            }
+            if sel.is_some() {
+                node.set_multiselectable();
+            }
+        })
+        .is_some();
     let focused = crate::edit::has_keyboard(&response);
     if focused {
         // arrows move the selection, not the focus
@@ -285,9 +483,10 @@ pub(crate) fn show_rows(
     let mut select = None;
     let mut activated = None;
     let rows = layout.rows();
-    let page = ((outer.height() as f64 / layout.span(list.selected.unwrap_or(0)).1.max(1.0)) as usize).max(1);
+    let cursor = sel.as_ref().and_then(|s| s.cursor()).or(list.selected);
+    let page = ((outer.height() as f64 / layout.span(cursor.unwrap_or(0)).1.max(1.0)) as usize).max(1);
     if focused && rows > 0 {
-        let cur = list.selected.map(|s| s.min(rows - 1));
+        let cur = cursor.map(|s| s.min(rows - 1));
         let (up, down, home, end, pgup, pgdn, enter) = ui.input(|i| {
             (
                 i.key_pressed(Key::ArrowUp),
@@ -312,8 +511,17 @@ pub(crate) fn show_rows(
         } else if pgdn {
             Some(cur.map_or(0, |c| (c + page).min(rows - 1)))
         } else {
-            None
+            list.type_ahead.and_then(|text| type_ahead(ui, base, rows, cur, text))
         };
+        if let Some(s) = sel.as_deref_mut() {
+            let (shift, all) = ui.input_mut(|i| (i.modifiers.shift, i.consume_key(Modifiers::COMMAND, Key::A)));
+            if let Some(n) = next {
+                if shift { s.extend_to(n) } else { s.select_only(n) }
+            }
+            if all {
+                s.select_all(rows);
+            }
+        }
         if next.is_some() && next != cur {
             select = next;
         }
@@ -327,7 +535,9 @@ pub(crate) fn show_rows(
     let mut body_rect = outer;
     if let Some(h) = header {
         let header_rect = Rect::from_min_size(outer.min, vec2(outer.width(), h.height));
-        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header"));
+        let mut hui = ui.new_child(UiBuilder::new().max_rect(header_rect).id_salt("ashlar_list_header").accessibility_parent(base));
+        // the header is the table's first row; its cells are column headers
+        ui.ctx().accesskit_node_builder(hui.unique_id(), |n| n.set_role(NodeRole::Row));
         hui.set_clip_rect(header_rect.intersect(ui.clip_rect()));
         (h.paint)(&mut hui, header_rect);
         body_rect.min.y = header_rect.max.y;
@@ -336,7 +546,7 @@ pub(crate) fn show_rows(
     let view_h_id = base.with("view_h");
     let mut scroll = egui::ScrollArea::vertical().id_salt(base.with("scroll")).auto_shrink([false, false]).max_height(body_rect.height());
     if let Some(target) = scroll_target {
-        let state = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(base.with("scroll")));
+        let state = egui::scroll_area::State::load(ui.ctx(), scroll_area_id(ui, base));
         let offset = state.map_or(0.0, |s| s.offset.y as f64);
         let view_h: f32 = ui.data(|d| d.get_temp(view_h_id)).unwrap_or(body_rect.height());
         let (top, h) = layout.span(target);
@@ -347,16 +557,19 @@ pub(crate) fn show_rows(
         }
     }
 
+    let over = if list.fling { drive_fling(ui, base, &layout, body_rect, scroll_target.is_some(), &mut scroll) } else { 0.0 };
+
     let mut clicked = None;
     let mut double_clicked = None;
     let mut secondary_clicked = None;
     let mut visible = 0..0;
-    let mut body = ui.new_child(UiBuilder::new().max_rect(body_rect).id_salt("ashlar_list_body"));
+    let mut body = ui.new_child(UiBuilder::new().max_rect(body_rect).id_salt("ashlar_list_body").accessibility_parent(base));
     let out = scroll.show_viewport(&mut body, |ui, viewport| {
         let total = layout.total().min(f32::MAX as f64 / 4.0) as f32;
         ui.set_height(total);
         ui.set_width(ui.available_width());
-        let origin = ui.max_rect().min;
+        // past an end, the rows follow the rubber band
+        let origin = ui.max_rect().min - vec2(0.0, over);
         let width = ui.max_rect().width();
         visible = layout.visible(viewport.min.y as f64, viewport.max.y as f64, list.overscan);
         let label_fn = list.row_label;
@@ -367,17 +580,39 @@ pub(crate) fn show_rows(
             if h <= 0.0 {
                 continue;
             }
-            let resp = ui.interact(rect, base.with(("row", i)), Sense::click());
-            let selected = list.selected == Some(i) || list.is_selected.is_some_and(|f| f(i));
+            let rid = row_id(base, i);
+            let resp = ui.interact(rect, rid, Sense::click());
+            let selected = sel.as_ref().is_some_and(|s| s.contains(i)) || list.selected == Some(i) || list.is_selected.is_some_and(|f| f(i));
             let hovered = resp.hovered();
             if resp.clicked() || resp.secondary_clicked() {
                 ui.memory_mut(|m| m.request_focus(base));
             }
             if resp.clicked() {
                 clicked = Some(i);
-                if list.selected != Some(i) {
+                if let Some(s) = sel.as_deref_mut() {
+                    let m = ui.input(|inp| inp.modifiers);
+                    if m.shift {
+                        s.extend_to(i);
+                    } else if m.command {
+                        s.toggle(i);
+                    } else {
+                        s.select_only(i);
+                    }
+                }
+                if cursor != Some(i) {
                     select = Some(i);
                 }
+            }
+            if accesskit {
+                ui.ctx().accesskit_node_builder(rid, |node| {
+                    node.set_role(kind.item);
+                    if let Some(f) = label_fn {
+                        node.set_label(f(i));
+                    }
+                    node.set_selected(selected);
+                    node.set_position_in_set(i.saturating_add(1));
+                    node.set_size_of_set(rows);
+                });
             }
             if resp.double_clicked() {
                 double_clicked = Some(i);
@@ -387,7 +622,8 @@ pub(crate) fn show_rows(
                 secondary_clicked = Some(i);
             }
             paint_row_background(ui, &t, rect, i, selected, hovered, list.stripes, focused);
-            let mut child = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(t.space.sm, 0.0))).id_salt(("row", i)));
+            let mut child =
+                ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(t.space.sm, 0.0))).id_salt(("row", i)).accessibility_parent(rid));
             child.set_clip_rect(rect.intersect(ui.clip_rect()));
             if selected {
                 child.visuals_mut().override_text_color = Some(t.selection_text);
@@ -409,6 +645,8 @@ pub(crate) fn show_rows(
     });
     let view_h = out.inner_rect.height();
     ui.data_mut(|d| d.insert_temp(view_h_id, view_h));
+    // the scroll area's own id (it lives in the body's child ui), for reading its offset
+    ui.data_mut(|d| d.insert_temp(base.with("scroll_id"), out.id));
     if let Some(o) = offsets {
         ui.data_mut(|d| d.insert_temp(offsets_id, o));
     }
@@ -418,6 +656,109 @@ pub(crate) fn show_rows(
     }
     automation::register_with(ui, &response, list.id, "", kind.role, Details::default());
     ListResponse { response, clicked, double_clicked, secondary_clicked, select, activated, visible }
+}
+
+/// The id the list's scroll area keeps its offset under, as it reported last frame. The area
+/// lives in the body's child ui, so the id is not `ui`'s own id with the salt.
+fn scroll_area_id(ui: &Ui, base: Id) -> Id {
+    ui.data(|d| d.get_temp::<Id>(base.with("scroll_id"))).unwrap_or_else(|| ui.make_persistent_id(base.with("scroll")))
+}
+
+/// A list's drag-to-scroll state between frames.
+#[derive(Clone, Copy, Debug, Default)]
+struct ListFling {
+    tracker: VelocityTracker<f32>,
+    /// The offset the hand asks for (may be past either end).
+    raw: f32,
+    /// The last offset given to the tracker.
+    tracked: f32,
+    dragging: bool,
+    /// A fling or spring-back is running toward `target`.
+    running: bool,
+    target: f32,
+    /// The scroll offset set last frame (a different one means something else scrolled).
+    last: f32,
+}
+
+/// Drag-to-scroll with fling and rubber band for the list `base` (see [`VirtualList::fling`]):
+/// sets `scroll`'s offset while dragging or flinging and returns the rubber-band overscroll to
+/// draw the rows with (negative above the top).
+fn drive_fling(ui: &Ui, base: Id, layout: &Layout<'_>, body: Rect, scrolling_to: bool, scroll: &mut egui::ScrollArea) -> f32 {
+    let ctx = ui.ctx().clone();
+    let key = base.with("fling");
+    let anim = key.with("offset");
+    let view_h: f32 = ui.data(|d| d.get_temp(base.with("view_h"))).unwrap_or(body.height()).max(1.0);
+    let max = (layout.total().min(f32::MAX as f64 / 4.0) as f32 - view_h).max(0.0);
+    let scroll_id = scroll_area_id(ui, base);
+    let current = egui::scroll_area::State::load(&ctx, scroll_id).map_or(0.0, |s| s.offset.y);
+    // the list scrolls by hand itself (egui's own drag-to-scroll would fight it)
+    *scroll = scroll.clone().scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() });
+    let drag = ui.interact(body, key, Sense::drag());
+    // a pointer-only surface: the list and its scroll bar are what a screen reader uses
+    ui.ctx().accesskit_node_builder(drag.id, |n| n.set_role(NodeRole::GenericContainer));
+    let now = ui.input(|i| i.time);
+    let mut f: ListFling = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+    let band = |raw: f32| {
+        if raw < 0.0 {
+            rubber_band(raw, view_h)
+        } else if raw > max {
+            max + rubber_band(raw - max, view_h)
+        } else {
+            raw
+        }
+    };
+    let mut offset = None;
+    if drag.drag_started() {
+        f = ListFling { raw: current, tracked: current, dragging: true, last: current, ..ListFling::default() };
+        f.tracker.add(now, current);
+    }
+    if f.dragging {
+        f.raw -= drag.drag_delta().y;
+        let shown = band(f.raw);
+        // only movement is a sample: a still hand ages the last one until `velocity_at` says 0
+        if shown != f.tracked {
+            f.tracker.add(now, shown);
+            f.tracked = shown;
+        }
+        motion::set(&ctx, anim, shown);
+        offset = Some(shown);
+        if drag.drag_stopped() || !drag.dragged() {
+            f.dragging = false;
+            let reduced = motion::prefs(&ctx).reduced;
+            let v = if reduced { 0.0 } else { f.tracker.velocity_at(now) };
+            let target = project(shown, v, deceleration::NORMAL).clamp(0.0, max);
+            if target != shown {
+                // never faster than the distance left can absorb: a fling stopped by an end eases
+                // into it, and a stretched list springs back without swinging past
+                let reach = (target - shown) * decay_k(deceleration::NORMAL);
+                let v = if v.signum() == reach.signum() { v.abs().min(reach.abs()).copysign(v) } else { 0.0 };
+                let curve = if reduced && v == 0.0 && (0.0..=max).contains(&shown) { Curve::Instant } else { Curve::Spring(mtokens::SETTLE.enter) };
+                motion::release(&ctx, anim, v, target, curve);
+                f.running = true;
+                f.target = target;
+            }
+        }
+    } else if f.running {
+        if scrolling_to || (current - f.last).abs() > 0.5 {
+            // the wheel, the keyboard or the app scrolled: they win
+            f.running = false;
+        } else {
+            let o = motion::value(&ctx, anim, f.target, Class::Gesture, mtokens::SETTLE.enter);
+            if o == f.target {
+                f.running = false;
+            }
+            offset = Some(o);
+        }
+    }
+    let mut over = 0.0;
+    if let Some(o) = offset.filter(|o| o.is_finite()) {
+        let inside = o.clamp(0.0, max);
+        *scroll = scroll.clone().vertical_scroll_offset(inside);
+        over = o - inside;
+        f.last = inside;
+    }
+    ui.data_mut(|d| d.insert_temp(key, f));
+    over
 }
 
 fn paint_row_background(ui: &Ui, t: &Tokens, rect: Rect, i: usize, selected: bool, hovered: bool, stripes: bool, focused: bool) {
@@ -507,13 +848,34 @@ impl<'a> VirtualTable<'a> {
         self.list = self.list.max_height(h);
         self
     }
+    /// The name a screen reader announces for the table. See [`VirtualList::label`].
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.list = self.list.label(text);
+        self
+    }
     pub fn row_label(mut self, f: &'a dyn Fn(usize) -> &'a str) -> Self {
         self.list = self.list.row_label(f);
         self
     }
+    /// See [`VirtualList::changed_rows`].
+    pub fn changed_rows(mut self, rows: &'a [usize]) -> Self {
+        self.list = self.list.changed_rows(rows);
+        self
+    }
+
+    /// See [`VirtualList::type_ahead`].
+    pub fn type_ahead(mut self, text: &'a dyn Fn(usize) -> &'a str) -> Self {
+        self.list = self.list.type_ahead(text);
+        self
+    }
+    /// See [`VirtualList::selection`].
+    pub fn selection(mut self, selection: &'a mut Selection) -> Self {
+        self.list = self.list.selection(selection);
+        self
+    }
 
     /// `cell(ui, row, column)` paints one visible cell.
-    pub fn show(self, ui: &mut Ui, mut cell: impl FnMut(&mut Ui, usize, usize)) -> TableResponse {
+    pub fn show(mut self, ui: &mut Ui, mut cell: impl FnMut(&mut Ui, usize, usize)) -> TableResponse {
         let t = tokens::current(ui.ctx());
         let base = ui.make_persistent_id(self.list.id);
         let widths_id = base.with("widths");
@@ -558,6 +920,13 @@ impl<'a> VirtualTable<'a> {
                     painter.line_segment([pos2(ax, ay + a * 0.5 - 0.5), pos2(ax + 3.5, ay + b * 0.5)], Stroke::new(1.5, t.text.secondary));
                 }
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, col.title));
+                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                    n.set_role(NodeRole::ColumnHeader);
+                    n.set_column_index(c);
+                    if let Some(s) = sort.filter(|s| s.column == c) {
+                        n.set_sort_direction(if s.ascending { SortDirection::Ascending } else { SortDirection::Descending });
+                    }
+                });
                 let sorted = sort.map(|s| s.column == c);
                 automation::register_fmt(
                     ui,
@@ -572,6 +941,8 @@ impl<'a> VirtualTable<'a> {
                 if col.resizable {
                     let handle = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(6.0, cell.height()));
                     let hr = ui.interact(handle, base.with(("resize", c)), Sense::drag());
+                    // a pointer-only handle: nothing for a screen reader to announce
+                    ui.ctx().accesskit_node_builder(hr.id, |n| n.set_role(NodeRole::GenericContainer));
                     if hr.hovered() || hr.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
                     }
@@ -588,8 +959,8 @@ impl<'a> VirtualTable<'a> {
         let list = show_rows(
             ui,
             base,
-            &self.list,
-            Kind { role: Role::Table, rows: true },
+            &mut self.list,
+            Kind { role: Role::Table, rows: true, node: NodeRole::Table, item: NodeRole::Row },
             Some(Header { height: header_h, paint: &mut paint_header }),
             |ui, row| {
                 let mut x = row.rect.left();
@@ -601,6 +972,11 @@ impl<'a> VirtualTable<'a> {
                         let mut cui =
                             ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)).id_salt(c));
                         cui.set_clip_rect(inner.intersect(ui.clip_rect()));
+                        cui.ctx().accesskit_node_builder(cui.unique_id(), |n| {
+                            n.set_role(NodeRole::Cell);
+                            n.set_column_index(c);
+                            n.set_row_index(row.index);
+                        });
                         cell(&mut cui, row.index, c);
                     }
                     x += w;

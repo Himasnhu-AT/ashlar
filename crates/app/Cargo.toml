@@ -15,9 +15,18 @@ categories = ["gui"]
 workspace = true
 
 [features]
-default = []
+# Both on by default; `default-features = false` drops them for a smaller binary.
+default = ["accesskit", "headless"]
+# Screen readers and other assistive technology see the window (eframe's AccessKit adapter).
+accesskit = ["eframe/accesskit"]
+# `App::run` honours `--headless` (render without a window, `.ui` scripts, `--snap`, `--tree`).
+headless = []
 # The app's commands in the macOS / Windows menu bar (ashlar-native + muda) instead of the window.
 native-menu = ["ashlar-native/menu"]
+# A tray / status-bar icon (`App::tray`): its menu runs commands, a click shows the window.
+tray = ["ashlar-native/tray"]
+# System-wide shortcuts (`App::global_shortcut`) that run a command while another app has the focus.
+hotkey = ["ashlar-native/hotkey"]
 # Crash, performance and usage telemetry through ashlar-telemetry: always on when the app
 # configures an endpoint (no notice, no switches); TRACER_DISABLED turns it off.
 telemetry = ["dep:ashlar-telemetry"]
@@ -27,16 +36,18 @@ log = { workspace = true, features = ["std"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 ashlar-log = { workspace = true, features = ["serde"] }
 ashlar-command = { workspace = true }
 ashlar-store = { workspace = true }
 ashlar-jobs = { workspace = true }
 ashlar-fs = { workspace = true }
 ashlar-ui = { workspace = true }
+ashlar-i18n = { workspace = true }
+ashlar-motion = { workspace = true }
 ashlar-control = { workspace = true }
 ashlar-cli = { workspace = true }
-ashlar-native = { workspace = true, features = ["dialogs", "display"] }
+ashlar-native = { workspace = true, features = ["dialogs", "display", "system", "open-files", "single-instance", "memory", "session-end", "mac-shell"] }
 png = "0.18"
 thiserror = { workspace = true }
 ashlar-telemetry = { workspace = true, optional = true }
@@ -44,7 +55,17 @@ ashlar-telemetry = { workspace = true, optional = true }
 [dev-dependencies]
 tempfile = "3"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `.ui` scripts in-process on a `Driver` (`Driver::run_ui`).
+ashlar-debug = { workspace = true }
+# the UI thread's CPU time (perf warnings, frame log) and the process's (`app.stats` → `process`)
+cpu-time = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# eframe's winit, for the quiet launch's event-loop option (no features of its own).
+winit = { version = "0.30", default-features = false }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["console", "Window", "Document", "Element", "HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["console", "Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "Node"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

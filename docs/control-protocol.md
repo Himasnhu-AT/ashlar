@@ -93,6 +93,26 @@ and hands the debugger methods (next section) to `ashlar_ui::devtools`:
 | `app.quit` | `{discard?}` | `{closing}`, then the app quits |
 | `app.stats` | `{reset?}` | frame times, passes, jobs, `wakes` (frames and requests per reason) |
 | `app.logs` | `{limit?, level?}` | `{lines: [{unix, level, target, message}]}` |
+| `app.clock` | one of `{pause: true}`, `{step_ms}`, `{resume: true}`, or `{}` to read | `{paused, time}` |
+| `ui.scene` | `{name}`, or `{}` to list | `{scene}` / `{scenes: [..]}`; only apps that declare scenes ([`App::scene`](debugging-uis.md#named-scenes)) list it |
+
+`app.clock` holds the time the app's frames see, to look at an animation at an exact moment.
+`pause` freezes it at the current frame's time; `step_ms` (0 < ms ≤ 60000; pauses first) moves the
+frozen time on and runs one frame there; `resume` lets time run again from the frozen value, so
+nothing jumps (the app's time then lags the wall clock by the time spent paused). `time` is the
+egui time in seconds the next frame sees. While paused:
+
+- input still runs frames, at the frozen time. Two clicks are then 0 s apart, so egui counts them
+  as a double click; step between clicks that must stay single.
+- everything timed by egui time stands still: egui's animations, `ashlar_ui::motion`, tooltip
+  delays, toast timeouts, the caret's blink phase and other timed wakes. A timed wake still runs
+  a frame about once per its delay (the frame finds it not yet due), and an egui animation that
+  is mid-flight keeps asking for frames that draw the same picture.
+- settings and autosave run on the host's clock, so saves are not held up. Background jobs and
+  control requests run as usual.
+
+`ashlar-debug clock pause|step <ms>|resume` (also a `.ui` script line) and the MCP tool `ui_clock`
+send it. A headless session refuses it.
 
 Apps may add their own methods (`ui.timeline.hit`…); list them in `UiHandler::methods` so they show
 in `app.version`.
@@ -204,7 +224,8 @@ part of snapshots. Closed, it costs nothing: no frames, no allocations.
 
 ## MCP tools
 
-`ashlar-mcp` exposes the same vocabulary as tools:
+`ashlar-mcp` exposes the same vocabulary as tools. Arguments marked `?` are optional; a target is a
+ref string (`"@e3"`, `"e3"`), `"id=…"`, `"text=…"`, or an object as in the debugger methods.
 
 | Tool | Method |
 |---|---|
@@ -212,12 +233,37 @@ part of snapshots. Closed, it costs nothing: no frames, no allocations.
 | `describe_command {command}` | `engine.commands`, one entry in full, with its parameter schema |
 | `execute {command, params?}` | `engine.execute` |
 | `batch {commands, keepGoing?}` | `engine.batch` |
-| `screenshot {id?}` | `ui.screenshot`, returned as an MCP image |
-| `ui_inspect`, `ui_click`, `ui_drag`, `ui_scroll`, `ui_key`, `ui_type`, `ui_menu_list`, `ui_menu_invoke`, `ui_set` | the `ui.*` method of the same name |
+| `screenshot {target?, annotate?, highlight?, pad?, raise?, id?}` | `ui.screenshot`, returned as an MCP image (plus `{width, height, annotations?}`); `id` is the legacy crop |
+| `ui_snapshot {interactive?, scope?, depth?, compact?, elements?}` | `ui.snapshot`: the outline as text; `elements: true` adds the element list as JSON |
+| `ui_inspect` | `ui.inspect` |
+| `ui_click {target?, id?, x?, y?, button?, count?, modifiers?}` | `ui.click` |
+| `ui_hover {target}` | `ui.hover` |
+| `ui_focus {target}` | `ui.focus` |
+| `ui_fill {target, text, submit?}` | `ui.fill` |
+| `ui_press {keys}` | `ui.press` |
+| `ui_drag {from, to, steps?, modifiers?}` | `ui.drag` |
+| `ui_scroll {dx, dy, target?, x?, y?}` | `ui.scroll` |
+| `ui_scroll_into_view {target}` | `ui.scroll_into_view` |
+| `ui_get {target, what}` | `ui.get` |
+| `ui_wait {for, target?, text?, timeout_ms?}` | `ui.wait` |
+| `ui_highlight {target, ms?}` | `ui.highlight` |
+| `ui_key {key, modifiers?}` | `ui.key` |
+| `ui_type {text}` | `ui.type` |
+| `ui_menu_list` | `ui.menu.list` |
+| `ui_menu_invoke {id}` | `ui.menu.invoke` |
+| `ui_set {…}` | `ui.set` (app-defined keys) |
+| `app_stats {reset?}` | `app.stats` |
+| `app_logs {limit?, level?}` | `app.logs` (`level`: error, warn, info, debug or trace) |
+| `ui_clock {pause?, step_ms?, resume?}` | `app.clock` |
+| `ui_scene {name?}` | `ui.scene` |
+| `docs_categories {category?}`, `list_docs {category?, query?, recursive?}`, `read_doc {path}` | the app's documentation library (no control method) |
+| `save_doc {path, content, replace_builtin?}`, `append_doc {path, text}`, `delete_doc {path}` | the user's own pages, when the server has a user folder |
 
-The `ui_*` tools and `screenshot` are listed only when the backend's `app.version` reports the
-method. With `ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its
-real input schema.
+`screenshot`, the `ui_*` tools (`ui_clock` and `ui_scene` included) and `app_stats`/`app_logs` are listed only when the backend's
+`app.version` reports their method, so an agent never sees a tool the app cannot serve. The
+documentation tools are listed when the server has a library or a user folder. With
+`ToolMode::PerCommand` every command is also its own tool (dots become `_`) with its real input
+schema. `crates/mcp/tests/protocol_doc.rs` checks this table against the code.
 
 ## CLI reply contract
 

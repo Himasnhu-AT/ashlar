@@ -25,7 +25,11 @@ pub fn menu_bar(ui: &mut Ui, spec: &MenuSpec, platform: Platform) -> Option<Stri
     egui::MenuBar::new().ui(ui, |ui| {
         for (i, menu) in spec.menus.iter().enumerate() {
             let r = ui
-                .add_enabled_ui(menu.enabled, |ui| ui.menu_button(menu.label.as_str(), |ui| menu_items(ui, &menu.children, platform, &mut chosen, 1)))
+                .add_enabled_ui(menu.enabled, |ui| {
+                    ui.menu_button(cache::button_text(ui, ("ashlar_ui::menu-bar", i), &menu.label), |ui| {
+                        menu_items(ui, &menu.children, platform, &mut chosen, 1)
+                    })
+                })
                 .inner;
             automation::register_fmt(ui, r.response.rect, format_args!("menu.{i}"), &menu.label, Role::Menu, menu.enabled, Details::default());
         }
@@ -57,6 +61,40 @@ fn menu_items(ui: &mut Ui, nodes: &[MenuNode], platform: Platform, chosen: &mut 
             MenuNode::Role { .. } => {}
         }
     }
+}
+
+/// A context menu for `response` (opened by a secondary click), built from `spec`: a spec with
+/// one menu lists its items directly, one with several shows each as a submenu. Returns the id
+/// of the item chosen this frame. Items register as `menu.item.<id>`, the menu as
+/// `menu.context`.
+///
+/// ```
+/// # use ashlar_ui::commands::{MenuSpec, menu};
+/// # fn frame(ui: &mut egui::Ui, spec: &MenuSpec) {
+/// let row = ui.label("main.rs");
+/// if let Some(id) = menu::context(&row, spec) {
+///     // registry.execute(&id, json!({}))
+/// }
+/// # }
+/// ```
+pub fn context(response: &egui::Response, spec: &MenuSpec) -> Option<String> {
+    let mut chosen = None;
+    let platform = Platform::current();
+    response.context_menu(|ui| {
+        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| node.set_role(egui::accesskit::Role::Menu));
+        match spec.menus.as_slice() {
+            [one] => menu_items(ui, &one.children, platform, &mut chosen, 1),
+            menus => {
+                for menu in menus {
+                    ui.add_enabled_ui(menu.enabled, |ui| {
+                        ui.menu_button(menu.label.as_str(), |ui| menu_items(ui, &menu.children, platform, &mut chosen, 2))
+                    });
+                }
+            }
+        }
+        automation::register_fmt(ui, ui.min_rect(), format_args!("menu.context"), "", Role::Menu, true, Details::default());
+    });
+    chosen
 }
 
 /// One menu row: check gutter, label, shortcut on the right; disabled rows explain why on hover.

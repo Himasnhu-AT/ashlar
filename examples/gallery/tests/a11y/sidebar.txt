@@ -1,0 +1,52 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=false]
+  Button "Code" [toggled=false]
+  Button "Sidebar" [toggled=true]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  List "Navigation"
+    Button "Mailboxes" description="3 items" [expanded]
+    ListItem "Inbox"
+    ListItem "Drafts"
+    ListItem "Sent"
+    ListItem "Archive"
+    ListItem "Trash"
+    Button "Tags" description="5000 items" [expanded]
+    ListItem "Tag 0000"
+    ListItem "Tag 0001"
+    ListItem "Tag 0002"
+    ListItem "Tag 0003"
+    ListItem "Tag 0004"
+    ListItem "Tag 0005"
+    ListItem "Tag 0006"
+    ListItem "Tag 0007"
+    ListItem "Tag 0008"
+    ListItem "Tag 0009"
+    ListItem "Tag 0010"
+    ListItem "Tag 0011"
+    ListItem "Tag 0012"
+    ListItem "Tag 0013"
+    ListItem "Tag 0014"
+    ListItem "Tag 0015"
+    ListItem "Tag 0016"
+    ListItem "Tag 0017"
+    ScrollBar
+  Label value="Nothing selected"
+  Label value="Tab focuses the sidebar. Arrows move, Left and Right fold, F2 renames, typing jumps."

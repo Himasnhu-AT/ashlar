@@ -10,6 +10,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use crate::session::{self, Session, Trace};
+use crate::transport::MAX_PAUSE_MS;
 use crate::words::{Args, quote};
 use crate::{Ctx, Done, Fail, Res, target, usage_of};
 
@@ -18,6 +19,8 @@ const GET_WHAT: &[&str] = &["text", "value", "name", "role", "rect", "enabled", 
 
 /// Verbs that change the UI: a trace records after each.
 const ACTIONS: &[&str] = &["click", "dblclick", "hover", "focus", "fill", "type", "press", "scroll", "scrollintoview", "drag", "exec", "menu"];
+/// Verbs about sessions, processes and traces: nothing to do on an in-process target.
+const INPROC_REFUSED: &[&str] = &["open", "connect", "close", "sessions", "trace", "demo"];
 
 fn unix_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
@@ -113,8 +116,15 @@ impl Ctx<'_, '_, '_> {
     /// Run one verb with its arguments; in a traced session, record after an action. `shown` is
     /// the command as written (for the trace).
     pub(crate) fn run_verb(&mut self, verb: &str, a: Args, shown: &[String]) -> Res {
+        if self.inproc.is_some() && INPROC_REFUSED.contains(&verb) {
+            return Err(Fail::Failed {
+                error: format!("`{verb}` is not available in an in-process script"),
+                detail: None,
+                hint: Some("the script already talks to its app; sessions and traces belong to `ashlar-debug`".into()),
+            });
+        }
         let r = self.dispatch(verb, a);
-        if ACTIONS.contains(&verb) {
+        if ACTIONS.contains(&verb) && self.inproc.is_none() {
             self.record(verb, shown, &r);
         }
         r
@@ -147,6 +157,7 @@ impl Ctx<'_, '_, '_> {
             "menu" => self.menu(a),
             "logs" => self.logs(a),
             "stats" => self.stats(a),
+            "clock" => self.clock(a),
             "devtools" => self.devtools(a),
             "call" => self.raw_call(a),
             "batch" => self.batch(a),
@@ -226,11 +237,17 @@ impl Ctx<'_, '_, '_> {
 
     /// Call one method; the app's error becomes a [`Fail`] with a hint.
     pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value, Fail> {
+        if let Some(t) = self.inproc.as_mut() {
+            return t.call(method, params).map_err(|e| Fail::control(method, e));
+        }
         self.client()?.call(method, params).map_err(|e| Fail::control(method, e))
     }
 
     /// Call with a longer reply timeout (waits).
     fn call_for(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, Fail> {
+        if self.inproc.is_some() {
+            return self.call(method, params);
+        }
         let base = self.timeout;
         let c = self.client()?;
         c.set_timeout(timeout.max(base));
@@ -239,6 +256,14 @@ impl Ctx<'_, '_, '_> {
             c.set_timeout(base);
         }
         r
+    }
+
+    /// Let `ms` pass: virtual time on an in-process transport, the wall clock otherwise.
+    pub(crate) fn pause(&mut self, ms: u64) {
+        match self.inproc.as_mut() {
+            Some(t) => t.pause(ms.min(MAX_PAUSE_MS)),
+            None => std::thread::sleep(Duration::from_millis(ms.min(MAX_PAUSE_MS))),
+        }
     }
 
     /// `{}`-returning action with a confirmation line.
@@ -343,13 +368,13 @@ impl Ctx<'_, '_, '_> {
 
     fn status(&mut self, a: Args) -> Res {
         a.finish().map_err(usage("status"))?;
-        let s = session::load(self.env, &self.session).map_err(Fail::msg)?;
+        let s = if self.inproc.is_some() { None } else { session::load(self.env, &self.session).map_err(Fail::msg)? };
         let info = self.call("app.version", json!({}))?;
         let name = info.get("name").and_then(Value::as_str).unwrap_or("app");
         let version = info.get("version").and_then(Value::as_str).unwrap_or("");
         let methods: Vec<&str> =
             info.get("methods").and_then(Value::as_array).map(|m| m.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-        let port = self.conn.as_ref().map(Client::port).unwrap_or(0);
+        let port = self.inproc.as_ref().and_then(|t| t.port()).or_else(|| self.conn.as_ref().map(Client::port)).unwrap_or(0);
         let mut text = format!("{name} {version} on 127.0.0.1:{port}");
         if let Some(s) = &s
             && self.port.is_none()
@@ -579,7 +604,7 @@ impl Ctx<'_, '_, '_> {
             if text.is_some() || gone.is_some() || enabled.is_some() || element.is_some() || idle {
                 return Err(Fail::Usage("wait takes a duration or a condition, not both".into(), usage_of("wait")));
             }
-            std::thread::sleep(Duration::from_millis(ms.min(600_000)));
+            self.pause(ms);
             return Ok(Done::new(json!({"elapsed_ms": ms}), format!("waited {ms} ms")));
         }
         let element = element.or(pos);
@@ -725,6 +750,27 @@ impl Ctx<'_, '_, '_> {
         Ok(Done::new(v, text))
     }
 
+    fn clock(&mut self, mut a: Args) -> Res {
+        let what = a.positional();
+        let params = match what.as_deref() {
+            None => json!({}),
+            Some("pause") => json!({"pause": true}),
+            Some("resume") => json!({"resume": true}),
+            Some("step") => {
+                let ms = a.positional().ok_or_else(|| Fail::Usage("clock step needs milliseconds".into(), usage_of("clock")))?;
+                let ms: f64 = ms.parse().map_err(|_| Fail::Usage(format!("clock step {ms}: not a number of milliseconds"), usage_of("clock")))?;
+                json!({"step_ms": ms})
+            }
+            Some(other) => return Err(Fail::Usage(format!("clock {other}?"), usage_of("clock"))),
+        };
+        a.finish().map_err(usage("clock"))?;
+        let v = self.call(ashlar_control::APP_CLOCK, params)?;
+        let paused = v.get("paused").and_then(Value::as_bool).unwrap_or(false);
+        let time = v.get("time").and_then(Value::as_f64).unwrap_or(0.0);
+        let text = format!("{} at {time:.3}s", if paused { "paused" } else { "running" });
+        Ok(Done::new(v, text))
+    }
+
     fn devtools(&mut self, mut a: Args) -> Res {
         let what = a.positional().unwrap_or_else(|| "toggle".into());
         a.finish().map_err(usage("devtools"))?;
@@ -764,41 +810,81 @@ impl Ctx<'_, '_, '_> {
 
     // ------------------------------------------------------------------ trace
 
+    /// `--port`/`--app`: no session file, so a trace lives in the running batch.
+    fn direct(&self) -> bool {
+        self.port.is_some() || self.app.is_some()
+    }
+
     fn trace(&mut self, mut a: Args) -> Res {
         let what = need(a.positional(), "start <dir> or stop", "trace")?;
         let dir = a.positional();
         a.finish().map_err(usage("trace"))?;
-        let mut s = self.load_session()?;
+        if self.direct() && !self.in_batch {
+            return Err(Fail::Usage(
+                "with --port or --app a trace runs only inside `batch` (put `trace start <dir>` at the top of the script), \
+                 or start a session with `connect <port>`"
+                    .into(),
+                usage_of("trace"),
+            ));
+        }
+        let mut s = if self.direct() { None } else { Some(self.load_session()?) };
         match (what.as_str(), dir) {
             ("start", Some(d)) => {
                 let d = PathBuf::from(d);
                 std::fs::create_dir_all(&d).map_err(|e| Fail::msg(format!("cannot create {}: {e}", d.display())))?;
                 let d = d.canonicalize().unwrap_or(d);
-                s.trace = Some(Trace { dir: d.clone(), step: 0 });
-                session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
+                let t = Trace { dir: d.clone(), step: 0 };
+                match s.as_mut() {
+                    Some(s) => {
+                        s.trace = Some(t);
+                        session::save(self.env, &self.session, s).map_err(Fail::msg)?;
+                    }
+                    None => self.batch_trace = Some(t),
+                }
                 Ok(Done::new(json!({"dir": d}), format!("tracing to {}", d.display())))
             }
             ("stop", None) => {
-                let t = s.trace.take().ok_or_else(|| Fail::msg("no trace is running"))?;
-                session::save(self.env, &self.session, &s).map_err(Fail::msg)?;
+                let running = match s.as_mut() {
+                    Some(s) => s.trace.take(),
+                    None => self.batch_trace.take(),
+                };
+                let t = running.ok_or_else(|| Fail::msg("no trace is running"))?;
+                if let Some(s) = &s {
+                    session::save(self.env, &self.session, s).map_err(Fail::msg)?;
+                }
                 Ok(Done::new(json!({"dir": t.dir, "steps": t.step}), format!("{} steps in {}", t.step, t.dir.display())))
             }
             _ => Err(Fail::Usage("trace start <dir> | trace stop".into(), usage_of("trace"))),
         }
     }
 
-    /// After an action in a traced session: `NNN-verb.png`, `NNN-verb.txt` (the snapshot) and a
-    /// line in `steps.jsonl`. Problems are reported on stderr; the action's outcome stands.
+    /// After an action while a trace runs (in the session, or in this batch with `--port`/`--app`):
+    /// `NNN-verb.png`, `NNN-verb.txt` (the snapshot) and a line in `steps.jsonl`. Problems are
+    /// reported on stderr; the action's outcome stands.
     pub(crate) fn record(&mut self, verb: &str, words: &[String], outcome: &Res) {
-        if self.port.is_some() || self.app.is_some() {
-            return;
+        let mut problems = Vec::new();
+        if self.direct() {
+            let Some(mut t) = self.batch_trace.take() else { return };
+            self.record_step(&mut t, verb, words, outcome, &mut problems);
+            self.batch_trace = Some(t);
+        } else {
+            let Ok(Some(mut s)) = session::load(self.env, &self.session) else { return };
+            let Some(mut t) = s.trace.take() else { return };
+            self.record_step(&mut t, verb, words, outcome, &mut problems);
+            s.trace = Some(t);
+            if let Err(e) = session::save(self.env, &self.session, &s) {
+                problems.push(e);
+            }
         }
-        let Ok(Some(mut s)) = session::load(self.env, &self.session) else { return };
-        let Some(t) = s.trace.as_mut() else { return };
+        for p in problems {
+            let _ = writeln!(self.io.err, "trace: {p}");
+        }
+    }
+
+    fn record_step(&mut self, t: &mut Trace, verb: &str, words: &[String], outcome: &Res, problems: &mut Vec<String>) {
         t.step = t.step.saturating_add(1);
         let (n, dir) = (t.step, t.dir.clone());
         let base = format!("{n:03}-{verb}");
-        let mut problems = Vec::new();
         let png = dir.join(format!("{base}.png"));
         let shot = if self.no_raise() { json!({"raise": false}) } else { json!({}) };
         match self.call("ui.screenshot", shot).map_err(|e| e.text()).and_then(|v| save_png(&v, &png)) {
@@ -829,17 +915,12 @@ impl Ctx<'_, '_, '_> {
         if let Err(e) = appended {
             problems.push(format!("steps.jsonl: {e}"));
         }
-        if let Err(e) = session::save(self.env, &self.session, &s) {
-            problems.push(e);
-        }
-        for p in problems {
-            let _ = writeln!(self.io.err, "trace: {p}");
-        }
     }
 }
 
 /// Decode a `ui.screenshot` reply's PNG and write it.
-fn save_png(v: &Value, path: &Path) -> Result<(), String> {
+/// Write the PNG in a `ui.screenshot` reply (`{"png": base64}`) to `path`, making its folder.
+pub fn save_png(v: &Value, path: &Path) -> Result<(), String> {
     let b64 = v.get("png").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or("the reply carried no picture")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("the picture is not base64: {e}"))?;
     if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

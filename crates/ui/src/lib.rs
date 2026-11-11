@@ -6,13 +6,15 @@
 //!   app-supplied faces with a CJK fallback chain), [`theme`] (widget-state colouring).
 //! - Inputs: [`value_field`] (drag/scrub and formatted numeric fields), [`slider`] (slider, knob),
 //!   [`swatches`], [`search`], [`buttons`], [`tabs`]; all value edits report [`edit`] phases.
-//! - Text: [`markdown`] (chat replies and short documents, streaming-safe).
+//! - Text: [`markdown`] (chat replies and short documents, streaming-safe), [`code_view`],
+//!   [`diff_view`] (unified and split diffs of [`ashlar_diff`] files).
 //! - Data: [`virtual_list`] (list and table, O(visible) per frame), [`tree`].
-//! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`].
+//! - Shell: [`dialog`], [`toasts`], [`status_bar`], [`layout`], [`docking`], [`printing`], [`labels`] (every built-in string, localizable).
 //! - Commands: [`commands`] (menu model and bar, palette, keymap editor, key dispatch).
 //! - Infrastructure: [`automation`] (ids and rects for `ui.inspect`/`ui.click`), [`devtools`]
 //!   (the UI debugger: element tree with refs, injected input, waits, screenshots, inspector), [`cache`]
-//!   (revision-keyed galleys and meshes), [`wake`] (frame requests with a reason, per-reason
+//!   (revision-keyed galleys and meshes), [`motion`] (animated values that idle when settled),
+//!   [`wake`] (frame requests with a reason, per-reason
 //!   frame counts), [`idle`] (trim caches when idle or in the background; memory and frame-rate
 //!   readouts).
 //!
@@ -23,18 +25,33 @@
 pub mod automation;
 pub mod buttons;
 pub mod cache;
+pub mod chat;
+pub mod code_view;
 pub mod commands;
+pub mod content;
+pub mod controls;
 pub mod devtools;
 pub mod dialog;
+pub mod diff_view;
 pub mod docking;
 pub mod edit;
 pub mod fonts;
+pub mod form;
+pub(crate) mod hscroll;
 pub mod icons;
 pub mod idle;
+pub mod labels;
 pub mod layout;
+pub mod list;
 pub mod markdown;
+pub mod motion;
+pub mod motion_gate;
+pub mod overlay;
 pub mod printing;
+pub mod rolling;
 pub mod search;
+pub mod selection;
+pub mod sidebar;
 pub mod slider;
 pub mod status_bar;
 pub mod swatches;
@@ -48,6 +65,8 @@ pub mod tree;
 pub mod value_field;
 pub mod virtual_list;
 pub mod wake;
+
+pub use overlay::help;
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -8,13 +8,13 @@ use std::hash::Hash;
 
 use egui::{
     Align, Align2, Button, Color32, Context, CursorIcon, EventFilter, FontId, Id, Key, LayerId, Modifiers, Order, Pos2, Rect, Response, RichText,
-    ScrollArea, Sense, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, WidgetType, pos2, vec2,
+    Sense, Stroke, StrokeKind, TextWrapMode, Ui, UiBuilder, Vec2, WidgetInfo, WidgetText, WidgetType, pos2, vec2,
 };
 
 use super::model::{Action, DockError, Layout, MAX_PANELS, Node, Permissions, Placement, StackEntry};
 use super::targets::{DropProposal, DropTarget, resolve_drop};
 use crate::layout::{EXTENT, ResizeHandle, ResizeHandleStyle, SplitAxis, SplitSize, split_rect, usable};
-use crate::tabs::{Tab, fit};
+use crate::tabs::{Strip, StripTab, Tab, TabStripStyle};
 
 /// Most interaction ids recorded per frame.
 const MAX_OWNED: usize = 8 * MAX_PANELS;
@@ -83,6 +83,29 @@ impl DockStyle {
             panels_label: "Panels".to_owned(),
             resize_label: "Resize panels".to_owned(),
             resize_window_label: "Resize panel window".to_owned(),
+        }
+    }
+
+    /// The shared tab strip's style for these tabs.
+    fn strip_style(&self) -> TabStripStyle {
+        TabStripStyle {
+            height: self.tab_height,
+            padding: TAB_PADDING / 2.0,
+            min_width: TAB_MIN,
+            overflow_width: OVERFLOW,
+            close_size: 0.0,
+            font: self.font.clone(),
+            background: self.tab_background,
+            selected_background: self.active_background,
+            hover_background: self.active_background,
+            text: self.text,
+            inactive_text: self.inactive_text,
+            indicator: self.accent,
+            indicator_height: 2.0,
+            focus: Stroke::new(1.0, self.accent),
+            border: self.border,
+            overflow_label: self.panels_label.clone(),
+            close_label: self.close_label.clone(),
         }
     }
 
@@ -404,6 +427,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<P> {
             ctx: ctx.clone(),
             id: self.id,
             style,
+            strip_style: style.strip_style(),
             layout,
             label: &label,
             permissions: &permissions,
@@ -440,6 +464,7 @@ struct Renderer<'a, P> {
     ctx: Context,
     id: Id,
     style: &'a DockStyle,
+    strip_style: TabStripStyle,
     layout: &'a Layout<P>,
     label: &'a dyn Fn(&P) -> String,
     permissions: &'a dyn Fn(&P) -> Permissions,
@@ -756,35 +781,67 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             let galley = self.content.label(ui, p, &logical, &font, color).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, font.clone());
             shaped.push((logical, color, galley));
         }
-        let widths: Vec<f32> = shaped.iter().map(|(_, _, g)| g.size().x + TAB_PADDING).collect();
         let room = (strip.right() - header_w - left).max(0.0);
-        let fitted = fit(&widths, active, room, TAB_MIN, OVERFLOW);
-        let mut x = left;
+        let group_rect = match host {
+            Host::Floating(r) => r,
+            Host::Docked => rect,
+        };
+        let tabs: Vec<StripTab<'_>> = panels
+            .iter()
+            .zip(&shaped)
+            .map(|(p, (logical, _, galley))| StripTab {
+                id: tab_id(self.id, p),
+                label: logical,
+                width: galley.size().x + TAB_PADDING,
+                sense: if (self.permissions)(p).movable { Sense::click_and_drag() } else { Sense::click() },
+                closable: false,
+            })
+            .collect();
+        let engine = Strip {
+            id: self.id.with(("strip", panels.first())),
+            automation: None,
+            label: "",
+            style: &self.strip_style,
+            rect: Rect::from_min_size(pos2(left, strip.top()), vec2(room, strip.height())),
+            selected: active,
+            reorderable: false,
+            overflow_id: overflow_id(self.id, selected),
+        };
+        let (active_bg, bg) = (self.style.active_background, self.style.tab_background);
+        let (content, label, font) = (&mut *self.content, self.label, &self.style.font);
+        let out = engine.show(
+            ui,
+            &tabs,
+            &mut |ui, i, r| {
+                let Some((_, color, galley)) = shaped.get(i) else { return };
+                let fill = if i == active || r.hovered() { active_bg } else { bg };
+                ui.painter().rect_filled(r.rect, 0.0, fill);
+                let pos = r.rect.center() - galley.size() / 2.0;
+                ui.painter().with_clip_rect(r.rect.intersect(ui.clip_rect())).galley(pos, galley.clone(), *color);
+            },
+            &mut |ui, i| {
+                let Some(p) = panels.get(i) else { return ui.allocate_response(Vec2::ZERO, Sense::hover()) };
+                let logical = label(p);
+                let color = ui.visuals().text_color();
+                let visual = content.label(ui, p, &logical, font, color);
+                menu_item(ui, visual, &logical)
+            },
+        );
         let mut tab_rects: Vec<(P, Rect)> = Vec::with_capacity(panels.len());
-        let mut shown = vec![false; panels.len()];
-        for &(i, w) in &fitted.shown {
-            let (Some(p), Some((logical, color, galley))) = (panels.get(i), shaped.get(i)) else { continue };
-            let tab_rect = Rect::from_min_size(pos2(x, strip.top()), vec2(w, strip.height()));
-            x += w;
-            let group_rect = match host {
-                Host::Floating(r) => r,
-                Host::Docked => rect,
-            };
-            self.tab(ui, p, tab_rect, i == active, group_rect, galley.clone(), *color, logical);
-            tab_rects.push((p.clone(), tab_rect));
-            if let Some(s) = shown.get_mut(i) {
-                *s = true;
+        for (i, p) in panels.iter().enumerate() {
+            if let Some(Some(response)) = out.responses.get(i) {
+                tab_rects.push((p.clone(), response.rect));
+                self.tab_chrome(p, response, group_rect);
             }
-        }
-        if !fitted.overflow.is_empty() && fitted.overflow_width > 0.0 {
-            let button = Rect::from_min_size(pos2(x, strip.top()), vec2(fitted.overflow_width, strip.height()));
-            let hidden: Vec<P> = fitted.overflow.iter().filter_map(|&i| panels.get(i).cloned()).collect();
-            self.overflow(ui, selected, button, &hidden);
         }
         for (i, p) in panels.iter().enumerate() {
-            if !shown.get(i).copied().unwrap_or(false) {
+            if !matches!(out.responses.get(i), Some(Some(_))) {
                 tab_rects.push((p.clone(), Rect::NOTHING));
             }
+        }
+        if let Some(p) = out.selected.and_then(|i| panels.get(i)) {
+            self.out.actions.push(Action::Activate { panel: p.clone() });
+            self.out.focused = Some(p.clone());
         }
 
         self.targets.push(DropTarget {
@@ -801,38 +858,6 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             self.body(ui, selected, body);
         }
         ui.painter().rect_stroke(rect, 0.0, self.style.border, StrokeKind::Inside);
-    }
-
-    fn overflow(&mut self, ui: &mut Ui, selected: &P, button: Rect, hidden: &[P]) {
-        let id = overflow_id(self.id, selected);
-        let r = ui.interact(button, id, Sense::click());
-        let enabled = ui.is_enabled();
-        let label = self.style.panels_label.clone();
-        r.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, &label));
-        if r.hovered() {
-            ui.painter().rect_filled(button, 0.0, self.style.active_background);
-        }
-        ui.painter().with_clip_rect(button.intersect(ui.clip_rect())).text(
-            button.center(),
-            Align2::CENTER_CENTER,
-            "\u{2026}",
-            self.style.font.clone(),
-            self.style.text,
-        );
-        egui::Popup::menu(&r).show(|ui| {
-            ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                for p in hidden {
-                    let logical = (self.label)(p);
-                    let color = ui.visuals().text_color();
-                    let visual = self.content.label(ui, p, &logical, &self.style.font, color);
-                    if menu_item(ui, visual, &logical).clicked() {
-                        self.out.actions.push(Action::Activate { panel: p.clone() });
-                        self.out.focused = Some(p.clone());
-                        ui.close();
-                    }
-                }
-            });
-        });
     }
 
     /// The move grip of a floating group.
@@ -875,7 +900,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         }
     }
 
-    /// One tab: `group_rect` is where a drag of it starts from.
+    /// An accordion title: one tab outside a strip.
     #[allow(clippy::too_many_arguments)]
     fn tab(
         &mut self,
@@ -888,21 +913,29 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         color: Color32,
         logical: &str,
     ) {
-        let id = tab_id(self.id, p);
-        self.own(id);
-        let perms = (self.permissions)(p);
-        let sense = if perms.movable { Sense::click_and_drag() } else { Sense::click() };
+        let sense = if (self.permissions)(p).movable { Sense::click_and_drag() } else { Sense::click() };
         let (active_bg, bg) = (self.style.active_background, self.style.tab_background);
-        let response = Tab::new(id, logical, active).sense(sense).focus_stroke(Stroke::new(1.0, self.style.accent)).show_at(ui, rect, |ui, r| {
-            let fill = if active || r.hovered() { active_bg } else { bg };
-            ui.painter().rect_filled(rect, 0.0, fill);
-            let pos = rect.center() - galley.size() / 2.0;
-            ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(pos, galley, color);
-        });
+        let response = Tab::new(tab_id(self.id, p), logical, active).sense(sense).focus_stroke(Stroke::new(1.0, self.style.accent)).show_at(
+            ui,
+            rect,
+            |ui, r| {
+                let fill = if active || r.hovered() { active_bg } else { bg };
+                ui.painter().rect_filled(rect, 0.0, fill);
+                let pos = rect.center() - galley.size() / 2.0;
+                ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(pos, galley, color);
+            },
+        );
         if response.clicked() {
             self.out.actions.push(Action::Activate { panel: p.clone() });
             self.out.focused = Some(p.clone());
         }
+        self.tab_chrome(p, &response, group_rect);
+    }
+
+    /// A tab's drag and context menu: `group_rect` is where a drag of it starts from.
+    fn tab_chrome(&mut self, p: &P, response: &Response, group_rect: Rect) {
+        self.own(response.id);
+        let perms = (self.permissions)(p);
         if response.drag_started() && perms.movable {
             begin_drag(&self.ctx, self.id, p.clone(), group_rect);
         }
@@ -1136,7 +1169,8 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let accent = self.style.accent;
         match (&proposal, float_rect) {
             (Some(proposal), _) => {
-                painter.rect(proposal.preview.shrink(1.0), 0.0, accent.gamma_multiply(0.15), Stroke::new(2.0, accent), StrokeKind::Inside);
+                let preview = preview_rect(&self.ctx, self.id, proposal.preview.shrink(1.0));
+                painter.rect(preview, 0.0, accent.gamma_multiply(0.15), Stroke::new(2.0, accent), StrokeKind::Inside);
                 if let Some(marker) = proposal.insertion {
                     painter.rect_filled(marker, 0.0, accent);
                 }
@@ -1147,6 +1181,25 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             (None, None) => {}
         }
     }
+}
+
+/// Where to paint the drop preview for `target` this frame. It moves quickly (the instant spring)
+/// from one drop target to the next while the drag is held, and appears in place when a drag
+/// first shows it. The drop itself still uses the resolved target, not the painted rect.
+pub(super) fn preview_rect(ctx: &egui::Context, surface: Id, target: Rect) -> Rect {
+    let id = surface.with("drop-preview-rect");
+    let pass_id = surface.with("drop-preview-pass");
+    let pass = ctx.cumulative_pass_nr();
+    let last = ctx.data_mut(|d| {
+        let last = d.get_temp::<u64>(pass_id);
+        d.insert_temp(pass_id, pass);
+        last
+    });
+    if last.is_none_or(|l| l.saturating_add(1) < pass) {
+        // not shown last frame: start where the new drag points, not where the last one ended
+        crate::motion::set(ctx, id, ashlar_motion::Edges::new(target.min.x, target.min.y, target.max.x, target.max.y));
+    }
+    crate::motion::rect(ctx, id, target, ashlar_motion::tokens::INSTANT.enter)
 }
 
 /// A menu button whose visible text may differ from its accessible name.

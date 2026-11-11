@@ -1,0 +1,17 @@
+[package]
+name = "ashlar-diff"
+description = "Headless text diffs: Myers with a cost cap, word-level changes, hunks with collapsible context, and a unified-patch parser and writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["diff", "patch", "myers", "unified", "git"]
+categories = ["text-processing", "parser-implementations"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

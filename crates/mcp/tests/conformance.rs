@@ -175,6 +175,67 @@ fn remote_backend_drives_a_running_app_with_ui() {
     assert!(r["content"][0]["text"].as_str().unwrap().contains("not reachable"), "{r}");
 }
 
+/// A runtime that answers `app.stats` and `app.logs` (as `ashlar-app` does), echoing the params.
+struct FakeRuntime;
+
+impl UiHandler for FakeRuntime {
+    fn methods(&self) -> Vec<String> {
+        vec!["ui.inspect".into(), "app.stats".into(), "app.logs".into(), "app.clock".into()]
+    }
+    fn handle(&mut self, req: Request) {
+        let p = req.params().clone();
+        match req.method() {
+            "app.stats" => req.ok(json!({"frames": 3, "passes": 4, "params": p})),
+            "app.logs" => req.ok(json!({"lines": [{"unix": 1, "level": "WARN", "target": "t", "message": "m"}], "params": p})),
+            "app.clock" => req.ok(json!({"paused": true, "time": 1.5, "params": p})),
+            "ui.inspect" => req.ok(json!({"elements": []})),
+            _ => req.unknown(),
+        }
+    }
+}
+
+#[test]
+fn app_stats_and_app_logs_are_listed_only_when_the_app_answers_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, rx) = Server::start(Config::new(0, dir.path()), || {}).unwrap();
+    std::thread::spawn(move || {
+        let mut c = Counter::default();
+        let info = AppInfo::new("counter", "0.1.0");
+        while let Ok(req) = rx.recv() {
+            handle(req, &mut c, &mut FakeRuntime, &info);
+        }
+    });
+    let mut server = McpServer::new(Backend::Remote(Client::connect(app.port(), dir.path()).unwrap()), options());
+    assert_eq!(tool_names(&mut server), ["list_commands", "describe_command", "execute", "batch", "ui_inspect", "app_stats", "app_logs", "ui_clock"]);
+    let r = call(&mut server, 1, "ui_clock", json!({"step_ms": 16.7}));
+    assert_eq!(r["isError"], false, "{r}");
+    let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v, json!({"paused": true, "time": 1.5, "params": {"step_ms": 16.7}}));
+    let r = call(&mut server, 2, "app_stats", json!({"reset": true}));
+    assert_eq!(r["isError"], false, "{r}");
+    let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v, json!({"frames": 3, "passes": 4, "params": {"reset": true}}));
+    let r = call(&mut server, 3, "app_logs", json!({"limit": 5, "level": "warn"}));
+    assert_eq!(r["isError"], false, "{r}");
+    let v: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(v["params"], json!({"limit": 5, "level": "warn"}));
+    assert_eq!(v["lines"][0]["level"], "WARN");
+    drop(app);
+
+    // An app without them (FakeUi) and a headless session: neither tool is listed.
+    let dir = tempfile::tempdir().unwrap();
+    let (app, rx) = Server::start(Config::new(0, dir.path()), || {}).unwrap();
+    app_thread(rx);
+    let mut server = McpServer::new(Backend::Remote(Client::connect(app.port(), dir.path()).unwrap()), options());
+    let names = tool_names(&mut server);
+    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs" || n == "ui_clock"), "{names:?}");
+    let r = call(&mut server, 4, "app_stats", json!({}));
+    assert_eq!(r["isError"], true, "the app says it has no such method: {r}");
+    drop(app);
+    let names = tool_names(&mut headless(ToolMode::Fixed));
+    assert!(!names.iter().any(|n| n == "app_stats" || n == "app_logs" || n == "ui_clock"), "{names:?}");
+}
+
 #[test]
 fn an_app_backend_starts_before_the_app_and_connects_when_it_is_up() {
     let dir = tempfile::tempdir().unwrap();

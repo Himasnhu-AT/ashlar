@@ -24,7 +24,9 @@
 mod batch;
 pub mod demo;
 pub mod session;
+pub mod snapshot;
 pub mod target;
+pub mod transport;
 mod verbs;
 pub mod words;
 
@@ -36,6 +38,9 @@ use ashlar_control::{Client, ControlError};
 use serde_json::{Value, json};
 
 pub use session::Env;
+pub use snapshot::{Outcome as SnapshotOutcome, Snapshots, Tolerance};
+pub use transport::{Report, ScriptError, Transport, run_script};
+pub use verbs::save_png;
 use words::Args;
 
 /// How a command ended.
@@ -144,6 +149,29 @@ pub(crate) struct Ctx<'e, 'io, 'a> {
     pub conn: Option<Client>,
     /// Inside `batch` (no nested batches; step output is quieter).
     pub in_batch: bool,
+    /// A trace started inside a `batch` run with `--port`/`--app` (no session file to keep it in).
+    pub batch_trace: Option<session::Trace>,
+    /// An in-process target ([`run_script`]): every call goes here, and session verbs fail.
+    pub inproc: Option<&'io mut (dyn Transport + 'io)>,
+}
+
+impl<'e, 'io, 'a> Ctx<'e, 'io, 'a> {
+    pub(crate) fn new(env: &'e Env, io: &'io mut Io<'a>, json: bool) -> Self {
+        Ctx {
+            env,
+            io,
+            json,
+            session: env.session.clone(),
+            port: None,
+            key_dir: None,
+            app: None,
+            timeout: DEFAULT_TIMEOUT,
+            conn: None,
+            in_batch: false,
+            batch_trace: None,
+            inproc: None,
+        }
+    }
 }
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -179,6 +207,7 @@ pub(crate) const VERBS: &[(&str, &str, &str)] = &[
     ("menu", "menu [id]", "print the menu tree, or invoke the item `id`"),
     ("logs", "logs [--lines N] [--level LEVEL]", "the app's recent log lines"),
     ("stats", "stats [--reset]", "the app's frame and job statistics"),
+    ("clock", "clock [pause | step <ms> | resume]", "pause, step or resume the app's animation clock (input still runs while paused)"),
     ("devtools", "devtools [open|close|toggle|state]", "the in-app inspector"),
     ("call", "call <method> [json|-]", "any control method, raw"),
     ("batch", "batch <file|-> [--verbose]", "run a script of these commands and `assert` lines; stops at the first failure"),
@@ -236,7 +265,9 @@ pub fn run(args: Vec<String>, env: &Env, io: &mut Io<'_>) -> Exit {
         help(io.err);
         return Exit::Usage;
     };
-    let mut ctx = Ctx { env, io, json, session, port, key_dir, app, timeout: timeout.unwrap_or(DEFAULT_TIMEOUT), conn: None, in_batch: false };
+    let mut ctx = Ctx::new(env, io, json);
+    (ctx.session, ctx.port, ctx.key_dir, ctx.app) = (session, port, key_dir, app);
+    ctx.timeout = timeout.unwrap_or(DEFAULT_TIMEOUT);
     let r = ctx.run_verb(&verb, a, &shown);
     finish(json, ctx.io, r)
 }

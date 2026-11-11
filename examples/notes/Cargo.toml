@@ -28,6 +28,10 @@ ashlar = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
+# thread CPU time for the scroll benchmark (tests/scroll_bench.rs)
+cpu-time = "1"
 tempfile = "3"
+# counting allocator for the allocation metrics in tests/perf.rs
+stats_alloc = "0.1"
 ashlar-debug = { workspace = true }
 serde_json = { workspace = true }

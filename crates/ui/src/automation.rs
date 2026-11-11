@@ -40,6 +40,35 @@ pub enum Role {
     Status,
     Palette,
     Tab,
+    /// An on/off switch (`selected` is its state).
+    Switch,
+    /// One option of a radio group or segmented control (`selected` when chosen).
+    Radio,
+    /// A radio group or segmented control (`value` is the chosen option's label).
+    RadioGroup,
+    /// A progress bar, circle or spinner (`value` is the percentage, empty when indeterminate).
+    Progress,
+    /// Static text worth finding: a badge, a keycap, an empty state's title.
+    Label,
+    /// A container: a card, an empty state, a banner's body.
+    Group,
+    /// The header of a collapsible section (`selected` is whether it is expanded).
+    Disclosure,
+    /// A message that screen readers announce when it appears (a banner).
+    Alert,
+    /// A hyperlink (`value` is its URL).
+    Link,
+    /// A closed list with one chosen value: a select or a combobox (`value` is the chosen
+    /// option's label, `selected` whether its list is open).
+    ComboBox,
+    /// The list of options a select or combobox opens.
+    ListBox,
+    /// One option of a list box (`selected` when it is the chosen one).
+    ListOption,
+    /// Help text shown on hover.
+    Tooltip,
+    /// A read-only document: a code view, a diff, rendered text.
+    Document,
     #[default]
     Other,
 }

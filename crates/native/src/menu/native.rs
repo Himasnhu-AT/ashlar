@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use muda::accelerator::Accelerator as MudaAccelerator;
-use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
 use super::{Item, MenuNode, MenuSpec, Role, SubmenuRole, Update};
 use crate::{NativeError, Result, Waker};
@@ -26,6 +26,8 @@ pub struct NativeMenuBar {
     state: Cell<u64>,
     handles: Vec<(Vec<usize>, Handle)>,
     events: Receiver<String>,
+    /// This bar's share of the process-wide menu events (ids the tray and context menus don't own).
+    _route: crate::menu_events::Subscription,
 }
 
 fn muda_accel(item: &Item) -> Option<MudaAccelerator> {
@@ -133,18 +135,14 @@ fn set_role(_: &muda::Submenu, _: Option<SubmenuRole>) {}
 impl NativeMenuBar {
     /// Build the menu bar from `spec` and show it (macOS: as the app's menu bar; Windows: call
     /// [`Self::attach_window`] for each window that shows it). Activations are queued for
-    /// [`Self::try_recv`] and `waker` is called. Main thread only. Replaces the menu-event
-    /// handler of any earlier bar.
+    /// [`Self::try_recv`] and `waker` is called. Main thread only. A newer bar takes the
+    /// activations over from an earlier one.
     pub fn install(spec: &MenuSpec, waker: Waker) -> Result<Self> {
         require_main_thread()?;
         crate::guarded("the menu bar", || {
             let (tx, rx): (Sender<String>, Receiver<String>) = channel();
-            MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-                if tx.send(e.id().0.clone()).is_ok() {
-                    waker();
-                }
-            }));
-            let mut bar = Self { menu: Menu::new(), structure: 0, state: Cell::new(0), handles: vec![], events: rx };
+            let route = crate::menu_events::subscribe("", tx, waker);
+            let mut bar = Self { menu: Menu::new(), structure: 0, state: Cell::new(0), handles: vec![], events: rx, _route: route };
             bar.rebuild(spec)?;
             #[cfg(target_os = "macos")]
             bar.menu.init_for_nsapp();
@@ -153,6 +151,11 @@ impl NativeMenuBar {
     }
 
     /// Show the bar in a window (Windows). A no-op on macOS, whose menu bar is app-wide.
+    ///
+    /// On Windows, menu key equivalents need `TranslateAcceleratorW`, which winit's message loop
+    /// doesn't call. This also subclasses the window: a key-down that matches an item's
+    /// shortcut becomes that item's activation (reported like a click) and doesn't reach the
+    /// window as a key press, so it runs once.
     pub fn attach_window(&self, window: &impl raw_window_handle::HasWindowHandle) -> Result<()> {
         #[cfg(target_os = "windows")]
         {
@@ -165,7 +168,12 @@ impl NativeMenuBar {
             // valid window owned by this thread's event loop. muda subclasses that window to show the
             // menu and drops the subclass when the window is destroyed.
             let r = unsafe { self.menu.init_for_hwnd(hwnd) };
-            r.map_err(os)
+            r.map_err(os)?;
+            accelerators::set(self.menu.haccel());
+            if !accelerators::attach(hwnd) {
+                log::warn!("menu shortcuts: could not hook the window's key presses");
+            }
+            Ok(())
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -229,6 +237,8 @@ impl NativeMenuBar {
         }
         self.structure = spec.structure_hash();
         self.state.set(spec.state_hash());
+        #[cfg(target_os = "windows")]
+        accelerators::set(self.menu.haccel());
         Ok(())
     }
 
@@ -263,5 +273,50 @@ impl NativeMenuBar {
                 }
             }
         }
+    }
+}
+
+/// Windows menu key equivalents: a subclass of each attached window runs `TranslateAcceleratorW`
+/// with the bar's accelerator table on key-downs, before winit sees them.
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod accelerators {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{HACCEL, MSG, TranslateAcceleratorW, WM_KEYDOWN, WM_SYSKEYDOWN};
+
+    /// The live bar's accelerator table (0: none).
+    static TABLE: AtomicIsize = AtomicIsize::new(0);
+    /// Our subclass's id on a window ("ashl").
+    const ID: usize = 0x6173_686c;
+
+    pub fn set(haccel: isize) {
+        TABLE.store(haccel, Ordering::SeqCst);
+    }
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            let table = TABLE.load(Ordering::SeqCst);
+            if table != 0 {
+                let m = MSG { hwnd, message: msg, wParam: wparam, lParam: lparam, time: 0, pt: POINT::default() };
+                // SAFETY: `m` is a complete key message for `hwnd`, live for the call; the
+                // table is muda's, owned by the live bar (a stale one fails the call cleanly).
+                if unsafe { TranslateAcceleratorW(hwnd, HACCEL(table as *mut core::ffi::c_void), &m) } != 0 {
+                    // the item's WM_COMMAND went to muda: the key press is used up
+                    return LRESULT(0);
+                }
+            }
+        }
+        // SAFETY: passing the message on, unchanged, to the next procedure of the chain.
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// Subclass `hwnd` (once; again is a no-op). `false` when Windows refused.
+    pub fn attach(hwnd: isize) -> bool {
+        // SAFETY: `hwnd` is a live window of this thread (from the caller's borrowed handle);
+        // the subclass needs no data and Windows removes it with the window.
+        unsafe { SetWindowSubclass(HWND(hwnd as *mut core::ffi::c_void), Some(proc), ID, 0) }.as_bool()
     }
 }

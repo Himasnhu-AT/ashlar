@@ -14,6 +14,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod client;
+mod clock;
 mod explain;
 pub mod key;
 mod lines;
@@ -21,7 +22,12 @@ mod methods;
 mod protocol;
 mod server;
 
+/// `ui.scene {name?}`: apply one of the app's named scenes, or with no name list them
+/// (`{scenes: [..]}`). Answered only by apps that declare scenes.
+pub const UI_SCENE: &str = "ui.scene";
+
 pub use client::{Client, MAX_REPLY};
+pub use clock::{APP_CLOCK, ClockOp, MAX_STEP_MS};
 pub use explain::{explain, explain_reply};
 pub use lines::{DEFAULT_MAX_LINE, serve_stream};
 pub use methods::{AppInfo, DEBUG_METHODS, MAX_BATCH, NoUi, STANDARD_METHODS, UI_METHODS, UiHandler, answer, handle, matches_query};

@@ -34,10 +34,17 @@ const FFI_MODULES: &[&str] = &[
     "crates/native/src/open_files.rs",
     "crates/native/src/progress.rs",
     "crates/native/src/system.rs",
+    "crates/native/src/single_instance.rs",
+    "crates/native/src/mac_shell.rs",
+    "crates/native/src/menu/popup.rs",
+    "crates/native/src/drag_out.rs",
     "crates/native/src/menu/native.rs",
     "crates/native/src/terminate.rs",
     "crates/native/src/memory.rs",
     "crates/native/src/display.rs",
+    "crates/native/src/session_end.rs",
+    "crates/native/src/notify/macos.rs",
+    "crates/native/src/notify/windows.rs",
 ];
 
 /// What the FFI crate's own `[lints]` tables must contain instead of the workspace lints.

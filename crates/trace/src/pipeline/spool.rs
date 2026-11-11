@@ -233,6 +233,10 @@ pub(super) struct Spool {
     orphan_bytes: u64,
     /// False where file locks do not work; see [`UNLOCKED_ORPHAN_AGE`].
     locking: bool,
+    /// Set by [`Spool::release`]: the session is over and the spool takes no folder again. A worker that
+    /// outlives a timed-out shutdown would otherwise adopt its own folder, and others, after letting go
+    /// of them, and hold their locks until the process exits, hiding them from a courier.
+    released: bool,
     outbox: Option<Outbox>,
 }
 
@@ -252,6 +256,7 @@ impl Spool {
             orphan_bytes: 0,
             discarded: 0,
             locking: true,
+            released: false,
             outbox,
         }
     }
@@ -451,6 +456,9 @@ impl Spool {
     /// marker and must be answered with [`Spool::add_recovery`] before the spool lock is released.
     /// Folders recorded under another install id were forgotten by the user and are deleted.
     pub(super) fn adopt_orphans(&mut self, install_id: &str, drops: &DropCounts) -> Vec<Unclean> {
+        if self.released {
+            return Vec::new();
+        }
         let unclean = self.scan(Some(install_id));
         drops.add(DROP_DAMAGED, std::mem::take(&mut self.discarded));
         unclean
@@ -662,6 +670,7 @@ impl Spool {
     /// it; otherwise it stays, without a marker, for the next process to send. Nothing can be appended
     /// afterwards.
     pub(super) fn release(&mut self) {
+        self.released = true;
         self.open = None;
         self.orphans.clear();
         self.recount();
@@ -969,6 +978,28 @@ mod tests {
         // Released, the spool accepts nothing more.
         next.release();
         assert!(!next.append(b'u', &item(10), &drops));
+    }
+
+    /// The order a timed-out shutdown leaves: the caller releases the spool, then the worker's last
+    /// pass looks for orphans. It takes none, its own unsent folder included, so another process
+    /// (a courier) can send them while this one is still alive.
+    #[test]
+    fn a_released_spool_adopts_nothing_and_leaves_its_folders_to_others() {
+        let dir = TempDir::new("spool");
+        ended(dir.path(), "earlier", 1, 0..2);
+        let drops = DropCounts::default();
+        let mut run = running(dir.path(), "run", 2, 1 << 20);
+        assert!(run.append(b'u', &item(5), &drops));
+        run.release();
+        assert!(run.adopt_orphans(INSTALL, &drops).is_empty());
+        assert!(run.next_batch(u64::MAX, &all).is_none());
+
+        let mut courier = Spool::new(dir.path(), 1 << 20, DAY, None);
+        courier.adopt_orphans(INSTALL, &drops);
+        let mut sent: Vec<String> = drain(&mut courier).into_iter().map(|(session, _)| session).collect();
+        sent.dedup();
+        sent.sort();
+        assert_eq!(sent, ["earlier", "run"]);
     }
 
     #[test]

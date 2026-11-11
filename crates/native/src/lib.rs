@@ -11,7 +11,7 @@
 //! | Module | macOS | Windows | Linux | Web |
 //! |---|---|---|---|---|
 //! | [`dialogs`] | rfd | rfd | rfd (portal) | rfd (bytes only) |
-//! | [`menu`] | muda | muda (per window) | spec only | spec only |
+//! | [`menu`] (bar, context menus) | muda | muda (per window) | spec only | spec only |
 //! | [`clipboard`] | arboard + NSPasteboard types | arboard | arboard | – |
 //! | [`power`] | NSProcessInfo activity | SetThreadExecutionState | logind inhibit | – |
 //! | [`open_files`] | Apple events + argv | argv | argv | – |
@@ -22,6 +22,10 @@
 //! | [`system`] | AppKit | registry / SPI | portal settings | media queries |
 //! | [`cli_tool`] | link + admin prompt | – | link (no prompt) | – |
 //! | [`display`] | always | window station check | always | – |
+//! | [`tray`] | NSStatusItem | notification area | StatusNotifierItem (D-Bus, no GTK) | – |
+//! | [`hotkey`] | Carbon hot keys | RegisterHotKey | X11 (not Wayland) | – |
+//! | [`mac_shell`] | appearance guard, Dock reopen | – | – | – |
+//! | [`drag_out`] | NSDraggingSession | – | – | – |
 //! | [`memory`] | phys_footprint, malloc pressure relief | private commit | /proc status, malloc_trim | – |
 //!
 //! [`modal`] (always compiled) is a hook around every blocking dialog, for hang watchdogs.
@@ -44,10 +48,24 @@ pub mod clipboard;
 pub mod dialogs;
 #[cfg(feature = "display")]
 pub mod display;
+#[cfg(feature = "drag-out")]
+pub mod drag_out;
+#[cfg(feature = "hotkey")]
+pub mod hotkey;
+#[cfg(any(feature = "menu", feature = "hotkey"))]
+#[allow(dead_code)]
+mod key_code;
+#[cfg(feature = "mac-shell")]
+pub mod mac_shell;
 #[cfg(feature = "memory")]
 pub mod memory;
 #[cfg(feature = "menu")]
 pub mod menu;
+#[cfg(all(not(target_arch = "wasm32"), any(feature = "tray", all(feature = "menu", any(target_os = "macos", target_os = "windows")))))]
+mod menu_events;
+#[cfg(any(feature = "tray", feature = "menu"))]
+#[allow(dead_code)]
+mod menu_tree;
 #[cfg(feature = "notify")]
 pub mod notify;
 #[cfg(feature = "open-files")]
@@ -58,10 +76,13 @@ pub mod power;
 pub mod progress;
 #[cfg(feature = "secrets")]
 pub mod secrets;
+pub mod session_end;
 #[cfg(feature = "single-instance")]
 pub mod single_instance;
 #[cfg(feature = "system")]
 pub mod system;
+#[cfg(feature = "tray")]
+pub mod tray;
 
 /// Something that wakes the app's event loop (an egui `request_repaint`, a winit proxy event).
 /// Called from background threads after a new event was queued.

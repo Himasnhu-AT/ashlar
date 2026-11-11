@@ -174,6 +174,7 @@ pub fn performance(app: &AppRecord, f: &Filters, p: &PerfPage, ingest_url: &str)
                 view::stat("Frame time p50", fmt::us_as_ms(o.p50_us.map(f64::from)), None),
                 view::stat("Frame time p90", fmt::us_as_ms(o.p90_us.map(f64::from)), None),
                 view::stat("Frame time p99", fmt::us_as_ms(o.p99_us.map(f64::from)), Some(&format!("worst {}", fmt::us_as_ms(Some(f64::from(o.max_us)))))),
+                rate_stat("Over 120 Hz budget", o.over_budget_rate),
                 rate_stat("Slow frames", o.slow_rate),
                 rate_stat("Frozen frames", o.frozen_rate),
                 view::stat("Startup (mean)", o.startup_ms.map_or_else(|| fmt::dec1(None), |ms| format!("{ms:.0} ms")), None),
@@ -182,7 +183,8 @@ pub fn performance(app: &AppRecord, f: &Filters, p: &PerfPage, ingest_url: &str)
             ]))
             p class="note" {
                 "Percentiles come from histograms merged across windows, so they are bucket upper bounds, not exact values. "
-                "Slow is over 16.7 ms, frozen over 700 ms. A day without data is drawn as zero."
+                "Over budget is over 8.3 ms (a 120 Hz frame), slow over 16.7 ms (a 60 Hz frame), frozen over 700 ms. "
+                "A day without data is drawn as zero."
             }
             h2 { "Frame time over time" }
             (line("Frame time percentiles per day", "Frame time (ms)", p.from, p.to, vec![

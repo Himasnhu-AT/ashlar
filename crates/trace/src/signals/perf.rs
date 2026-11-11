@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use ashlar_trace_proto::{FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
+use ashlar_trace_proto::{DISPLAY_BUDGET_US, FRAME_BUCKETS, FROZEN_FRAME_US, FrameStats, ItemBody, Perf, SLOW_FRAME_US, Signal};
 
 use super::{Shared, lock, sys};
 
@@ -27,9 +27,9 @@ impl Frames {
         self.max_us.fetch_max(us, Ordering::Relaxed);
     }
 
-    /// Takes what has been recorded and starts again from nothing. The count and the slow and frozen
-    /// counts are worked out from the buckets, whose bounds include both thresholds, so the three always
-    /// agree with the histogram. A frame recorded at this very moment lands in this window or the next.
+    /// Takes what has been recorded and starts again from nothing. The count and the over-budget, slow
+    /// and frozen counts are worked out from the buckets, whose bounds include every threshold, so they
+    /// always agree with the histogram. A frame recorded at this very moment lands in this window or the next.
     fn take(&self) -> FrameStats {
         let buckets: Vec<u64> = self.buckets.iter().map(|bucket| bucket.swap(0, Ordering::Relaxed)).collect();
         let above = |threshold: u32| buckets.iter().skip(FrameStats::bucket_index(threshold) + 1).sum();
@@ -39,6 +39,7 @@ impl Frames {
             max_us: self.max_us.swap(0, Ordering::Relaxed),
             slow: above(SLOW_FRAME_US),
             frozen: above(FROZEN_FRAME_US),
+            over_budget: Some(above(DISPLAY_BUDGET_US)),
             buckets,
         }
     }
@@ -72,7 +73,14 @@ impl Shared {
         if !self.allowed(Signal::Perf) {
             return;
         }
-        self.frames.record(u32::try_from(duration.as_micros()).unwrap_or(u32::MAX));
+        let us = u32::try_from(duration.as_micros()).unwrap_or(u32::MAX);
+        self.frames.record(us);
+        // frames within budget never touch the lock; a long one that finds it busy is left to the histogram
+        if us > DISPLAY_BUDGET_US
+            && let Some(mut rules) = lock(&self.incidents, false)
+        {
+            rules.frame(Instant::now(), us);
+        }
     }
 
     /// Records the time since start once. Later calls do nothing.
@@ -99,6 +107,9 @@ impl Shared {
             window.last_sample = Some(now);
         }
         if let Some(sample) = self.sampler.sample() {
+            if let Some(mut rules) = lock(&self.incidents, true) {
+                rules.memory(now, sample.rss_bytes);
+            }
             self.fold_sample(sample);
         }
     }
@@ -127,6 +138,7 @@ impl Shared {
             let (counters, gauges) = self.registry.drain();
             window.start = now;
             let frames = self.frames.take();
+            let incidents = lock(&self.incidents, true).map(|mut rules| rules.take()).unwrap_or_default();
             let startup_ms = window.startup_ms.take();
             let cpu_pct = (window.cpu_samples > 0).then(|| (window.cpu_sum / f64::from(window.cpu_samples)) as f32);
             let rss_bytes = window.rss_bytes.take();
@@ -143,13 +155,15 @@ impl Shared {
                 startup_ms,
                 counters,
                 gauges,
+                incidents,
             };
             let has_content = perf.frames.is_some()
                 || perf.cpu_pct.is_some()
                 || perf.rss_mb.is_some()
                 || perf.startup_ms.is_some()
                 || !perf.counters.is_empty()
-                || !perf.gauges.is_empty();
+                || !perf.gauges.is_empty()
+                || !perf.incidents.is_empty();
             if has_content && self.allowed(Signal::Perf) {
                 window.last = Some(perf.clone());
                 Some(perf)
@@ -167,7 +181,7 @@ impl Shared {
 mod tests {
     use std::time::Duration;
 
-    use ashlar_trace_proto::{CrashKind, FRAME_BUCKETS, ItemBody, Perf, Signal};
+    use ashlar_trace_proto::{CrashKind, FRAME_BUCKETS, IncidentRule, ItemBody, Perf, Signal};
 
     use super::*;
     use crate::signals::testutil::Fixture;
@@ -189,7 +203,7 @@ mod tests {
     #[test]
     fn window_holds_a_frame_histogram() {
         let fixture = Fixture::new(|_| {});
-        for ms in [4, 4, 20, 800] {
+        for ms in [4, 4, 9, 20, 800] {
             fixture.signals.frame(Duration::from_millis(ms));
         }
         fixture.signals.tick_at(fixture.at(WINDOW));
@@ -198,16 +212,33 @@ mod tests {
         let perf = &items[0];
         assert_eq!(perf.window_s, 60);
         let frames = perf.frames.as_ref().expect("frames");
-        assert_eq!(frames.count, 4);
-        assert_eq!(frames.sum_us, 4_000 + 4_000 + 20_000 + 800_000);
+        assert_eq!(frames.count, 5);
+        assert_eq!(frames.sum_us, 4_000 + 4_000 + 9_000 + 20_000 + 800_000);
         assert_eq!(frames.max_us, 800_000);
+        assert_eq!(frames.over_budget, Some(3), "over the 120 Hz budget: 9, 20 and 800 ms");
         assert_eq!(frames.slow, 2);
         assert_eq!(frames.frozen, 1);
         assert_eq!(frames.buckets.len(), FRAME_BUCKETS);
-        assert_eq!(frames.buckets.iter().sum::<u64>(), 4);
+        assert_eq!(frames.buckets.iter().sum::<u64>(), 5);
         let sent = fixture.sink.items.lock().expect("lock");
         assert_eq!(sent[0].0, Signal::Perf);
         assert!(!sent[0].2, "perf must not use submit_now");
+    }
+
+    #[test]
+    fn incidents_ride_on_the_window_once_per_rule() {
+        let fixture = Fixture::new(|_| {});
+        for ms in [10, 10, 10, 10, 10, 10, 300, 300] {
+            fixture.signals.frame(Duration::from_millis(ms));
+        }
+        fixture.signals.tick_at(fixture.at(WINDOW));
+        let items = perfs(&fixture);
+        let incidents: Vec<_> = items[0].incidents.iter().map(|i| (i.rule, i.count, i.value)).collect();
+        assert_eq!(incidents, vec![(IncidentRule::LongFrames, 2, 10_000), (IncidentRule::Stall, 2, 300_000)]);
+        // the next window starts with nothing fired
+        fixture.signals.frame(Duration::from_millis(2));
+        fixture.signals.tick_at(fixture.at(WINDOW * 2));
+        assert!(perfs(&fixture)[1].incidents.is_empty());
     }
 
     #[test]

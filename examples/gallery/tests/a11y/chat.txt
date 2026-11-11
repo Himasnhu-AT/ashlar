@@ -1,0 +1,59 @@
+Window
+  Button "File"
+  Button "Edit"
+  Button "View"
+  Button "Help"
+  Button "Inputs" [toggled=false]
+  Button "Controls" [toggled=false]
+  Button "Content" [toggled=false]
+  Button "Lists" [toggled=false]
+  Button "Tabs" [toggled=false]
+  Button "Overlays" [toggled=false]
+  Button "Commands" [toggled=false]
+  Button "Settings" [toggled=false]
+  Button "Chat" [toggled=true]
+  Button "Code" [toggled=false]
+  Button "Sidebar" [toggled=false]
+  Button "Light" [toggled=true]
+  Button "Dark" [toggled=false]
+  Button "System" [toggled=false]
+  Label value="Scale"
+  Slider "Interface scale" numeric=1
+  ProgressIndicator "Exporting"
+  Button "Commands"
+  Log "Conversation" [live=polite]
+    ScrollBar
+  MultilineTextInput placeholder="Message (Enter sends, Shift+Enter for a new line)"
+  Article [1996/2000]
+    Label value="Assistant"
+    Label value="rust"
+    Button "Copy"
+    Label value="let first = heights.row_at(top);"
+  Article [1997/2000]
+    Label value="You"
+    Label value="Question 1996: how do I split a long list?"
+  Article [1998/2000]
+    Label value="Assistant"
+    Label value="Answer 1997: draw only the rows on screen."
+    Label value="measure what you draw"
+    Label value="keep the rest as estimates"
+    Label value="rust"
+    Button "Copy"
+    Label value="let first = heights.row_at(top);"
+  Article [1999/2000]
+    Label value="You"
+    Label value="Question 1998: how do I split a long list?"
+  Article [2000/2000]
+    Label value="Assistant"
+    Label value="Answer 1999: draw only the rows on screen."
+    Label value="measure what you draw"
+    Label value="keep the rest as estimates"
+    Label value="rust"
+    Button "Copy"
+    Label value="let first = heights.row_at(top);"
+  Group "Read file notes.md" description="Needs approval"
+    Label value="Read file notes.md"
+    Label value="Needs approval"
+    Button "Show details"
+    Button "Approve"
+    Button "Deny"

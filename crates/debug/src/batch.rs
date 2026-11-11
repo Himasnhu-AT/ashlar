@@ -18,10 +18,10 @@
 //! `visible|hidden|enabled|disabled|focused|checked|unchecked <T>`,
 //! `count <selector…> <op> <n>` (op: `== != >= <= > <`), `exists|missing <selector…>`. A selector is
 //! one or more `role=`, `name=`, `id=`, `value=` filters; `~=` matches a substring. `expect` is
-//! `assert`'s twin; `echo <text>` prints; `sleep <ms>` waits.
+//! `assert`'s twin; `echo <text>` prints; `sleep <ms>` waits (virtual time on an in-process
+//! [`Transport`](crate::Transport) such as an app driver).
 
 use std::io::Read;
-use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -100,10 +100,12 @@ impl Ctx<'_, '_, '_> {
         self.in_batch = true;
         let r = self.run_script(&file, &text, verbose);
         self.in_batch = false;
+        // A trace kept in this run ends with it (its files are already written).
+        self.batch_trace = None;
         r
     }
 
-    fn run_script(&mut self, file: &str, text: &str, verbose: bool) -> Res {
+    pub(crate) fn run_script(&mut self, file: &str, text: &str, verbose: bool) -> Res {
         let mut steps = Vec::new();
         let mut passed = 0usize;
         for (i, line) in text.lines().enumerate() {
@@ -174,10 +176,10 @@ impl Ctx<'_, '_, '_> {
             }
             "sleep" => {
                 let ms = rest.first().and_then(|m| m.parse::<u64>().ok()).ok_or_else(|| failed("sleep needs milliseconds".into()))?;
-                std::thread::sleep(Duration::from_millis(ms.min(600_000)));
+                self.pause(ms);
                 Ok(Done::new(json!({"slept_ms": ms}), ""))
             }
-            "open" | "connect" | "close" => {
+            "open" | "connect" | "close" if self.inproc.is_none() => {
                 // A new target for the following lines.
                 let r = self.run_words(words);
                 if verb != "open" && verb != "connect" {
@@ -286,8 +288,36 @@ impl Ctx<'_, '_, '_> {
                     _ => Ok(Done::new(json!({"count": n}), "")),
                 }
             }
+            "screenshot" | "snapshot" => {
+                // assert screenshot <name> [target] [--tolerance channel=N,pixels=N]
+                let mut snaps = crate::snapshot::Snapshots::from_env();
+                let mut words: Vec<&String> = Vec::new();
+                let mut it = rest.iter();
+                while let Some(w) = it.next() {
+                    if let Some(v) = w.strip_prefix("--tolerance=") {
+                        snaps.tolerance = Some(crate::snapshot::Tolerance::parse(v).map_err(failed)?);
+                    } else if w == "--tolerance" {
+                        let v = it.next().ok_or_else(|| failed("--tolerance needs channel=N,pixels=N".into()))?;
+                        snaps.tolerance = Some(crate::snapshot::Tolerance::parse(v).map_err(failed)?);
+                    } else {
+                        words.push(w);
+                    }
+                }
+                let (name, tgt) = match words.as_slice() {
+                    [name] => (name.as_str(), None),
+                    [name, t] => (name.as_str(), Some(target::parse(t).map_err(failed)?)),
+                    _ => return Err(failed("assert screenshot <name> [target] [--tolerance channel=N,pixels=N]".into())),
+                };
+                let mut p = json!({});
+                if let Some(t) = tgt {
+                    p["target"] = t;
+                }
+                let v = self.call("ui.screenshot", p)?;
+                let out = snaps.check(name, &v).map_err(failed)?;
+                Ok(Done::new(out.to_json(), out.text()))
+            }
             other => Err(failed(format!(
-                "unknown assertion `{other}` (text, value, contains, visible, hidden, enabled, disabled, focused, checked, unchecked, count, exists, missing)"
+                "unknown assertion `{other}` (text, value, contains, visible, hidden, enabled, disabled, focused, checked, unchecked, count, exists, missing, screenshot)"
             ))),
         }
     }

@@ -17,6 +17,19 @@ pub(crate) fn renderer(rs: RenderState) -> Offscreen {
     Arc::new(move |f: &OffscreenFrame<'_>| render(&rs, f))
 }
 
+/// Apply a frame's texture changes, as a backend does after painting it.
+pub(crate) fn apply_textures(rs: &RenderState, delta: &egui::TexturesDelta) {
+    let mut renderer = rs.renderer.write();
+    for (id, deltas) in &delta.set {
+        for d in deltas {
+            renderer.update_texture(&rs.device, &rs.queue, *id, d);
+        }
+    }
+    for id in &delta.free {
+        renderer.free_texture(id);
+    }
+}
+
 fn render(rs: &RenderState, f: &OffscreenFrame<'_>) -> Result<egui::ColorImage, String> {
     let [w, h] = f.size_in_pixels;
     let max = rs.device.limits().max_texture_dimension_2d;

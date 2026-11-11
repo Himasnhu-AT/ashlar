@@ -6,13 +6,15 @@ use ashlar_control::{DEBUG_METHODS, Request, UI_METHODS, UiHandler};
 use ashlar_ui::devtools;
 
 /// Extra methods the windowed runtime answers itself.
-pub const RUNTIME_METHODS: &[&str] = &["app.stats", "app.logs"];
+pub const RUNTIME_METHODS: &[&str] = &["app.stats", "app.logs", ashlar_control::APP_CLOCK];
 
 /// Collects requests while `ashlar_control::handle` runs; the runtime answers them right after
 /// with access to the whole app.
 #[derive(Default)]
 pub(crate) struct UiQueue {
     pub pending: Vec<Request>,
+    /// The app has scenes: `ui.scene` is listed.
+    pub scenes: bool,
 }
 
 impl UiHandler for UiQueue {
@@ -22,6 +24,9 @@ impl UiHandler for UiQueue {
             if !out.iter().any(|o| o == m) {
                 out.push((*m).to_string());
             }
+        }
+        if self.scenes {
+            out.push(ashlar_control::UI_SCENE.to_string());
         }
         out
     }

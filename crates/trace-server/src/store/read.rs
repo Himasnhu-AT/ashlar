@@ -243,6 +243,8 @@ pub fn perf_rows(conn: &Connection, app_id: i64, from: i64, to: i64, version: Op
                 slow: non_negative(row.get(6)?),
                 frozen: non_negative(row.get(7)?),
                 buckets,
+                // not stored: counted from the buckets (DISPLAY_BUDGET_US is a bucket bound)
+                over_budget: None,
             },
             cpu_sum: row.get(9)?,
             cpu_n: row.get(10)?,

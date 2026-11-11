@@ -1,0 +1,20 @@
+[package]
+name = "ashlar-i18n"
+description = "Small translation layer: JSON catalogs per locale, plural categories, number formatting, fallback chains and locale negotiation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords = ["i18n", "l10n", "translation", "plural", "locale"]
+categories = ["internationalization", "localization"]
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+log = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

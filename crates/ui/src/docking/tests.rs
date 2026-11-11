@@ -1117,3 +1117,37 @@ fn stock_menu_actions_keep_logical_accessible_names() {
     let node = h.get_by_label("Float panel");
     assert!(!node.accesskit_node().is_disabled());
 }
+
+#[test]
+fn drop_preview_moves_quickly_between_targets_and_appears_in_place() {
+    use egui::{Id, Rect, pos2};
+    let ctx = egui::Context::default();
+    let surface = Id::new("dock");
+    let frame = |t: f64, target: Option<Rect>| {
+        let input = egui::RawInput { time: Some(t), predicted_dt: 1.0 / 60.0, ..Default::default() };
+        let mut out = Rect::NOTHING;
+        ctx.run_ui(input, |ui| {
+            if let Some(target) = target {
+                out = super::surface::preview_rect(ui.ctx(), surface, target);
+            }
+        })
+        .textures_delta
+        .clear();
+        out
+    };
+    let (left, right) = (Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 200.0)), Rect::from_min_max(pos2(100.0, 0.0), pos2(200.0, 200.0)));
+    let dt = 1.0 / 60.0;
+    assert_eq!(frame(0.0, Some(left)), left);
+    frame(dt, Some(right));
+    let mid = frame(2.0 * dt, Some(right));
+    assert!(mid.left() > left.left() && mid.left() < right.left(), "{mid:?}");
+    // the instant spring lands in about 0.1 s
+    let mut last = Rect::NOTHING;
+    for k in 3..15 {
+        last = frame(f64::from(k) * dt, Some(right));
+    }
+    assert_eq!(last, right);
+    // a frame without a preview, then a new drag: it appears in place
+    frame(1.0, None);
+    assert_eq!(frame(1.0 + dt, Some(left)), left);
+}

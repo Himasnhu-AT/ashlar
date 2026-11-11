@@ -19,7 +19,7 @@ ashlar-trace-proto = { workspace = true }
 ashlar-trace-server = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
 ureq = { version = "3", default-features = false, features = ["gzip"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tempfile = "3"
 serde_json.workspace = true
 

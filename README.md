@@ -24,7 +24,20 @@ component library on egui; and crash safety and telemetry. An idle ashlar app do
   gate). Panics in a view, a command or a job are caught; the session survives and unsaved work
   is recovered on the next launch.
 - **Zero work when idle.** Frames are drawn only when something asks for one: input, a document
-  change, a finished job. No polling.
+  change, a finished job, a running animation. No polling. A focused text field stops its caret
+  after 10 s, and a settled animation asks for nothing.
+- **Fast where it matters.** It scrolls a 1,000-row list in 0.10 ms of CPU per frame with
+  `list::Row`, and a virtualized list in 0.035 ms whatever its length. It draws a static 52 KB
+  markdown document in 0.03 ms. Allocations per frame and frame time are gated in CI. The numbers,
+  the method and a comparison with another native Rust UI framework are in
+  [docs/benchmarks.md](docs/benchmarks.md).
+- **Built for agents.** Every app takes `--headless --snap out.png --tree tree.json` (real pixels,
+  no window). `.ui` scripts run in process on a virtual clock, and `app.clock` pauses and steps
+  time. Golden screenshots, named scenes, a motion and jank gate, and record and replay come with
+  it.
+- **Motion and accessibility.** Animations use springs that keep their velocity when retargeted,
+  and follow the OS reduced-motion, accent and contrast settings. Every component reports AccessKit
+  roles and states, and the gallery's accessibility trees are golden-tested.
 - **Headless core.** Documents, commands, jobs and files never touch the UI, so they run in tests,
   in a CLI, behind MCP and in the browser.
 - **Small crates.** Use the umbrella crate, or pick only the layers you need: each `ashlar-*` crate
@@ -76,12 +89,26 @@ cargo run -p ashlar-example-notes      # a small document app
 cargo run -p ashlar-example-gallery    # every UI component
 ```
 
-The umbrella crate's optional features are `native-menu` (the app's commands in the macOS and
-Windows menu bar) and `telemetry` (crash, performance and usage reports to a server you host):
+The umbrella crate's features:
+
+| Feature | Default | What it adds |
+| --- | --- | --- |
+| `accesskit` | on | Screen readers and other assistive technology see the window (AccessKit) |
+| `headless` | on | `--headless` on the app's command line: no window, `.ui` scripts, `--snap`, `--tree` |
+| `native-menu` | off | The app's commands in the macOS and Windows menu bar |
+| `tray` | off | A tray or status-bar icon with a menu (`App::tray`) |
+| `hotkey` | off | System-wide shortcuts (`App::global_shortcut`) |
+| `telemetry` | off | Crash, performance and usage reports to a server you host |
 
 ```sh
 cargo add ashlar-rs --features native-menu,telemetry
 ```
+
+Binary size: the smallest app (`examples/hello`) is 13.6 MB stripped in a release build on macOS
+arm64. `cargo build --profile release-small` (a profile in this workspace: fat LTO, one codegen
+unit, `opt-level = "s"`, stripped) brings it to 9.0 MB; copy the profile into your own
+`Cargo.toml`. `default-features = false` saves about 1 MB more, at the cost of accessibility and
+`--headless`. `cargo xtask bench` tracks the number as `hello_stripped_bytes`.
 
 ## Crates
 
@@ -93,7 +120,10 @@ you need, for example `cargo add ashlar-store` for documents and undo in a headl
 |---|---|
 | [`ashlar-rs`](crates/ashlar) | The umbrella crate (`use ashlar::…`): re-exports the layers below behind features |
 | [`ashlar-app`](crates/app) | The runtime: App builder, frame scheduler, crash guard, logging, agent control |
-| [`ashlar-ui`](crates/ui) | UI components on egui: theme tokens, controls, layout, docking, icons |
+| [`ashlar-ui`](crates/ui) | UI components on egui: OKLCH theme tokens, motion, controls, overlays, tabs, forms, lists and trees, markdown, code and diff views, a chat kit, docking |
+| [`ashlar-motion`](crates/motion) | Springs, tweens and decay that keep velocity when retargeted; OKLab colour; reduced-motion rules (headless, wasm32) |
+| [`ashlar-syntax`](crates/syntax) | Syntax highlighting for 18 languages, incremental and linear-time (headless, wasm32) |
+| [`ashlar-diff`](crates/diff) | Myers diffs with word-level emphasis, and a unified-patch reader and writer (headless, wasm32) |
 | [`ashlar-store`](crates/store) | Documents: `Arc` snapshots, revisions, undo history, versioned formats, autosave |
 | [`ashlar-command`](crates/command) | Commands: registry, typed params, one execute chokepoint, discovery |
 | [`ashlar-jobs`](crates/jobs) | Background jobs: progress, cancel, panic isolation, apply on the UI thread |
@@ -110,6 +140,7 @@ you need, for example `cargo add ashlar-store` for documents and undo in a headl
 | [`ashlar-docs`](crates/docs) | Documentation for agents, embedded at build time |
 | [`ashlar-update`](crates/update) | Update checks against a releases API |
 | [`ashlar-print`](crates/print) | Send a PDF to the system print spooler (CUPS, Windows) |
+| [`ashlar-i18n`](crates/i18n) | Translations: JSON catalogs, plural rules, number formatting, locale negotiation |
 | [`ashlar-obfuscate`](crates/obfuscate) | Compile-time string obfuscation |
 | [`ashlar-telemetry`](crates/telemetry), [`ashlar-trace`](crates/trace), [`ashlar-trace-server`](crates/trace-server), [`ashlar-trace-proto`](crates/trace-proto) | Self-hosted crash, performance and usage telemetry ([docs](docs/trace/README.md)) |
 
@@ -124,7 +155,7 @@ How the crates stack is in [docs/architecture.md](docs/architecture.md).
 | macOS | Apple silicon and Intel (CI: `macos-latest`, arm64) |
 | Windows | 10 or newer, x86_64 (CI: `windows-latest`) |
 | Linux | x86_64, X11 and Wayland (CI: `ubuntu-latest`). Native dialogs use the XDG desktop portal. |
-| Web | `wasm32-unknown-unknown` for the headless core (commands, store, files, jobs, logging; checked in CI). The windowed runtime on the web is experimental. |
+| Web | `wasm32-unknown-unknown` for the headless core (commands, store, files, jobs, logging; checked in CI). The windowed runtime on the web is experimental: `examples/web-hello` builds in the gate, and `App::canvas_id` picks the canvas; a start failure shows a visible error next to it. |
 
 **Linux build dependencies** (Debian/Ubuntu names):
 
@@ -158,6 +189,7 @@ Building something with ashlar? Open a pull request to add it here.
 ## Documentation
 
 - [Architecture](docs/architecture.md): crate ranks, design principles, the performance gate
+- [Benchmarks](docs/benchmarks.md): how fast ashlar is, how it is measured, and a head-to-head comparison
 - [Control protocol](docs/control-protocol.md): driving an app from scripts and agents
 - [Debugging UIs](docs/debugging-uis.md) with `ashlar-debug`
 - [Telemetry](docs/trace/README.md): integration, privacy, self-hosting, wire format
