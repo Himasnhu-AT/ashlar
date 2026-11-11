@@ -188,6 +188,9 @@ Building something with ashlar? Open a pull request to add it here.
 
 ## Documentation
 
+The guide, developer docs and changelog are at **[ashlar.himanshuat.com](https://ashlar.himanshuat.com)**
+([llms-full.txt](https://ashlar.himanshuat.com/llms-full.txt) for AI agents).
+
 - [Architecture](docs/architecture.md): crate ranks, design principles, the performance gate
 - [Benchmarks](docs/benchmarks.md): how fast ashlar is, how it is measured, and a head-to-head comparison
 - [Control protocol](docs/control-protocol.md): driving an app from scripts and agents

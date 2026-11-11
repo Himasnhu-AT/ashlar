@@ -1,0 +1,44 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "curl -sSfL https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz | tar -xz && ./mdbook build && sh llms.sh",
+  "outputDirectory": "book",
+  "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/LICENSE",
+      "destination": "https://github.com/Himasnhu-AT/ashlar/blob/main/LICENSE",
+      "permanent": false
+    },
+    {
+      "source": "/examples/:path*",
+      "destination": "https://github.com/Himasnhu-AT/ashlar/tree/main/examples/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/crates/:path*",
+      "destination": "https://github.com/Himasnhu-AT/ashlar/tree/main/crates/:path*",
+      "permanent": false
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)\\.md",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/markdown; charset=utf-8"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)\\.txt",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/plain; charset=utf-8"
+        }
+      ]
+    }
+  ]
+}

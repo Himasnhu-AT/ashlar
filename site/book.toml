@@ -1,0 +1,22 @@
+[book]
+title = "ashlar"
+description = "A Rust application framework on egui: documents and undo, commands, jobs, native OS features, UI components, and agent control."
+authors = ["The ashlar contributors"]
+language = "en"
+src = "src"
+
+[rust]
+edition = "2024"
+
+[output.html]
+site-url = "/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Himasnhu-AT/ashlar"
+edit-url-template = "https://github.com/Himasnhu-AT/ashlar/edit/main/site/{path}"
+
+[output.html.search]
+enable = true
+
+[output.html.playground]
+runnable = false

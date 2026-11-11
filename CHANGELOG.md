@@ -8,6 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Added
+- Documentation site (`site/`, mdBook, deployed at https://ashlar.himanshuat.com): a user guide
+  (first app, documents, commands, views, jobs, native features, agents, testing, web, a cookbook,
+  an FAQ, building with an AI assistant), the developer docs and this changelog, plus `llms.txt`,
+  `llms-full.txt` and each page's markdown for AI agents.
+
 ## [0.2.0] - 2026-11-11
 
 ### Added
