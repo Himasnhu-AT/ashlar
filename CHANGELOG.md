@@ -8,7 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
+- `cargo xtask release <x.y.z> [--date YYYY-MM-DD]`: bumps the workspace and internal crate
+  versions together, dates the changelog's "Unreleased" section, updates the compare links and
+  refreshes Cargo.lock (docs/releasing.md step 2). It never commits, tags or publishes.
 - `ashlar_ui::sidebar` (IMP-5.14): a source list of folding sections with counts and rows with an
   icon, detail and badge, built on `list::Row` and virtualized. One Tab stop: arrows, Home/End,
   Left/Right to fold, Enter to activate, F2 to rename in place, type-ahead; click, double click
@@ -598,5 +603,6 @@ First public release, on crates.io.
 - `ashlar-trace` keeps the count of a batch the server refuses while the tracer shuts down, so the
   next process reports it instead of the count being lost.
 
-[Unreleased]: https://github.com/Himasnhu-AT/ashlar/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Himasnhu-AT/ashlar/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Himasnhu-AT/ashlar/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Himasnhu-AT/ashlar/releases/tag/v0.1.0

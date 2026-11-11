@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-agents"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-docs",
  "ashlar-fs",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-cli",
  "ashlar-command",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-assistant"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-agents",
  "ashlar-assistant",
@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-command",
  "ashlar-control",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-command"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-control"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-command",
  "getrandom 0.4.3",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-debug"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-command",
  "ashlar-control",
@@ -381,18 +381,18 @@ dependencies = [
 
 [[package]]
 name = "ashlar-diff"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "ashlar-docs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "ashlar-example-gallery"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-rs",
  "eframe",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-example-hello"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-rs",
  "serde",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-example-notes"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-debug",
  "ashlar-rs",
@@ -425,7 +425,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-example-trace-demo-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-trace",
  "ashlar-trace-proto",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-example-trace-loadgen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-trace-proto",
  "ashlar-trace-server",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-example-web-hello"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-rs",
  "serde",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-fs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "log",
@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-i18n"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "serde_json",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-integrations"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-fs",
  "ashlar-integrations",
@@ -498,7 +498,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-jobs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "rayon",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-log"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "serde",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-command",
  "ashlar-control",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-mcp-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.3.4",
  "serde_json",
@@ -539,11 +539,11 @@ dependencies = [
 
 [[package]]
 name = "ashlar-motion"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "ashlar-native"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apple-native-keyring-store",
  "arboard",
@@ -576,11 +576,11 @@ dependencies = [
 
 [[package]]
 name = "ashlar-obfuscate"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "ashlar-print"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-rs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-app",
  "ashlar-cli",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "ashlar-fs",
@@ -621,14 +621,14 @@ dependencies = [
 
 [[package]]
 name = "ashlar-syntax"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cpu-time",
 ]
 
 [[package]]
 name = "ashlar-telemetry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-command",
  "ashlar-native",
@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-trace"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-trace-proto",
  "cpu-time",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-trace-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-trace-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "ashlar-trace-proto",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "ashlar-command",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "ashlar-update"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ashlar-fs",
  "log",

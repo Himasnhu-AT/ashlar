@@ -43,10 +43,13 @@ other publish error stops the job.
 ## Cutting a release
 
 1. Make sure `main` is green on CI and everything for the release is merged.
-2. Bump `version` in `[workspace.package]` **and** every `version = "…"` of the internal crates in
-   `[workspace.dependencies]` (they must match). Run `cargo check` to update `Cargo.lock`.
-3. In `CHANGELOG.md`, rename "Unreleased" to `## [x.y.z] - YYYY-MM-DD`, add a fresh empty
-   "Unreleased" section, and update the compare links at the bottom.
+2. Run `cargo xtask release x.y.z` (add `--date YYYY-MM-DD` to date it other than today, UTC). It
+   bumps `version` in `[workspace.package]` and every internal crate's `version = "…"` in
+   `[workspace.dependencies]` together, renames "Unreleased" in `CHANGELOG.md` to
+   `## [x.y.z] - YYYY-MM-DD` under a fresh empty "Unreleased", updates the compare links at the
+   bottom, and runs `cargo check` to update `Cargo.lock`. It refuses when the versions disagree, the
+   section already exists or "Unreleased" is empty, and it never commits, tags or publishes.
+3. Read the diff; bump any version shown in docs snippets (for example `docs/trace/integration.md`).
 4. Check that everything packages: `cargo publish --workspace --locked --dry-run`.
 5. Commit to `main` and push. Wait for CI to pass.
 6. Tag and push the tag:

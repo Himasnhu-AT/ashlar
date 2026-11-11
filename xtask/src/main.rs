@@ -10,6 +10,8 @@
 //! - `bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT]`: see `bench.rs`.
 //! - `trace-stress`, `trace-load`, `trace-demo`: the telemetry crates' benchmarks and stress tests,
 //!   a load profile against a spawned server, and the windowed demo's check (see `trace.rs`).
+//! - `release <x.y.z> [--date YYYY-MM-DD]`: bump the versions and date the changelog for a release
+//!   (see `release.rs` and docs/releasing.md). Never commits, tags or publishes.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -18,6 +20,7 @@ mod bench;
 mod launch;
 mod names;
 mod panics;
+mod release;
 mod trace;
 
 /// Rank of each workspace crate. A crate may depend only on crates of a lower rank.
@@ -327,7 +330,7 @@ fn advisories() -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | launch [--runs N] [--memory [--settle SECS]] | trace-stress | trace-load | trace-demo>";
+const USAGE: &str = "usage: cargo xtask <ci [--no-wait] | fmt | names | layers | deny-panics | clippy | test | wasm | msrv | advisories | bench [--filter T] [--repeat N] [--compare FILE] [--threshold PCT] | launch [--runs N] [--memory [--settle SECS]] | trace-stress | trace-load | trace-demo | release <x.y.z> [--date YYYY-MM-DD]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -348,6 +351,7 @@ fn main() -> ExitCode {
         "trace-stress" => trace::stress(),
         "trace-load" => trace::load(),
         "trace-demo" => trace::demo(),
+        "release" => release::release(&root(), rest),
         _ => Err(USAGE.into()),
     };
     match r {

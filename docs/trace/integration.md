@@ -11,7 +11,7 @@ What the SDK may collect is listed in [privacy.md](privacy.md). How the pieces f
 
 ```toml
 [dependencies]
-ashlar-trace = "0.1"
+ashlar-trace = "0.2"
 ```
 
 Default features are `http` (a blocking HTTPS client on the SDK's own thread) and `sysinfo` (process CPU and memory, device details). Without `http`, nothing leaves the machine unless you supply a `Transport` through `Builder::transport`. Without `sysinfo`, the CPU, memory and device fields are simply absent.
