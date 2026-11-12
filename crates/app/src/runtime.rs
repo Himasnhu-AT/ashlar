@@ -1037,7 +1037,7 @@ impl<D: Document> Runtime<D> {
 
     /// Show, restore and focus the window, now through the viewport and on the next frame
     /// through the OS.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(any(target_arch = "wasm32", not(any(target_os = "macos", feature = "tray", feature = "hotkey"))), allow(dead_code))]
     fn show_window(&mut self, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));

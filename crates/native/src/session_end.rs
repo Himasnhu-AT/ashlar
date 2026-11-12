@@ -459,7 +459,12 @@ mod tests {
     #[test]
     fn listening_off_the_main_thread_or_unsupported_is_an_error_not_a_crash() {
         let r = std::thread::spawn(|| listen(crate::no_waker()).map(drop)).join();
-        assert!(matches!(r, Ok(Err(_))));
+        if cfg!(all(target_os = "windows", feature = "session-end")) {
+            // Windows listens on its own thread, so any thread may start it
+            assert!(matches!(r, Ok(Ok(()))));
+        } else {
+            assert!(matches!(r, Ok(Err(_))));
+        }
         reply(false); // nothing pending: a no-op
     }
 }

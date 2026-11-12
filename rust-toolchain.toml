@@ -1,0 +1,8 @@
+# The toolchain for development and CI, so a new stable release (and its new clippy lints) never
+# changes the result of `cargo xtask ci` by itself. Bump it on purpose, in its own commit, after
+# `cargo xtask ci` passes on the new version. The MSRV check uses its own toolchain (`rust-version`).
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

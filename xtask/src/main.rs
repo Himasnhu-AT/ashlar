@@ -181,7 +181,8 @@ fn clippy_cmd() -> Command {
 }
 
 fn test_cmd() -> Command {
-    cmd(&["test", "--workspace"])
+    // every failing crate in one run, not just the first
+    cmd(&["test", "--workspace", "--no-fail-fast"])
 }
 
 /// `cargo check --target wasm32-unknown-unknown` on every crate of rank 0–1 and on [`WASM_EXTRA`],

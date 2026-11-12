@@ -244,6 +244,9 @@ pub struct Gallery {
     pub last_context: Option<String>,
     // commands
     pub commands: Vec<CommandInfo>,
+    /// Whose key names the shortcuts show (`⌘⇧P` or `Ctrl+Shift+P`). Snapshots pin it to macOS so
+    /// goldens match on every OS.
+    pub platform: Platform,
     pub keymap: Keymap,
     pub palette: CommandPalette,
     pub keymap_editor: KeymapEditor,
@@ -380,6 +383,7 @@ impl Gallery {
             },
             last_context: None,
             commands,
+            platform: Platform::current(),
             keymap,
             palette: CommandPalette::new(),
             keymap_editor: KeymapEditor::new(),
@@ -410,6 +414,8 @@ impl Gallery {
         let mut g = Gallery::new();
         g.page = page;
         g.mode = mode;
+        g.platform = Platform::Mac;
+        g.keymap = Keymap::new(Platform::Mac, g.commands.iter().map(|c| (c.id.as_str(), c.shortcut.as_deref())));
         if page == Page::Overlays {
             g.dialog_open = true;
             g.toasts.push(Toast::new(ToastLevel::Success, "Export finished: 24 files written").sticky());
@@ -470,7 +476,7 @@ impl Gallery {
         }
         let mut chosen = None;
         egui::Panel::top("gallery.top").frame(egui::Frame::new().fill(t.surface.panel).inner_margin(egui::Margin::symmetric(8, 4))).show(ui, |ui| {
-            chosen = menu_bar(ui, &spec, Platform::current());
+            chosen = menu_bar(ui, &spec, self.platform);
             ui.horizontal(|ui| {
                 for p in Page::ALL {
                     let r = ui.selectable_label(self.page == p, p.name());
@@ -536,7 +542,7 @@ impl Gallery {
                 Page::Sidebar => self.sidebar_page(ui),
             }
         });
-        if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, Platform::current()) {
+        if let Some(id) = self.palette.show(&ctx, &self.commands, self.revision, self.platform) {
             self.run(&ctx, &id);
         }
         for action in self.toasts.show_actions(&ctx) {
@@ -760,7 +766,7 @@ impl Gallery {
                     }
                     ui.add_space(t.space.xl);
                     if let Ok(chord) = Chord::parse("Mod+Shift+P") {
-                        Keycap::chord("controls.keys.palette", chord, Platform::current()).show(ui);
+                        Keycap::chord("controls.keys.palette", chord, self.platform).show(ui);
                     }
                     Keycap::new("controls.keys.escape", "Esc").show(ui);
                     if let Ok(chord) = Chord::parse("Mod+Shift+Z") {

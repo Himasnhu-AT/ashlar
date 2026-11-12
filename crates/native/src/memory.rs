@@ -253,7 +253,8 @@ mod tests {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn malloc_trim_hands_freed_heap_back() {
-        let blocks: Vec<Vec<u8>> = (0..256).map(|_| vec![1u8; 100 << 10]).collect();
+        // 200 MB in 100 KB blocks: under glibc's mmap threshold, so they live on the heap
+        let blocks: Vec<Vec<u8>> = (0..2048).map(|_| vec![1u8; 100 << 10]).collect();
         let full = process_memory().expect("process memory");
         drop(blocks);
         release_free_memory();

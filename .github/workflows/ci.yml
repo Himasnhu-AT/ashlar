@@ -37,14 +37,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Install toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy --target wasm32-unknown-unknown
-          rustup default stable
+        # the version, components and targets come from rust-toolchain.toml
+        run: rustup toolchain install
       - name: Install Linux system libraries
         if: runner.os == 'Linux'
+        # A runner whose mirrors don't resolve fails fast instead of stalling the job.
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libxdo-dev libxkbcommon-dev libdbus-1-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends libgtk-3-dev libxdo-dev libxkbcommon-dev libdbus-1-dev
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
@@ -60,13 +61,14 @@ jobs:
           persist-credentials: false
       - name: Install toolchains
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install
           rustup toolchain install 1.95 --profile minimal
-          rustup default stable
       - name: Install Linux system libraries
+        # A runner whose mirrors don't resolve fails fast instead of stalling the job.
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libxdo-dev libxkbcommon-dev libdbus-1-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends libgtk-3-dev libxdo-dev libxkbcommon-dev libdbus-1-dev
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo xtask msrv
 

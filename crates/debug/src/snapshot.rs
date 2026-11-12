@@ -245,8 +245,8 @@ fn decode(bytes: &[u8]) -> Result<Rgba, String> {
     buf.truncate(info.buffer_size());
     let px = match info.color_type {
         png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => buf.chunks_exact(3).flat_map(|c| if let [r, g, b] = c { [*r, *g, *b, 255] } else { [0; 4] }).collect(),
-        png::ColorType::GrayscaleAlpha => buf.chunks_exact(2).flat_map(|c| if let [g, a] = c { [*g, *g, *g, *a] } else { [0; 4] }).collect(),
+        png::ColorType::Rgb => buf.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf.as_chunks::<2>().0.iter().flat_map(|&[g, a]| [g, g, g, a]).collect(),
         png::ColorType::Grayscale => buf.iter().flat_map(|g| [*g, *g, *g, 255]).collect(),
         png::ColorType::Indexed => return Err("indexed PNGs are not supported".into()),
     };
@@ -264,18 +264,18 @@ fn encode(px: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn pixel_differs(a: &[u8], b: &[u8], channel: u8) -> bool {
+fn pixel_differs(a: &[u8; 4], b: &[u8; 4], channel: u8) -> bool {
     a.iter().zip(b).any(|(x, y)| x.abs_diff(*y) > channel)
 }
 
 fn differing(old: &Rgba, new: &Rgba, channel: u8) -> usize {
-    old.px.chunks_exact(4).zip(new.px.chunks_exact(4)).filter(|(a, b)| pixel_differs(a, b, channel)).count()
+    old.px.as_chunks::<4>().0.iter().zip(new.px.as_chunks::<4>().0).filter(|(a, b)| pixel_differs(a, b, channel)).count()
 }
 
 /// The new picture with every pixel off by more than `channel` painted [`DIFF`].
 fn diff(old: &Rgba, new: &Rgba, channel: u8) -> Vec<u8> {
     let mut out = new.px.clone();
-    for (o, (a, b)) in out.chunks_exact_mut(4).zip(old.px.chunks_exact(4).zip(new.px.chunks_exact(4))) {
+    for (o, (a, b)) in out.as_chunks_mut::<4>().0.iter_mut().zip(old.px.as_chunks::<4>().0.iter().zip(new.px.as_chunks::<4>().0)) {
         if pixel_differs(a, b, channel) {
             o.copy_from_slice(&DIFF);
         }

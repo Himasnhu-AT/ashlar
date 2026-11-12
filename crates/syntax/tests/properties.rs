@@ -273,7 +273,9 @@ fn time_is_linear_in_input_size() {
             // generous: linear is ~8x; allow 24x plus timer noise. Load still slows CPU time a
             // little (shared caches, clock speed), so a pair gets three tries: a quadratic lexer
             // fails every one, noise does not repeat.
-            let fits = |(ta, tb): (Duration, Duration)| tb <= ta.mul_f64(24.0) + Duration::from_millis(2);
+            // Windows thread CPU time ticks every 15.6 ms, so a small input can read 0 ns: allow two ticks.
+            let slack = Duration::from_millis(if cfg!(windows) { 32 } else { 2 });
+            let fits = |(ta, tb): (Duration, Duration)| tb <= ta.mul_f64(24.0) + slack;
             let mut tries = Vec::new();
             while tries.len() < 3 && !tries.last().copied().is_some_and(fits) {
                 tries.push((time(lang, &a), time(lang, &b)));

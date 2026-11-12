@@ -35,8 +35,26 @@ msrv`, and the advisory check. Actions are pinned by commit SHA; update them tog
 
 Releases (crates.io and GitHub) are in [releasing.md](releasing.md).
 
-Tools needed locally: stable Rust with `rustfmt`, `clippy` and the `wasm32-unknown-unknown`
-target; cargo-deny is optional locally and installed on CI.
+Tools needed locally: rustup. `rust-toolchain.toml` pins the Rust version CI uses, with `rustfmt`,
+`clippy` and the `wasm32-unknown-unknown` target, and rustup installs it on first use. Bump the pin
+on purpose in its own commit, after `cargo xtask ci` passes on the new version. cargo-deny is
+optional locally and installed on CI.
+
+## Linux and Windows before pushing
+
+`cargo xtask ci` on a Mac checks macOS only. CI also runs it on Linux and Windows, and runs on
+every pull request, so work on a branch and merge only when all three gates are green. To catch
+problems earlier:
+
+- Windows compile and lint errors: `cargo xwin clippy --workspace --all-targets --target
+  x86_64-pc-windows-msvc -- -D warnings` (`cargo install cargo-xwin --locked`). It does not run
+  the tests.
+- Linux, the whole gate, in Docker:
+  `docker run --rm -v "$PWD":/w -w /w rust:1.99.1 sh -c 'apt-get update && apt-get install -y
+  libgtk-3-dev libxdo-dev libxkbcommon-dev libdbus-1-dev && rustup component add rustfmt clippy
+  && rustup target add wasm32-unknown-unknown && CARGO_TARGET_DIR=target/linux cargo xtask ci --no-wait'`.
+- Tests that depend on the OS (timers, memory, key names, line endings) are the usual Linux and
+  Windows failures: check their assumptions on all three before relying on a number.
 
 ## Commits
 
