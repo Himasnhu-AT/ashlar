@@ -2,8 +2,9 @@
 //!
 //! One [`Telemetry`] client per process, started once from a [`TelemetryConfig`]. It is **on
 //! whenever an endpoint is configured**: every category is allowed and there is no notice
-//! (`force_consent`), `DO_NOT_TRACK` is ignored, and only `TRACER_DISABLED` (a switch for developer
-//! machines and CI) turns it off. With no endpoint, or with a bad one, no key, no data folder, or
+//! (`force_consent`). The user's `DO_NOT_TRACK` turns it off unless the app opts out with
+//! [`TelemetryConfig::honor_do_not_track`]`(false)` (and then says so in its privacy text);
+//! `TRACER_DISABLED` (a switch for developer machines and CI) always turns it off. With no endpoint, or with a bad one, no key, no data folder, or
 //! on the web, [`Telemetry::start`] returns a disabled client: every call is a no-op, nothing is
 //! recorded and no request is ever made.
 //!
@@ -50,6 +51,8 @@ pub use transport::Https;
 pub const QUIT_FLUSH: Duration = Duration::from_millis(1500);
 /// The developer's switch: set (to anything but empty, `0` or `false`), telemetry is off.
 pub const DISABLED_ENV: &str = "TRACER_DISABLED";
+/// The end user's switch, honoured unless the app opts out ([`TelemetryConfig::honor_do_not_track`]).
+pub const DO_NOT_TRACK_ENV: &str = "DO_NOT_TRACK";
 /// Set in the environment of the background process [`Telemetry::hand_off`] starts.
 pub const COURIER_ENV: &str = "ASHLAR_TELEMETRY_COURIER";
 /// How long a courier keeps trying to deliver; what is left then waits for the next process.
@@ -101,6 +104,8 @@ pub struct TelemetryConfig {
     pub process: ProcessKind,
     /// Commands whose success counts as a save (`app.document_saved`).
     pub save_commands: Vec<&'static str>,
+    /// Whether `DO_NOT_TRACK` in the environment turns telemetry off (default `true`).
+    pub honor_do_not_track: bool,
 }
 
 impl TelemetryConfig {
@@ -115,7 +120,16 @@ impl TelemetryConfig {
             key_env: None,
             process: ProcessKind::Gui,
             save_commands: Vec::new(),
+            honor_do_not_track: true,
         }
+    }
+
+    /// Whether the user's `DO_NOT_TRACK` (set, and not empty, `0` or `false`) turns telemetry off.
+    /// On by default. An app that turns it off must say so plainly in its privacy text: users who
+    /// set `DO_NOT_TRACK` expect it to work. `TRACER_DISABLED` is honoured either way.
+    pub fn honor_do_not_track(mut self, honor: bool) -> Self {
+        self.honor_do_not_track = honor;
+        self
     }
 
     /// The build identifier sent with every report, such as a commit hash baked in by the release
@@ -170,6 +184,8 @@ pub enum Off {
     BadEndpoint,
     /// `TRACER_DISABLED` is set.
     Disabled,
+    /// The user's `DO_NOT_TRACK` is set and the app honours it ([`TelemetryConfig::honor_do_not_track`]).
+    DoNotTrack,
     /// No data folder to keep the spool in.
     NoDataDir,
     /// The web build, or the app chose to start none (tests).
@@ -184,6 +200,7 @@ impl Off {
             Off::NoKey => "Telemetry is off: a server is configured without a write key, so nothing is recorded or sent.",
             Off::BadEndpoint => "Telemetry is off: the server address must start with https:// (http:// only on this computer).",
             Off::Disabled => "Telemetry is off: TRACER_DISABLED is set (a developer switch), so nothing is recorded or sent.",
+            Off::DoNotTrack => "Telemetry is off: DO_NOT_TRACK is set, so nothing is recorded or sent.",
             Off::NoDataDir => "Telemetry is off: there is no data folder to keep it in.",
             Off::NotStarted => "Telemetry is not part of this process.",
         }
@@ -230,11 +247,15 @@ pub fn endpoint_host(url: &str) -> Option<String> {
     (secure || loopback).then_some(host)
 }
 
-/// Where telemetry goes, from `cfg` and the environment (`env`), or why it is off. `DO_NOT_TRACK`
-/// is not read: telemetry is not optional.
+/// Where telemetry goes, from `cfg` and the environment (`env`), or why it is off.
+/// `TRACER_DISABLED` always turns it off; `DO_NOT_TRACK` does unless the app opted out
+/// ([`TelemetryConfig::honor_do_not_track`]).
 pub fn resolve(cfg: &TelemetryConfig, env: &dyn Fn(&str) -> Option<String>) -> Result<Target, Off> {
     if switch_on(env(DISABLED_ENV)) {
         return Err(Off::Disabled);
+    }
+    if cfg.honor_do_not_track && switch_on(env(DO_NOT_TRACK_ENV)) {
+        return Err(Off::DoNotTrack);
     }
     let set = |name: &Option<String>| name.as_deref().and_then(env).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let endpoint = set(&cfg.url_env).or_else(|| cfg.endpoint.clone()).ok_or(Off::NoEndpoint)?;
@@ -317,9 +338,9 @@ impl Telemetry {
     ) -> Telemetry {
         let tracer = builder(cfg, target, data_dir)
             .listen_all::<AppEvent>()
-            // not optional: every category on, no notice, DO_NOT_TRACK ignored
+            // every category on, no notice; DO_NOT_TRACK as the app chose (resolve checked it too)
             .force_consent(true)
-            .honor_do_not_track(false)
+            .honor_do_not_track(cfg.honor_do_not_track)
             .transport(transport)
             .configure(|c| {
                 // quitting must stay quick, whatever the network does
@@ -643,7 +664,7 @@ fn run_courier<T: ashlar_trace::transport::Transport>(
             .catalog::<AppEvent>()
             .courier(true)
             .force_consent(true)
-            .honor_do_not_track(false)
+            .honor_do_not_track(cfg.honor_do_not_track)
             .transport(transport())
             .configure(|c| {
                 c.shutdown_timeout = Duration::from_secs(1);
@@ -731,15 +752,17 @@ mod tests {
     }
 
     #[test]
-    fn do_not_track_is_ignored_and_tracer_disabled_stops_it() {
+    fn do_not_track_is_honoured_unless_the_app_opts_out_and_tracer_disabled_always_stops_it() {
         for v in ["1", "true", "yes"] {
             let e = move |k: &str| (k == "DO_NOT_TRACK").then(|| v.to_string());
-            assert!(resolve(&cfg(), &e).is_ok(), "{v}");
+            assert_eq!(resolve(&cfg(), &e), Err(Off::DoNotTrack), "{v}");
+            assert!(resolve(&cfg().honor_do_not_track(false), &e).is_ok(), "{v}");
             let e = move |k: &str| (k == DISABLED_ENV).then(|| v.to_string());
             assert_eq!(resolve(&cfg(), &e), Err(Off::Disabled), "{v}");
+            assert_eq!(resolve(&cfg().honor_do_not_track(false), &e), Err(Off::Disabled), "{v}");
         }
         for v in ["", "0", "false", "FALSE"] {
-            let e = move |k: &str| (k == DISABLED_ENV).then(|| v.to_string());
+            let e = move |k: &str| (k == DISABLED_ENV || k == "DO_NOT_TRACK").then(|| v.to_string());
             assert!(resolve(&cfg(), &e).is_ok(), "{v}");
         }
     }

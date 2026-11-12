@@ -1,6 +1,7 @@
 //! Telemetry hook points. With the `telemetry` feature this wraps an `ashlar_telemetry::Telemetry`
-//! (always on when an endpoint is configured: no notice, no switches; `TRACER_DISABLED` turns it
-//! off); without it every call is an empty inline function.
+//! (on when an endpoint is configured: no notice, no switches; the user's `DO_NOT_TRACK` turns it
+//! off unless the app opts out, `TRACER_DISABLED` always does); without it every call is an empty
+//! inline function.
 //!
 //! Hook points: the command chokepoint (`command.run` with the command id, ok and duration), every
 //! frame (`frame`; the first one also records the startup time), each main-loop turn, the panic
@@ -15,6 +16,9 @@ pub struct TelemetryConfig {
     pub key: String,
     /// Server base URL. `None`: no telemetry at all.
     pub endpoint: Option<String>,
+    /// Whether the user's `DO_NOT_TRACK` turns telemetry off (default `true`;
+    /// `App::telemetry_honors_do_not_track`).
+    pub honor_do_not_track: bool,
 }
 
 #[cfg(feature = "telemetry")]
@@ -30,7 +34,10 @@ mod imp {
     impl Telemetry {
         pub fn start(cfg: &TelemetryConfig, app: &str, version: &str, data_dir: &std::path::Path, gui: bool) -> Telemetry {
             let process = if gui { ashlar_telemetry::ProcessKind::Gui } else { ashlar_telemetry::ProcessKind::Cli };
-            let c = ashlar_telemetry::TelemetryConfig::new(app, version).endpoint(cfg.endpoint.as_deref(), &cfg.key).process(process);
+            let c = ashlar_telemetry::TelemetryConfig::new(app, version)
+                .endpoint(cfg.endpoint.as_deref(), &cfg.key)
+                .process(process)
+                .honor_do_not_track(cfg.honor_do_not_track);
             Telemetry { inner: ashlar_telemetry::Telemetry::start(&c, Some(data_dir)) }
         }
 

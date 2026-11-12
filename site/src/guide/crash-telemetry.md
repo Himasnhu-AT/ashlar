@@ -63,13 +63,16 @@ When an endpoint is set, telemetry is on. The runtime reports:
 - hangs, when a main-loop turn takes too long;
 - saves.
 
-In this integration every category is on and there is no first-run notice; `DO_NOT_TRACK` is
-ignored. `TRACER_DISABLED` in the environment (meant for developer machines and CI) turns it off.
+In this integration every category is on and there is no first-run notice. The user's
+`DO_NOT_TRACK` (set to anything but empty, `0` or `false`) turns it off; an app can opt out of
+that with `App::telemetry_honors_do_not_track(false)`, and must then say so in its privacy text.
+`TRACER_DISABLED` in the environment (meant for developer machines and CI) always turns it off.
 The endpoint must be `https://` (or `http://` to loopback). Command parameters, file names, paths
 and typed text are never sent. The write key only allows sending data; it is not a secret. Without
 the feature, every telemetry call compiles to nothing.
 
-Because users cannot switch it off from the app, tell them in your privacy policy what is sent.
+Because users cannot switch it off from inside the app, tell them in your privacy policy what is sent
+and that `DO_NOT_TRACK=1` turns it off.
 An app that needs consent and per-category switches can use the `ashlar-trace` SDK directly.
 
 Before you ship telemetry, read what is collected:
