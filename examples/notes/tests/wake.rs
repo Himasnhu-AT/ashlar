@@ -81,14 +81,15 @@ fn autosave_writes_on_time_without_polling() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(slots(dir.path()).len(), 1, "the autosave was written");
-    // the writer wakes the loop once the write finished, to collect the result
-    let autosave_frames = d.runtime.wakes().frames_for(Reason::AUTOSAVE);
+    // the writer wakes the loop once the write finished, to collect the result: a second autosave
+    // frame after the hand-off. A fast write can be collected inside the advance above, so wait for
+    // the total rather than for a change after this point.
     let waited = std::time::Instant::now();
-    while d.runtime.wakes().frames_for(Reason::AUTOSAVE) == autosave_frames && waited.elapsed() < Duration::from_secs(10) {
+    while d.runtime.wakes().frames_for(Reason::AUTOSAVE) < 2 && waited.elapsed() < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(5));
         d.advance(0.01);
     }
-    assert!(d.runtime.wakes().frames_for(Reason::AUTOSAVE) > autosave_frames, "{:?}", d.runtime.wakes());
+    assert!(d.runtime.wakes().frames_for(Reason::AUTOSAVE) >= 2, "{:?}", d.runtime.wakes());
 
     // written: nothing is pending, the dirty app stays idle
     let frames = d.advance(5.0);
