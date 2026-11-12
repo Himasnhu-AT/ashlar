@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, 
 
 ## [Unreleased]
 
+### Changed
+- Telemetry honours the user's `DO_NOT_TRACK` by default (`ashlar-telemetry` and `ashlar-app`), as
+  the telemetry docs already said. `resolve` returns the new `Off::DoNotTrack`. An app that must keep
+  telemetry on sets `App::telemetry_honors_do_not_track(false)` (or
+  `TelemetryConfig::honor_do_not_track(false)`) and has to say so in its privacy text;
+  `TRACER_DISABLED` still always turns it off. New `ashlar_telemetry::DO_NOT_TRACK_ENV`.
+
 ### Added
 - Documentation site (`site/`, mdBook, deployed at https://ashlar.himanshuat.com): a user guide
   (first app, documents, commands, views, jobs, native features, agents, testing, web, a cookbook,

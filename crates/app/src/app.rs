@@ -136,6 +136,7 @@ pub struct App<D: Document> {
     setup: Option<SetupFn>,
     autosave: Option<Duration>,
     telemetry: Option<TelemetryConfig>,
+    telemetry_honors_dnt: bool,
     instructions: String,
     dirs: Option<AppDirs>,
     window_size: [f32; 2],
@@ -172,6 +173,7 @@ impl<D: Document> App<D> {
             setup: None,
             autosave: Some(Duration::from_secs(60)),
             telemetry: None,
+            telemetry_honors_dnt: true,
             instructions: String::new(),
             dirs: None,
             window_size: [960.0, 640.0],
@@ -247,10 +249,19 @@ impl<D: Document> App<D> {
         self
     }
 
-    /// Telemetry (with the `telemetry` feature): write key and server. Always on when `endpoint`
-    /// is set (no notice, no switches); `TRACER_DISABLED` in the environment turns it off.
+    /// Telemetry (with the `telemetry` feature): write key and server. On when `endpoint` is set
+    /// (no notice, no switches). The user's `DO_NOT_TRACK` turns it off (see
+    /// [`App::telemetry_honors_do_not_track`]); `TRACER_DISABLED` in the environment always does.
     pub fn telemetry(mut self, key: impl Into<String>, endpoint: Option<&str>) -> Self {
-        self.telemetry = Some(TelemetryConfig { key: key.into(), endpoint: endpoint.map(str::to_string) });
+        self.telemetry = Some(TelemetryConfig { key: key.into(), endpoint: endpoint.map(str::to_string), honor_do_not_track: true });
+        self
+    }
+
+    /// Whether the user's `DO_NOT_TRACK` turns telemetry off. On by default. An app that passes
+    /// `false` must say so plainly in its privacy text: users who set `DO_NOT_TRACK` expect it to
+    /// work. `TRACER_DISABLED` is honoured either way.
+    pub fn telemetry_honors_do_not_track(mut self, honor: bool) -> Self {
+        self.telemetry_honors_dnt = honor;
         self
     }
 
@@ -446,7 +457,7 @@ impl<D: Document> App<D> {
             extensions: self.extensions,
             dirs,
             autosave: self.autosave,
-            telemetry: self.telemetry,
+            telemetry: self.telemetry.map(|t| TelemetryConfig { honor_do_not_track: self.telemetry_honors_dnt, ..t }),
             instructions: self.instructions,
             window_size: self.window_size,
             frame_latency: self.frame_latency,
