@@ -1,11 +1,13 @@
-# Weekly dependency updates. Security updates are on as well (repository settings).
+# Dependency updates are paused: `open-pull-requests-limit: 0` stops new version-update pull
+# requests. Raise the limits again (5 for cargo) to resume. Security updates stay on (repository
+# settings).
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       cargo-minor:
         update-types: [minor, patch]
@@ -13,6 +15,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     groups:
       actions:
         patterns: ["*"]
